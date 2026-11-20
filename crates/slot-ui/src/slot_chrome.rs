@@ -117,7 +117,7 @@ impl SlotChrome<'_> {
 
         let chrome = 1.0 - self.screen.clamp(0.0, 1.0);
 
-        draw_slot_back(chrome, out);
+        draw_slot_back_for(self.cart.platform, chrome, out);
 
         let (cw, ch) = cart_box(self.cart.platform);
         let (cw, ch) = (cw as f32, ch as f32);
@@ -200,7 +200,7 @@ impl SlotChrome<'_> {
             out.push(Draw::Game);
         }
 
-        draw_slot_front(chrome, out);
+        draw_slot_front_for(self.cart.platform, chrome, out);
     }
 }
 
@@ -218,6 +218,10 @@ fn band(x: f32, y: f32, w: f32, h: f32, c: [f32; 4], alpha: f32) -> Draw {
 // between these layers to preserve insertion and ejection occlusion.
 #[cfg(feature = "brick")]
 static ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+
+/// Original GBA's full-resolution console art, separate from Brick's default.
+#[cfg(feature = "brick")]
+static ORIGINAL_GBA_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 /// The disc slot's two layers: a slot-loading drive's slit, where the cartridge slot's scoop was.
 #[cfg(feature = "brick")]
 static DISC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
@@ -232,6 +236,24 @@ fn disc_mix() -> f32 {
     f32::from_bits(DISC_MIX.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Downsample the actual 3x Android Original GBA slot layers.
+#[cfg(feature = "brick")]
+fn original_gba_bar_face(front: bool) -> Option<Vec<u8>> {
+    let bytes: &[u8] = if front {
+        include_bytes!("../../../assets/android-original/slot_front_gba.png")
+    } else {
+        include_bytes!("../../../assets/android-original/slot_back_gba.png")
+    };
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    decoder.set_limits(png::Limits { bytes: 64 << 20 });
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    if info.color_type != png::ColorType::Rgba { return None; }
+    crate::art::cover_rgba(&buffer[..info.buffer_size()], info.width, info.height, OUT_W, MOUTH_H as u32)
+}
+
 #[cfg(feature = "brick")]
 pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     if ART.get().is_some() {return;}
@@ -240,6 +262,12 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     }
     if let (Some(back),Some(front))=(disc_slot_face(false),disc_slot_face(true)) {
         let _=DISC_ART.set((upload(back.w,back.h,&back.rgba),upload(front.w,front.h,&front.rgba)));
+    }
+    if let (Some(back), Some(front)) = (original_gba_bar_face(false), original_gba_bar_face(true)) {
+        let _ = ORIGINAL_GBA_ART.set((
+            upload(OUT_W, MOUTH_H as u32, &back),
+            upload(OUT_W, MOUTH_H as u32, &front),
+        ));
     }
 }
 
@@ -324,6 +352,34 @@ fn draw_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
     true
 }
 
+#[cfg(feature = "brick")]
+fn draw_original_gba_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
+    let Some(&(back, fore)) = ORIGINAL_GBA_ART.get() else { return false; };
+    if alpha > 0.0 {
+        out.push(Draw::Tex {
+            x: 0.0, y: BAND_Y, w: OUT_W as f32, h: MOUTH_H,
+            tex: if front { fore } else { back }, alpha,
+        });
+    }
+    true
+}
+
+fn draw_slot_back_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
+    #[cfg(feature = "brick")]
+    if platform == slot_store::Platform::Gba && draw_original_gba_art(false, alpha, out) { return; }
+    #[cfg(not(feature = "brick"))]
+    let _ = platform;
+    draw_slot_back(alpha, out);
+}
+
+fn draw_slot_front_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
+    #[cfg(feature = "brick")]
+    if platform == slot_store::Platform::Gba && draw_original_gba_art(true, alpha, out) { return; }
+    #[cfg(not(feature = "brick"))]
+    let _ = platform;
+    draw_slot_front(alpha, out);
+}
+
 fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
     #[cfg(feature = "brick")]
     if draw_art(false,alpha,out) {return;}
@@ -399,6 +455,12 @@ pub fn draw_empty_slot(out: &mut Vec<Draw>) {
     draw_slot_front(1.0, out);
 }
 
+/// Render the appropriate console bar on the currently selected shelf.
+pub fn draw_empty_slot_platform(platform: slot_store::Platform, out: &mut Vec<Draw>) {
+    draw_slot_back_for(platform, 1.0, out);
+    draw_slot_front_for(platform, 1.0, out);
+}
+
 fn travel(seat: f32, catch: f32) -> f32 {
     if seat < CATCH_IN {
         catch * ease(seat / CATCH_IN)
@@ -412,4 +474,18 @@ fn travel(seat: f32, catch: f32) -> f32 {
 
 pub fn ease(u: f32) -> f32 {
     u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+}
+
+#[cfg(all(test, feature = "brick"))]
+mod original_gba_asset_tests {
+    use super::*;
+
+    #[test]
+    fn original_gba_bars_decode_to_exact_brick_slot_dimensions() {
+        for front in [false, true] {
+            let image = original_gba_bar_face(front).expect("Android Original PNG must decode");
+            assert_eq!(image.len(), (OUT_W * MOUTH_H as u32 * 4) as usize);
+            assert!(image.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        }
+    }
 }

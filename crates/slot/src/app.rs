@@ -14,7 +14,7 @@ use slot_store::{
     VOLUME_MAX,
 };
 use slot_ui::{
-    board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_slot_name,
+    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_footer, draw_slot_name,
     draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
     Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, PauseChoice, Placed, Polaroids,
     PowerChoice, QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome,
@@ -3330,6 +3330,20 @@ impl App {
         }
     }
 
+    /// Android Original GBA uses its lavender console ground. Other shelves
+    /// keep Brick's existing wallpaper and dimming behaviour.
+    fn draw_shelf_background(&self, out: &mut Vec<Draw>) {
+        if self.shelves[self.shelf_at].0 == Platform::Gba {
+            out.push(Draw::Rect {
+                x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+                // Baggio94/slot-for-android: Original GBA shelf RGB(196,198,228).
+                colour: [196.0 / 255.0, 198.0 / 255.0, 228.0 / 255.0, 1.0],
+            });
+        } else {
+            draw_backdrop(self.wallpaper, out);
+        }
+    }
+
     pub fn draw(&self, out: &mut Vec<Draw>) {
         self.draw_scene(out);
         self.draw_banner(out);
@@ -3479,7 +3493,7 @@ impl App {
             }
             .draw(out),
             Phase::Shelf => {
-                draw_backdrop(self.wallpaper, out);
+                self.draw_shelf_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     // A game's discs fanned out: the rest of the shelf steps back behind them.
                     _ if self.disc_picker.is_some() => {
@@ -3488,14 +3502,14 @@ impl App {
                         self.shelf().draw_row(Some(&picker.stem), 0.0, CORE_PICKER_RECEDE * open, 1.0, out);
                         let fallback = self.shelf().find(&picker.stem).and_then(|(_, f)| f);
                         picker.draw(&self.disc_faces, fallback, self.now(), out);
-                        draw_empty_slot(out);
+                        draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
                     }
                     (Some(picker), Some(stem)) => {
                         let open = ease(picker.openness(self.now()));
                         let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
                         self.shelf()
                             .draw_row(Some(stem), 0.0, CORE_PICKER_RECEDE * open, dim, out);
-                        draw_empty_slot(out);
+                        draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
                     }
                     _ => {
                         if let Some(foot) = self.shelf().selected_foot() {
@@ -3523,14 +3537,14 @@ impl App {
             }
             Phase::Inserting { cart, resumed, .. } => {
                 if !resumed {
-                    draw_backdrop(self.wallpaper, out);
+                    self.draw_shelf_background(out);
                     self.shelf()
                         .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 }
                 self.chrome(cart, self.seat(), out);
             }
             Phase::Ejecting { cart, .. } => {
-                draw_backdrop(self.wallpaper, out);
+                self.draw_shelf_background(out);
                 self.shelf()
                     .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 self.chrome(cart, self.seat(), out);

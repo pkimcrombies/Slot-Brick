@@ -14,7 +14,7 @@ use slot_store::{
     VOLUME_MAX,
 };
 use slot_ui::{
-    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_footer,
+    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_status_bar,
     draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
     Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, PauseChoice, Placed, Polaroids,
     PowerChoice, QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome,
@@ -1393,19 +1393,15 @@ impl App {
         None
     }
 
-    /// Which Wi-Fi symbol the shelf wears: on the network, on but not reaching it, or off.
-    /// None off the Brick, which has no Wi-Fi of Slot's to show.
+    /// Android-style shelf status: only show the Wi-Fi icon when connected.
+    /// Disconnected or disabled Wi-Fi leaves the corner clean.
     fn wifi_face(&self) -> Option<(TexId, u32, u32)> {
         #[cfg(not(feature = "brick"))]
         return None;
         #[cfg(feature = "brick")]
         {
-            let faces = self.wifi_faces?;
-            Some(match (self.net_up, self.net_on) {
-                (true, _) => faces[0],
-                (false, true) => faces[1],
-                (false, false) => faces[2],
-            })
+            if !self.net_up { return None; }
+            self.wifi_faces.map(|faces| faces[0])
         }
     }
 
@@ -3524,7 +3520,9 @@ impl App {
                         self.shelf().draw(self.shelf_shake(), out);
                     }
                 }
-                draw_footer(
+                // Android-style top corners: clock left, battery and Wi-Fi right.
+                // Leave the lower shelf free of the old footer and play-time note.
+                draw_status_bar(
                     self.battery,
                     self.battery_percent,
                     self.bolt,
@@ -3533,7 +3531,6 @@ impl App {
                     self.shelf_clock,
                     out,
                 );
-                slot_ui::draw_footer_note(self.battery_percent, self.played, out);
             }
             Phase::About => {
                 draw_backdrop(self.wallpaper, out);

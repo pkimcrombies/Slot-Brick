@@ -65,7 +65,7 @@ pub use label_grid::{
     label_grid_legend_faces, LabelGridView, GRID_COLS, GRID_ROWS, PAGE,
 };
 pub use draw::{Draw, TexId, OUT_H, OUT_W};
-pub use footer::{draw_footer, draw_footer_note, Printed, WIFI_PX};
+pub use footer::{draw_footer, draw_footer_note, draw_status_bar, Printed, WIFI_PX};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, ALARM_BAND_H, HUD_ICON_PX,
     HUD_INK, HUD_MS, LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,
@@ -79,7 +79,7 @@ pub use link_art::{
 pub use banner::{banner_face, BADGE_PX, BANNER_H, BANNER_W, BANNER_X, BANNER_Y};
 pub use plate::{
     arrows_hint_face, caret_hint_face, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    caption_face, footer_plate, hint_width, title_face, word_face, word_width, Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
+    caption_face, footer_plate, hint_width, title_face, word_face, word_face_ink, word_width, Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     CAPTION_Y, HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, LEGEND_Y, TITLE_H, TITLE_W,
 };
 pub use polaroids::{photo_face, PhotoFace, Polaroids, DOT, LEGEND, PHOTO_H, PHOTO_W};

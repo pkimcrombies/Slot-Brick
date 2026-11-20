@@ -107,3 +107,104 @@ pub fn draw_gauge(
         });
     }
 }
+
+
+// Android's top-right battery status, with the gauge, charging bolt and
+// percentage ending at a fixed right margin. Unlike the legacy footer gauge,
+// the bolt takes space only while charging.
+const STATUS_BOLT_TEXT_GAP: f32 = 3.0;
+
+pub fn status_gauge_width(battery: Option<Battery>, percent: Printed) -> f32 {
+    let Some(b) = battery else { return 0.0 };
+    let between = if b.charge == Charge::Charging {
+        BOLT_GAP + BOLT_W + STATUS_BOLT_TEXT_GAP
+    } else {
+        GAP
+    };
+    GAUGE_W + NUB_W + between + percent.w as f32
+}
+
+pub fn draw_status_gauge(
+    right: f32,
+    y: f32,
+    battery: Option<Battery>,
+    percent: Printed,
+    bolt: Option<TexId>,
+    ink: [f32; 4],
+    out: &mut Vec<Draw>,
+) {
+    let Some(b) = battery else { return };
+    let x = right - status_gauge_width(battery, percent);
+    let rect = |x, y, w, h, out: &mut Vec<Draw>| {
+        out.push(Draw::Rect { x, y, w, h, colour: ink });
+    };
+
+    rect(x, y, GAUGE_W, WALL, out);
+    rect(x, y + GAUGE_H - WALL, GAUGE_W, WALL, out);
+    rect(x, y, WALL, GAUGE_H, out);
+    rect(x + GAUGE_W - WALL, y, WALL, GAUGE_H, out);
+    rect(x + GAUGE_W, y + (GAUGE_H - NUB_H) / 2.0, NUB_W, NUB_H, out);
+
+    let fill = (GAUGE_W - 4.0 * WALL) * f32::from(b.percent.min(100)) / 100.0;
+    if fill > 0.0 {
+        rect(x + 2.0 * WALL, y + 2.0 * WALL, fill, GAUGE_H - 4.0 * WALL, out);
+    }
+
+    let mut px = x + GAUGE_W + NUB_W + GAP;
+    if b.charge == Charge::Charging {
+        let bx = x + GAUGE_W + NUB_W + BOLT_GAP;
+        if let Some(tex) = bolt {
+            out.push(Draw::Tex {
+                x: bx,
+                y: y + (GAUGE_H - BOLT_H) / 2.0,
+                w: BOLT_W,
+                h: BOLT_H,
+                tex,
+                alpha: 1.0,
+            });
+        }
+        px = bx + BOLT_W + STATUS_BOLT_TEXT_GAP;
+    }
+
+    if let Some(tex) = percent.face.filter(|_| percent.w > 0) {
+        out.push(Draw::Tex {
+            x: px,
+            y: y + (GAUGE_H - HINT_H as f32) / 2.0,
+            w: percent.w as f32,
+            h: HINT_H as f32,
+            tex,
+            alpha: 1.0,
+        });
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn status_width_excludes_bolt_when_not_charging() {
+        let p = Printed { face: None, w: 35 };
+        let discharging = Some(Battery { percent: 70, charge: Charge::Discharging });
+        let charging = Some(Battery { percent: 70, charge: Charge::Charging });
+        assert_eq!(status_gauge_width(None, p), 0.0);
+        assert_eq!(status_gauge_width(discharging, p), GAUGE_W + NUB_W + GAP + 35.0);
+        assert_eq!(
+            status_gauge_width(charging, p),
+            GAUGE_W + NUB_W + BOLT_GAP + BOLT_W + STATUS_BOLT_TEXT_GAP + 35.0
+        );
+    }
+
+    #[test]
+    fn status_gauge_stays_inside_right_margin_and_is_black() {
+        let battery = Some(Battery { percent: 70, charge: Charge::Discharging });
+        let p = Printed { face: None, w: 35 };
+        let right = 696.0;
+        let mut out = Vec::new();
+        draw_status_gauge(right, 18.5, battery, p, None, [0.0, 0.0, 0.0, 1.0], &mut out);
+        assert!(matches!(out.first(), Some(Draw::Rect { x, y, colour, .. })
+            if (*x - (right - status_gauge_width(battery, p))).abs() < 0.01
+            && (*y - 18.5).abs() < 0.01
+            && *colour == [0.0, 0.0, 0.0, 1.0]));
+    }
+}

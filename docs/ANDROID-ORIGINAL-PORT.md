@@ -93,3 +93,21 @@ Upstream asset paths:
 The light GBA slot artwork is desaturated on decode to prevent any
 remaining blue/lavender cast. RGB channels are equalised after scaling
 while alpha/transparency and fine luminance variation are preserved.
+
+
+## Android-style shelf status row
+
+- The clock uses black ink at (24, 12), top left.
+- The battery gauge, percentage, and charging bolt use black ink at the
+  top-right margin, respecting charge and battery state.
+- The Wi-Fi icon is only drawn when `brick_wifi::online()` reports a connection.
+  Disabled Wi-Fi and enabled-but-disconnected Wi-Fi leave no Wi-Fi icon.
+- When available, the update-available icon remains beside the connected Wi-Fi
+  indicator, with top-right alignment and the same black ink.
+- The old bottom footer (including play-time note) is omitted on the shelf
+  to keep the cartridge view clean.
+- In-game HUD text, menus, fonts, and Wi-Fi settings screens are unchanged.
+
+Source reference: Baggio94/slot-for-android `crates/slot-ui/src/footer.rs`,
+`draw_status_clock` and `STATUS_TOP_Y`. The new Brick version retains its
+existing online-state detection and charging behaviour.

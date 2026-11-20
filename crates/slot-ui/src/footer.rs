@@ -1,7 +1,7 @@
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_power::Battery;
 
-use crate::battery::{draw_gauge, GAUGE_H};
+use crate::battery::{draw_gauge, draw_status_gauge, status_gauge_width, GAUGE_H};
 use crate::plate::HINT_H;
 use crate::slot_chrome::MOUTH_H;
 
@@ -91,4 +91,71 @@ pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
 
 fn printed(x: f32, p: Printed, out: &mut Vec<Draw>) {
     draw_printed(x, FOOTER_Y, p, out);
+}
+
+
+/// Android-style shelf status line, 12px from the top and 24px from both edges.
+/// The clock is black at top-left; black battery, connected Wi-Fi and update
+/// indicators line up at top-right. The rest of the shelf stays unobstructed.
+const STATUS_TOP_Y: f32 = 12.0;
+const STATUS_MARGIN: f32 = 24.0;
+
+pub fn draw_status_bar(
+    battery: Option<Battery>,
+    percent: Printed,
+    bolt: Option<TexId>,
+    wifi: Option<(TexId, u32, u32)>,
+    update: Option<(TexId, u32, u32)>,
+    clock: Printed,
+    out: &mut Vec<Draw>,
+) {
+    // Clock uses a dedicated black word texture; don't recolour global HUD text.
+    draw_printed(STATUS_MARGIN, STATUS_TOP_Y, clock, out);
+
+    let battery_right = OUT_W as f32 - STATUS_MARGIN;
+    let battery_top = STATUS_TOP_Y + (HINT_H as f32 - GAUGE_H) / 2.0;
+    draw_status_gauge(
+        battery_right,
+        battery_top,
+        battery,
+        percent,
+        bolt,
+        [0.0, 0.0, 0.0, 1.0],
+        out,
+    );
+
+    let mut icon_right = battery_right - status_gauge_width(battery, percent);
+    for (tex, w, h) in [wifi, update].into_iter().flatten() {
+        icon_right -= WIFI_GAP + w as f32;
+        out.push(Draw::Tex {
+            x: icon_right.round(),
+            y: (STATUS_TOP_Y + (HINT_H as f32 - h as f32) / 2.0).round(),
+            w: w as f32,
+            h: h as f32,
+            tex,
+            alpha: 1.0,
+        });
+    }
+}
+
+#[cfg(test)]
+mod status_position_tests {
+    use super::*;
+
+    #[test]
+    fn clock_starts_in_the_top_left_corner() {
+        let mut out = Vec::new();
+        let clock = Printed { face: None, w: 50 };
+        draw_status_bar(None, Printed::default(), None, None, None, clock, &mut out);
+        assert!(matches!(out.first(), Some(Draw::Rect { x, y, w, h, .. })
+            if *x == STATUS_MARGIN && *y == STATUS_TOP_Y
+            && *w == 50.0 && *h == HINT_H as f32));
+    }
+
+    #[test]
+    fn disconnected_wifi_slot_is_empty() {
+        let mut out = Vec::new();
+        draw_status_bar(None, Printed::default(), None, None, None, Printed::default(), &mut out);
+        assert!(out.is_empty());
+    }
 }

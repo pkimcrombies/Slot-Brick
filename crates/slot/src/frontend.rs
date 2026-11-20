@@ -11,7 +11,7 @@ use slot_ui::{
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
     quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
-    wallpaper_face, word_face, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
+    wallpaper_face, word_face, word_face_ink, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
     QuickRow, QuickValue, RebuildScreen, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
     HUD_ICON_PX, HUD_INK, LEGEND,
 };
@@ -26,6 +26,9 @@ use crate::link_screen::{LinkSprites, Sprite};
 use crate::link_start::{LinkFail, LinkStep};
 use crate::session::Session;
 use crate::wallpaper;
+
+// Top-shelf Android Original appearance uses black time, icons, and percentage.
+const SHELF_STATUS_INK: [u8; 3] = [0, 0, 0];
 
 const DOZE_TIMEOUT: Duration = Duration::from_secs(180);
 // The Brick has no lid, so an untouched device would otherwise stay lit until
@@ -472,17 +475,17 @@ impl Frontend {
         let disc = slot_ui::disc_shadow();
         let disc = compositor.create_texture(disc.w, disc.h, &disc.rgba);
         self.session.app_mut().set_disc_shadow(disc);
-        let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, SHELF_STATUS_INK);
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
         // The shelf's Wi-Fi symbol, in its three states; which one shows is the app's to say.
         let wifi = [Icon::Wifi, Icon::WifiNoRoute, Icon::WifiOff].map(|icon| {
-            let face = icon_face(icon, slot_ui::WIFI_PX, HUD_INK);
+            let face = icon_face(icon, slot_ui::WIFI_PX, SHELF_STATUS_INK);
             (compositor.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
         });
         self.session.app_mut().set_wifi_faces(wifi);
         // Beside it, while a newer Slot is out.
-        let update = icon_face(Icon::Update, slot_ui::WIFI_PX, HUD_INK);
+        let update = icon_face(Icon::Update, slot_ui::WIFI_PX, SHELF_STATUS_INK);
         let update = (compositor.create_texture(update.w, update.h, &update.rgba), update.w, update.h);
         self.session.app_mut().set_update_face(update);
         // A favorite's star, gold with a lit side and a shaded one, outlined so it shows on any
@@ -1104,7 +1107,7 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
     let shown = hhmm(app.wall_secs());
     if shown != clocks.shown {
-        let face = word_face(&shown);
+        let face = word_face_ink(&shown, SHELF_STATUS_INK);
         clocks.shown = shown;
         let w = face.w;
         let id = upload(compositor, &mut clocks.shelf, face);
@@ -1148,7 +1151,7 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     if battery_shown != clocks.battery {
         clocks.battery = battery_shown.clone();
         if !battery_shown.is_empty() {
-            let face = word_face(&battery_shown);
+            let face = word_face_ink(&battery_shown, SHELF_STATUS_INK);
             let w = face.w;
             let id = upload(compositor, &mut clocks.battery_tex, face);
             app.set_battery_percent_face(id, w);

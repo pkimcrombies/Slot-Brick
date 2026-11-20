@@ -17,7 +17,9 @@ Out in `dist-os/`:
   `brick/update-manifest.sh <channel> <version> dist-os/slot-os-update.zip <dir> update-os.txt`
   describes and signs it.
 - `boot.img`, `slot-os/`, `bootlogo.bmp`: the parts, for trying a change on a card without
-  flashing it (below).
+  flashing it (below). The logo now uses the original SLOT wordmark from
+  `slot-cfw/slot/card/System/bootlogo.bmp` (`brick/os/slot-wordmark-upstream.bmp`),
+  fitted to the bootloader's 1024x768 BMP V5 format.
 
 ## How it fits together
 
@@ -43,6 +45,18 @@ Out in `dist-os/`:
   Brick Pro's Slot OS; `crates/slot/src/update.rs`).
   An update that brings a boot image keeps the old one with the files it replaced, and `init`
   puts them all back if the new Slot never shows a frame.
+
+## Replacing the boot logo on an existing Slot OS card
+
+The Slot OS logo is `bootlogo.bmp` at the **root of the SD card's FAT
+partition**, not the logo in the Brick's internal storage. The stock
+firmware `Apps > Logo` app is not used for Slot OS.
+
+On your computer, run `python3 brick/os/bootlogo.py bootlogo.bmp` (requires
+Pillow). On the existing SD card, back up its root `bootlogo.bmp` as
+`bootlogo.original.bmp`, then replace only `bootlogo.bmp` with the
+generated file. Safely eject and restart. To revert, restore the backup.
+This does not format, repartition or touch your games and saves.
 
 ## Trying a change on a card
 

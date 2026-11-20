@@ -421,13 +421,15 @@ fn draw_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
 
 #[cfg(feature = "brick")]
 fn draw_original_console_art(platform: slot_store::Platform, front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
+    // Use the original Game Boy slot hardware on all cartridge shelves.
+    // The cartridge models and per-platform shelf backgrounds are unchanged.
     let pair = match platform {
-        slot_store::Platform::Gba => ORIGINAL_GBA_ART.get(),
-        slot_store::Platform::Gb => ORIGINAL_GB_ART.get(),
-        slot_store::Platform::Gbc => ORIGINAL_GBC_ART.get(),
-        slot_store::Platform::Nes => ORIGINAL_NES_ART.get(),
-        slot_store::Platform::Snes => ORIGINAL_SNES_ART.get(),
-        _ => None,
+        slot_store::Platform::Gba
+        | slot_store::Platform::Gb
+        | slot_store::Platform::Gbc
+        | slot_store::Platform::Nes
+        | slot_store::Platform::Snes => ORIGINAL_GB_ART.get(),
+        _ => None, // PS1 retains its disc slot.
     };
     let Some(&(back, fore)) = pair else { return false; };
     if alpha > 0.0 {

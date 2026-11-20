@@ -185,15 +185,25 @@ impl SlotChrome<'_> {
         }
 
         if chrome < 1.0 {
-            front_bands(|x, y, w, h, _| {
-                out.push(Draw::Rect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    colour: [0.0, 0.0, 0.0, 1.0],
+            // Cover the inserted cart behind the *actual* front artwork during
+            // the screen fade. The old procedural scoop did not match the
+            // Android Original GB slot and left a second outline visible.
+            #[cfg(feature = "brick")]
+            let artwork_masked = draw_original_gb_transition_mask(self.cart.platform, out);
+            #[cfg(not(feature = "brick"))]
+            let artwork_masked = false;
+            if !artwork_masked {
+                // Non-GB artwork (including PS1) keeps its existing behaviour.
+                front_bands(|x, y, w, h, _| {
+                    out.push(Draw::Rect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        colour: [0.0, 0.0, 0.0, 1.0],
+                    });
                 });
-            });
+            }
         }
 
         if self.game && self.screen > 0.0 {
@@ -225,6 +235,9 @@ static ORIGINAL_GBA_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 // Real Android Original console bars; GBA stays on the existing tested path.
 #[cfg(feature = "brick")]
 static ORIGINAL_GB_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+/// Black occlusion cover using the exact alpha of the active GB front PNG.
+#[cfg(feature = "brick")]
+static ORIGINAL_GB_TRANSITION_MASK: OnceLock<TexId> = OnceLock::new();
 #[cfg(feature = "brick")]
 static ORIGINAL_GBC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 #[cfg(feature = "brick")]
@@ -330,6 +343,13 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
             original_console_bar_face(platform, false),
             original_console_bar_face(platform, true),
         ) {
+            if platform == slot_store::Platform::Gb {
+                // Use the same downsampled pixels as ORIGINAL_GB_ART, so the
+                // opening and its antialiased edge always align precisely.
+                let mask = black_mask_from_front(&front);
+                let _ = ORIGINAL_GB_TRANSITION_MASK
+                    .set(upload(OUT_W, MOUTH_H as u32, &mask));
+            }
             let _ = target.set((
                 upload(OUT_W, MOUTH_H as u32, &back),
                 upload(OUT_W, MOUTH_H as u32, &front),
@@ -416,6 +436,41 @@ fn draw_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
     if let (true,Some(&(back,fore)))=(mix>0.0&&alpha>0.0,DISC_ART.get()) {
         out.push(Draw::Tex{x:0.0,y:BAND_Y,w:OUT_W as f32,h:MOUTH_H,tex:if front {fore}else{back},alpha:alpha*mix});
     }
+    true
+}
+
+/// Generate a black occlusion layer with the *same alpha* as the visible
+/// GB front plate. Preserving partial alpha also preserves antialiased edges.
+#[cfg(feature = "brick")]
+fn black_mask_from_front(front: &[u8]) -> Vec<u8> {
+    let mut mask = front.to_vec();
+    for px in mask.chunks_exact_mut(4) {
+        px[..3].fill(0);
+    }
+    mask
+}
+
+#[cfg(feature = "brick")]
+fn draw_original_gb_transition_mask(platform: slot_store::Platform, out: &mut Vec<Draw>) -> bool {
+    if !matches!(
+        platform,
+        slot_store::Platform::Gba
+            | slot_store::Platform::Gb
+            | slot_store::Platform::Gbc
+            | slot_store::Platform::Nes
+            | slot_store::Platform::Snes
+    ) {
+        return false;
+    }
+    let Some(&tex) = ORIGINAL_GB_TRANSITION_MASK.get() else { return false; };
+    out.push(Draw::Tex {
+        x: 0.0,
+        y: BAND_Y,
+        w: OUT_W as f32,
+        h: MOUTH_H,
+        tex,
+        alpha: 1.0,
+    });
     true
 }
 
@@ -582,5 +637,40 @@ mod original_gba_asset_tests {
             }
         }
         assert!(original_console_bar_face(slot_store::Platform::Ps1, false).is_none());
+    }
+}
+
+#[cfg(all(test, feature = "brick"))]
+mod gb_transition_tests {
+    use super::{black_mask_from_front, original_console_bar_face};
+    use slot_store::Platform;
+
+    #[test]
+    fn occlusion_mask_uses_front_art_alpha_not_the_old_scoop() {
+        let pixels = [
+            220, 215, 200, 255, // painted case
+            100, 95, 90, 128,   // antialiased opening edge
+            0, 0, 0, 0,         // transparent opening
+        ];
+        let actual = black_mask_from_front(&pixels);
+        assert_eq!(actual, [
+            0, 0, 0, 255,
+            0, 0, 0, 128,
+            0, 0, 0, 0,
+        ]);
+    }
+
+    #[test]
+    fn default_gb_front_contains_both_case_and_transparent_opening() {
+        let front = original_console_bar_face(Platform::Gb, true)
+            .expect("the default GB front PNG must decode");
+        assert!(
+            front.chunks_exact(4).any(|px| px[3] == 0),
+            "the GB front must have a transparent opening"
+        );
+        assert!(
+            front.chunks_exact(4).any(|px| px[3] == 255),
+            "the GB front must have an opaque surrounding case"
+        );
     }
 }

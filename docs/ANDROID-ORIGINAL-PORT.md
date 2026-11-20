@@ -38,3 +38,23 @@ Do not deploy merely because the code is committed.
 - Port Android's top status row, dynamic ink, menu palette, and theme selector.
 - Refine carousel movement and cartridge insertion to match Android, adapted to physical buttons.
 - Hide unused system shelves without deleting their emulator code.
+
+## Phase 2 — GB / GBC / NES / SNES Original shelves
+
+The second port extends the proven GBA approach to four more systems, using
+the original Android console bar PNGs and matching shelf colours:
+
+| Console | Shelf RGB | Artwork |
+|---|---|---|
+| GB | 202, 211, 168 | assets/slot_{back,front}_gb.png |
+| GBC | 243, 227, 160 | assets/slot_{back,front}_gbc.png |
+| NES | 228, 205, 203 | assets/home/slot_{back,front}_nes.png |
+| SNES | 205, 211, 222 | assets/home/slot_{back,front}_snes.png |
+
+The eight new images are copied from Baggio94/slot-for-android to
+`assets/android-original/` and retain their original filenames.
+GBA's working artwork and palette remain unchanged. This does not yet port
+Android's separate moving NES/SNES slot flaps, or its status bar and menus.
+
+Test the GBA regression and each new console's shelf and insertion/ejection
+before considering a release.

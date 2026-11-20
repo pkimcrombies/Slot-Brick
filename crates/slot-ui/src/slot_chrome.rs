@@ -222,6 +222,15 @@ static ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 /// Original GBA's full-resolution console art, separate from Brick's default.
 #[cfg(feature = "brick")]
 static ORIGINAL_GBA_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+// Real Android Original console bars; GBA stays on the existing tested path.
+#[cfg(feature = "brick")]
+static ORIGINAL_GB_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+#[cfg(feature = "brick")]
+static ORIGINAL_GBC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+#[cfg(feature = "brick")]
+static ORIGINAL_NES_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
+#[cfg(feature = "brick")]
+static ORIGINAL_SNES_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 /// The disc slot's two layers: a slot-loading drive's slit, where the cartridge slot's scoop was.
 #[cfg(feature = "brick")]
 static DISC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
@@ -254,6 +263,34 @@ fn original_gba_bar_face(front: bool) -> Option<Vec<u8>> {
     crate::art::cover_rgba(&buffer[..info.buffer_size()], info.width, info.height, OUT_W, MOUTH_H as u32)
 }
 
+/// Decode one Android Original console bar to the Brick's logical 720x58.
+#[cfg(feature = "brick")]
+fn original_console_bar_face(platform: slot_store::Platform, front: bool) -> Option<Vec<u8>> {
+    use slot_store::Platform;
+    let bytes: &[u8] = match (platform, front) {
+        (Platform::Gb, false) => include_bytes!("../../../assets/android-original/slot_back_gb.png"),
+        (Platform::Gb, true) => include_bytes!("../../../assets/android-original/slot_front_gb.png"),
+        (Platform::Gbc, false) => include_bytes!("../../../assets/android-original/slot_back_gbc.png"),
+        (Platform::Gbc, true) => include_bytes!("../../../assets/android-original/slot_front_gbc.png"),
+        (Platform::Nes, false) => include_bytes!("../../../assets/android-original/slot_back_nes.png"),
+        (Platform::Nes, true) => include_bytes!("../../../assets/android-original/slot_front_nes.png"),
+        (Platform::Snes, false) => include_bytes!("../../../assets/android-original/slot_back_snes.png"),
+        (Platform::Snes, true) => include_bytes!("../../../assets/android-original/slot_front_snes.png"),
+        (Platform::Gba, _) => return original_gba_bar_face(front),
+        _ => return None,
+    };
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    decoder.set_limits(png::Limits { bytes: 64 << 20 });
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    if info.color_type != png::ColorType::Rgba { return None; }
+    crate::art::cover_rgba(
+        &buffer[..info.buffer_size()], info.width, info.height, OUT_W, MOUTH_H as u32,
+    )
+}
+
 #[cfg(feature = "brick")]
 pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     if ART.get().is_some() {return;}
@@ -268,6 +305,22 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
             upload(OUT_W, MOUTH_H as u32, &back),
             upload(OUT_W, MOUTH_H as u32, &front),
         ));
+    }
+    for (platform, target) in [
+        (slot_store::Platform::Gb, &ORIGINAL_GB_ART),
+        (slot_store::Platform::Gbc, &ORIGINAL_GBC_ART),
+        (slot_store::Platform::Nes, &ORIGINAL_NES_ART),
+        (slot_store::Platform::Snes, &ORIGINAL_SNES_ART),
+    ] {
+        if let (Some(back), Some(front)) = (
+            original_console_bar_face(platform, false),
+            original_console_bar_face(platform, true),
+        ) {
+            let _ = target.set((
+                upload(OUT_W, MOUTH_H as u32, &back),
+                upload(OUT_W, MOUTH_H as u32, &front),
+            ));
+        }
     }
 }
 
@@ -353,8 +406,16 @@ fn draw_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
 }
 
 #[cfg(feature = "brick")]
-fn draw_original_gba_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
-    let Some(&(back, fore)) = ORIGINAL_GBA_ART.get() else { return false; };
+fn draw_original_console_art(platform: slot_store::Platform, front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
+    let pair = match platform {
+        slot_store::Platform::Gba => ORIGINAL_GBA_ART.get(),
+        slot_store::Platform::Gb => ORIGINAL_GB_ART.get(),
+        slot_store::Platform::Gbc => ORIGINAL_GBC_ART.get(),
+        slot_store::Platform::Nes => ORIGINAL_NES_ART.get(),
+        slot_store::Platform::Snes => ORIGINAL_SNES_ART.get(),
+        _ => None,
+    };
+    let Some(&(back, fore)) = pair else { return false; };
     if alpha > 0.0 {
         out.push(Draw::Tex {
             x: 0.0, y: BAND_Y, w: OUT_W as f32, h: MOUTH_H,
@@ -366,7 +427,7 @@ fn draw_original_gba_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
 
 fn draw_slot_back_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
     #[cfg(feature = "brick")]
-    if platform == slot_store::Platform::Gba && draw_original_gba_art(false, alpha, out) { return; }
+    if draw_original_console_art(platform, false, alpha, out) { return; }
     #[cfg(not(feature = "brick"))]
     let _ = platform;
     draw_slot_back(alpha, out);
@@ -374,7 +435,7 @@ fn draw_slot_back_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<
 
 fn draw_slot_front_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
     #[cfg(feature = "brick")]
-    if platform == slot_store::Platform::Gba && draw_original_gba_art(true, alpha, out) { return; }
+    if draw_original_console_art(platform, true, alpha, out) { return; }
     #[cfg(not(feature = "brick"))]
     let _ = platform;
     draw_slot_front(alpha, out);
@@ -487,5 +548,23 @@ mod original_gba_asset_tests {
             assert_eq!(image.len(), (OUT_W * MOUTH_H as u32 * 4) as usize);
             assert!(image.chunks_exact(4).any(|pixel| pixel[3] != 0));
         }
+    }
+
+    #[test]
+    fn gb_gbc_nes_snes_bars_decode_to_exact_brick_slot_dimensions() {
+        for platform in [
+            slot_store::Platform::Gb,
+            slot_store::Platform::Gbc,
+            slot_store::Platform::Nes,
+            slot_store::Platform::Snes,
+        ] {
+            for front in [false, true] {
+                let image = original_console_bar_face(platform, front)
+                    .expect("Android Original console PNG must decode");
+                assert_eq!(image.len(), (OUT_W * MOUTH_H as u32 * 4) as usize);
+                assert!(image.chunks_exact(4).any(|pixel| pixel[3] != 0));
+            }
+        }
+        assert!(original_console_bar_face(slot_store::Platform::Ps1, false).is_none());
     }
 }

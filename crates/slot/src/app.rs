@@ -3330,14 +3330,21 @@ impl App {
         }
     }
 
-    /// Android Original GBA uses its lavender console ground. Other shelves
-    /// keep Brick's existing wallpaper and dimming behaviour.
+    /// Android Original per-console shelf colour; preserve existing PS1 background.
     fn draw_shelf_background(&self, out: &mut Vec<Draw>) {
-        if self.shelves[self.shelf_at].0 == Platform::Gba {
+        // Baggio94/slot-for-android: menu_style.rs Original shelf palette.
+        let colour: Option<[u8; 3]> = match self.shelves[self.shelf_at].0 {
+            Platform::Gba => Some([196, 198, 228]), // GBA lavender
+            Platform::Gb => Some([202, 211, 168]),   // Game Boy green
+            Platform::Gbc => Some([243, 227, 160]),  // GBC pale yellow
+            Platform::Nes => Some([228, 205, 203]),  // NES pale rose
+            Platform::Snes => Some([205, 211, 222]), // SNES blue grey
+            _ => None,
+        };
+        if let Some([r, g, b]) = colour {
             out.push(Draw::Rect {
                 x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
-                // Baggio94/slot-for-android: Original GBA shelf RGB(196,198,228).
-                colour: [196.0 / 255.0, 198.0 / 255.0, 228.0 / 255.0, 1.0],
+                colour: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
             });
         } else {
             draw_backdrop(self.wallpaper, out);

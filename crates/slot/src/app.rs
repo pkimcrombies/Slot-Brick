@@ -3515,8 +3515,11 @@ impl App {
                         draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
                     }
                     _ => {
-                        // Show only cartridges and the slot on the shelf.
-                        // Titles remain on the cartridge labels; no separate caption.
+                        // The built-in HOME -> Library -> Title Card option controls
+                        // whether the game's name appears under its cartridge.
+                        if let Some(foot) = self.shelf().selected_foot() {
+                            slot_ui::draw_title_card(self.title_card, foot, self.title_card_alpha(), out);
+                        }
                         self.shelf().draw(self.shelf_shake(), out);
                     }
                 }

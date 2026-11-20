@@ -89,3 +89,7 @@ Upstream asset paths:
 - `assets/slot_back_gba_light.png`
 - `assets/slot_front_gba_light.png`
 - `android/app/src/main/assets/slot-bootlogo-kpa-960x640.png`
+
+The light GBA slot artwork is desaturated on decode to prevent any
+remaining blue/lavender cast. RGB channels are equalised after scaling
+while alpha/transparency and fine luminance variation are preserved.

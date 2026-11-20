@@ -260,7 +260,21 @@ fn original_gba_bar_face(front: bool) -> Option<Vec<u8>> {
     let mut buffer = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buffer).ok()?;
     if info.color_type != png::ColorType::Rgba { return None; }
-    crate::art::cover_rgba(&buffer[..info.buffer_size()], info.width, info.height, OUT_W, MOUTH_H as u32)
+    // The Android Light GBA art preserves the proper cartridge opening but has
+    // a faint cool tint. Neutralise it for the NES-style rose-grey GBA shelf.
+    // Keep transparency, recess shadows and fine material texture intact.
+    let mut face = crate::art::cover_rgba(
+        &buffer[..info.buffer_size()], info.width, info.height, OUT_W, MOUTH_H as u32,
+    )?;
+    for pixel in face.chunks_exact_mut(4) {
+        let grey = ((77u32 * pixel[0] as u32
+            + 150u32 * pixel[1] as u32
+            + 29u32 * pixel[2] as u32 + 128) >> 8) as u8;
+        pixel[0] = grey;
+        pixel[1] = grey;
+        pixel[2] = grey;
+    }
+    Some(face)
 }
 
 /// Decode one Android Original console bar to the Brick's logical 720x58.

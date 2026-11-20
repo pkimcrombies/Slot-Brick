@@ -49,7 +49,7 @@ impl Cart {
             // The file name is the title: an iNES header names no game, a SNES header's
             // sits at one of several places a copier header can shift, and a disc's ID is
             // a catalogue number, not a name.
-            Platform::Nes | Platform::Snes | Platform::Ps1 => {}
+            Platform::Nes | Platform::Snes | Platform::Ps1 | Platform::Psp => {}
         }
     }
 }

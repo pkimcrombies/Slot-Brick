@@ -186,9 +186,9 @@ impl Session {
         self.sync_pad();
     }
 
-    /// A PlayStation game takes a Brick Pro's stick as its DualShock's left stick.
+    /// PlayStation and PSP use the Brick Pro's stick for analog input.
     pub fn stick_to_game(&self) -> bool {
-        self.has_core() && self.app.platform() == Platform::Ps1 && self.app.game_visible()
+        self.has_core() && matches!(self.app.platform(), Platform::Ps1 | Platform::Psp) && self.app.game_visible()
     }
 
     pub fn set_stick(&mut self, at: Option<(i16, i16)>) {
@@ -489,6 +489,10 @@ impl Session {
         else {
             return;
         };
+        if platform == Platform::Psp {
+            self.spawn_psp(rom);
+            return;
+        }
         let core = slot_store::core_for_platform(&self.root, stem, platform);
         self.app.set_core(core);
         self.app.set_platform(platform);
@@ -536,9 +540,36 @@ impl Session {
                 Platform::Nes => slot_cheevos::Console::Nes,
                 Platform::Snes => slot_cheevos::Console::Snes,
                 Platform::Ps1 => slot_cheevos::Console::Ps1,
+                Platform::Psp => unreachable!("PSP has its own setup"),
             };
             emu.achievements(&account.user, &account.token, console);
         }
+        self.app.set_snapshot(Box::new(emu.snapshot()));
+        self.emu = Some(emu);
+    }
+
+    fn spawn_psp(&mut self, rom: PathBuf) {
+        if !cfg!(all(feature = "brick", not(feature = "sim")))
+            || !slot_power::slot_os()
+            || slot_power::model() != slot_power::Model::BrickPro
+        {
+            eprintln!("slot: native PSP requires Brick Pro Slot OS");
+            return;
+        }
+        let core = match crate::core::open_psp(&self.root) {
+            Ok(core) => core,
+            Err(e) => { eprintln!("slot: PSP: {e}"); return; }
+        };
+        self.app.set_core(slot_store::Core::Ppsspp);
+        self.app.set_platform(Platform::Psp);
+        self.app.set_video_mode(crate::video_mode::VideoMode::Actual);
+        self.app.set_named_core(true);
+        self.app.set_palette_live(false);
+        let emu = EmuHandle::spawn_game(Box::new(core), rom,
+            self.root.join(slot_store::archive::UNPACKED_DIR), self.sink.ring(), None, None, None);
+        emu.set_volume(self.app.output_volume());
+        emu.set_native_xy(true);
+        emu.set_driven(self.driven);
         self.app.set_snapshot(Box::new(emu.snapshot()));
         self.emu = Some(emu);
     }

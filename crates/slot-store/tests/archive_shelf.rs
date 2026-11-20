@@ -100,7 +100,7 @@ fn the_playstation_shelf_takes_no_archives() {
     assert!(!Platform::Ps1.takes_archives());
     assert!(Platform::ALL
         .iter()
-        .filter(|p| **p != Platform::Ps1)
+        .filter(|p| !matches!(p, Platform::Ps1 | Platform::Psp))
         .all(|p| p.takes_archives()));
 }
 

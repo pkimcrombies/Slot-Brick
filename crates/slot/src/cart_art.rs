@@ -114,6 +114,7 @@ fn photo_specs(cart: &Cart) -> &'static [&'static CartPhoto] {
         Platform::Snes if slot_ui::snes_shell_of(cart) == Some(slot_ui::SnesShell::Pal) => &[&SNES_PAL_PHOTO, &SNES_PHOTO],
         Platform::Snes => &[&SNES_PHOTO, &SNES_PAL_PHOTO],
         Platform::Ps1 => &[&PS1_DISC_PHOTO],
+        Platform::Psp => &[],
         _ => &[],
     }
 }
@@ -313,6 +314,7 @@ fn platforms_for(platform: Platform) -> &'static [Platform] {
         Platform::Nes => &[Platform::Nes],
         Platform::Snes => &[Platform::Snes],
         Platform::Ps1 => &[Platform::Ps1],
+        Platform::Psp => &[Platform::Psp],
     }
 }
 

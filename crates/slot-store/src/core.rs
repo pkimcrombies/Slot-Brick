@@ -13,10 +13,12 @@ pub enum Core {
     Fceumm,
     Snes9x,
     PcsxRearmed,
+    /// Hardware-rendered PSP core.
+    Ppsspp,
 }
 
 impl Core {
-    pub const ALL: [Core; 5] = [Core::Mgba, Core::Gpsp, Core::Fceumm, Core::Snes9x, Core::PcsxRearmed];
+    pub const ALL: [Core; 6] = [Core::Mgba, Core::Gpsp, Core::Fceumm, Core::Snes9x, Core::PcsxRearmed, Core::Ppsspp];
     /// The GBA's choice of cores, the picker board's two sockets (in Core::index order).
     pub const PICKER: [Core; 2] = [Core::Mgba, Core::Gpsp];
 
@@ -27,6 +29,7 @@ impl Core {
             Core::Fceumm => "fceumm",
             Core::Snes9x => "snes9x",
             Core::PcsxRearmed => "pcsx_rearmed",
+            Core::Ppsspp => "ppsspp",
         }
     }
 
@@ -41,6 +44,7 @@ impl Core {
             Core::Fceumm => "FCEUmm",
             Core::Snes9x => "Snes9x",
             Core::PcsxRearmed => "PCSX ReARMed",
+            Core::Ppsspp => "PPSSPP",
         }
     }
 
@@ -51,6 +55,7 @@ impl Core {
             "fceumm" => Some(Core::Fceumm),
             "snes9x" => Some(Core::Snes9x),
             "pcsx_rearmed" => Some(Core::PcsxRearmed),
+            "ppsspp" => Some(Core::Ppsspp),
             _ => None,
         }
     }
@@ -62,6 +67,7 @@ impl Core {
             Core::Fceumm => platform == Platform::Nes,
             Core::Snes9x => platform == Platform::Snes,
             Core::PcsxRearmed => platform == Platform::Ps1,
+            Core::Ppsspp => platform == Platform::Psp,
         }
     }
 
@@ -71,6 +77,7 @@ impl Core {
             Platform::Nes => Core::Fceumm,
             Platform::Snes => Core::Snes9x,
             Platform::Ps1 => Core::PcsxRearmed,
+            Platform::Psp => Core::Ppsspp,
         }
     }
 }

@@ -30,11 +30,6 @@ const SCOOP_D: f32 = RECESS_H - (SCOOP_Y - BAY_Y);
 const SCOOP_Y: f32 = SLIT_Y + SLIT_H;
 
 const RECESS_H: f32 = 42.0;
-/// The disc slot's slit: where the cart slot's opens, a little thinner.
-#[cfg(feature = "brick")]
-const DISC_SLIT_Y: f32 = SLIT_Y;
-#[cfg(feature = "brick")]
-const DISC_SLIT_H: f32 = 7.0;
 const RIM_W: f32 = 2.0;
 const CX: f32 = OUT_W as f32 / 2.0;
 const SCOOP_FLAT: f32 = 4.0;
@@ -82,9 +77,6 @@ fn catch_at(foot: f32, seated_foot: f32) -> f32 {
     (LIP_Y - foot) / (seated_foot - foot)
 }
 
-/// How many times a disc turns on its way in.
-const DISC_TURNS: f32 = 3.0;
-
 const CATCH_IN: f32 = 0.42;
 const CATCH_OUT: f32 = 0.62;
 const CREEP: f32 = 0.03;
@@ -117,7 +109,7 @@ impl SlotChrome<'_> {
 
         let chrome = 1.0 - self.screen.clamp(0.0, 1.0);
 
-        draw_slot_back_for(self.cart.platform, chrome, out);
+        draw_slot_back(chrome, out);
 
         let (cw, ch) = cart_box(self.cart.platform);
         let (cw, ch) = (cw as f32, ch as f32);
@@ -136,16 +128,6 @@ impl SlotChrome<'_> {
         let y = foot0 + (seated_foot - foot0) * travel - ch;
         let cart_alpha = if seat >= 1.0 { chrome } else { 1.0 };
         out.push(match self.face {
-            // A disc spins up as it goes in, and down as it comes out.
-            Some(tex) if self.cart.platform == slot_store::Platform::Ps1 => Draw::Turned {
-                x,
-                y,
-                w: cw,
-                h: ch,
-                tex,
-                alpha: cart_alpha,
-                turn: DISC_TURNS * std::f32::consts::TAU * seat * seat,
-            },
             Some(tex) => Draw::Tex {
                 x,
                 y,
@@ -189,11 +171,11 @@ impl SlotChrome<'_> {
             // the screen fade. The old procedural scoop did not match the
             // Android Original GB slot and left a second outline visible.
             #[cfg(feature = "brick")]
-            let artwork_masked = draw_original_gb_transition_mask(self.cart.platform, out);
+            let artwork_masked = draw_original_gb_transition_mask(out);
             #[cfg(not(feature = "brick"))]
             let artwork_masked = false;
             if !artwork_masked {
-                // Non-GB artwork (including PS1) keeps its existing behaviour.
+                // Match the procedural scoop when the shared artwork is unavailable.
                 front_bands(|x, y, w, h, _| {
                     out.push(Draw::Rect {
                         x,
@@ -210,7 +192,7 @@ impl SlotChrome<'_> {
             out.push(Draw::Game);
         }
 
-        draw_slot_front_for(self.cart.platform, chrome, out);
+        draw_slot_front(chrome, out);
     }
 }
 
@@ -244,21 +226,6 @@ static ORIGINAL_GBC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 static ORIGINAL_NES_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
 #[cfg(feature = "brick")]
 static ORIGINAL_SNES_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
-/// The disc slot's two layers: a slot-loading drive's slit, where the cartridge slot's scoop was.
-#[cfg(feature = "brick")]
-static DISC_ART: OnceLock<(TexId, TexId)> = OnceLock::new();
-/// How far the slot has turned into a disc slot: 0 a cartridge slot, 1 a disc slot.
-static DISC_MIX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-pub fn set_disc_slot(mix: f32) {
-    DISC_MIX.store(mix.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
-}
-
-fn disc_mix() -> f32 {
-    f32::from_bits(DISC_MIX.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Downsample the actual 3x Android Original GBA slot layers.
 #[cfg(feature = "brick")]
 fn original_gba_bar_face(front: bool) -> Option<Vec<u8>> {
     let bytes: &[u8] = if front {
@@ -324,9 +291,6 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     if let (Some(back),Some(front))=(slot_art_face(false),slot_art_face(true)) {
         let _=ART.set((upload(back.w,back.h,&back.rgba),upload(front.w,front.h,&front.rgba)));
     }
-    if let (Some(back),Some(front))=(disc_slot_face(false),disc_slot_face(true)) {
-        let _=DISC_ART.set((upload(back.w,back.h,&back.rgba),upload(front.w,front.h,&front.rgba)));
-    }
     if let (Some(back), Some(front)) = (original_gba_bar_face(false), original_gba_bar_face(true)) {
         let _ = ORIGINAL_GBA_ART.set((
             upload(OUT_W, MOUTH_H as u32, &back),
@@ -358,26 +322,6 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     }
 }
 
-/// The disc slot: a flat face with a thin slit the width of the cart slot's mouth, a shadow
-/// inside it, and a lip of light under it. Drawn over the cartridge slot as it fades in.
-#[cfg(feature = "brick")]
-fn disc_slot_face(front: bool) -> Option<crate::cart::CartFace> {
-    let hex=|c: [u8;3]|format!("#{:02x}{:02x}{:02x}",c[0],c[1],c[2]);
-    let t=theme();
-    let (housing,opening,edge)=(hex(t.housing),hex(t.opening),hex(t.edge));
-    let local=|y:f32|y-BAND_Y;
-    let (top,h)=(local(DISC_SLIT_Y),DISC_SLIT_H);
-    let r=h/2.0;
-    let body=if front {
-        format!("<path fill-rule='evenodd' fill='{housing}' d='M0,0 H{OUT_W} V{MOUTH_H} H0 Z M{},{top} H{} A{r},{r} 0 0 1 {},{} H{} A{r},{r} 0 0 1 {},{top} Z'/>\
-            <rect x='{}' y='{}' width='{}' height='1' fill='{edge}'/>",
-            MOUTH_X+r,MOUTH_X+MOUTH_W-r,MOUTH_X+MOUTH_W-r,top+h,MOUTH_X+r,MOUTH_X+r,
-            MOUTH_X+r,top+h,MOUTH_W-2.0*r)
-    } else {
-        format!("<rect x='{MOUTH_X}' y='{top}' width='{MOUTH_W}' height='{h}' fill='{opening}'/><rect x='{MOUTH_X}' y='{top}' width='{MOUTH_W}' height='{}' fill='url(#shade)'/>",h/2.0)
-    };
-    raster(&body)
-}
 #[cfg(feature = "brick")]
 pub fn slot_art_face(front: bool) -> Option<crate::cart::CartFace> {
     use std::fmt::Write;
@@ -430,12 +374,6 @@ fn raster(body: &str) -> Option<crate::cart::CartFace> {
 fn draw_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
     let Some(&(back,fore))=ART.get() else {return false;};
     if alpha>0.0 {out.push(Draw::Tex{x:0.0,y:BAND_Y,w:OUT_W as f32,h:MOUTH_H,tex:if front {fore}else{back},alpha});}
-    // The disc slot over it, as far as it has come in: opaque where the cart slot is open, so
-    // drawn on top it closes the scoop and leaves the slit.
-    let mix=disc_mix();
-    if let (true,Some(&(back,fore)))=(mix>0.0&&alpha>0.0,DISC_ART.get()) {
-        out.push(Draw::Tex{x:0.0,y:BAND_Y,w:OUT_W as f32,h:MOUTH_H,tex:if front {fore}else{back},alpha:alpha*mix});
-    }
     true
 }
 
@@ -451,17 +389,7 @@ fn black_mask_from_front(front: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(feature = "brick")]
-fn draw_original_gb_transition_mask(platform: slot_store::Platform, out: &mut Vec<Draw>) -> bool {
-    if !matches!(
-        platform,
-        slot_store::Platform::Gba
-            | slot_store::Platform::Gb
-            | slot_store::Platform::Gbc
-            | slot_store::Platform::Nes
-            | slot_store::Platform::Snes
-    ) {
-        return false;
-    }
+fn draw_original_gb_transition_mask(out: &mut Vec<Draw>) -> bool {
     let Some(&tex) = ORIGINAL_GB_TRANSITION_MASK.get() else { return false; };
     out.push(Draw::Tex {
         x: 0.0,
@@ -475,18 +403,8 @@ fn draw_original_gb_transition_mask(platform: slot_store::Platform, out: &mut Ve
 }
 
 #[cfg(feature = "brick")]
-fn draw_original_console_art(platform: slot_store::Platform, front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
-    // Use the original Game Boy slot hardware on all cartridge shelves.
-    // The cartridge models and per-platform shelf backgrounds are unchanged.
-    let pair = match platform {
-        slot_store::Platform::Gba
-        | slot_store::Platform::Gb
-        | slot_store::Platform::Gbc
-        | slot_store::Platform::Nes
-        | slot_store::Platform::Snes => ORIGINAL_GB_ART.get(),
-        _ => None, // PS1 retains its disc slot.
-    };
-    let Some(&(back, fore)) = pair else { return false; };
+fn draw_original_console_art(front: bool, alpha: f32, out: &mut Vec<Draw>) -> bool {
+    let Some(&(back, fore)) = ORIGINAL_GB_ART.get() else { return false; };
     if alpha > 0.0 {
         out.push(Draw::Tex {
             x: 0.0, y: BAND_Y, w: OUT_W as f32, h: MOUTH_H,
@@ -496,25 +414,9 @@ fn draw_original_console_art(platform: slot_store::Platform, front: bool, alpha:
     true
 }
 
-fn draw_slot_back_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
-    #[cfg(feature = "brick")]
-    if draw_original_console_art(platform, false, alpha, out) { return; }
-    #[cfg(not(feature = "brick"))]
-    let _ = platform;
-    draw_slot_back(alpha, out);
-}
-
-fn draw_slot_front_for(platform: slot_store::Platform, alpha: f32, out: &mut Vec<Draw>) {
-    #[cfg(feature = "brick")]
-    if draw_original_console_art(platform, true, alpha, out) { return; }
-    #[cfg(not(feature = "brick"))]
-    let _ = platform;
-    draw_slot_front(alpha, out);
-}
-
 fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
     #[cfg(feature = "brick")]
-    if draw_art(false,alpha,out) {return;}
+    if draw_original_console_art(false, alpha, out) || draw_art(false, alpha, out) { return; }
     out.push(band(BAY_X, BAND_Y, BAY_W, LIP_H, housing(), alpha));
     out.push(band(MOUTH_X, BAND_Y, MOUTH_W, LIP_H, edge(), alpha));
     out.push(band(BAY_X, BAY_Y, BAY_W, RECESS_H, recess(), alpha));
@@ -526,7 +428,7 @@ fn draw_slot_back(alpha: f32, out: &mut Vec<Draw>) {
 
 fn draw_slot_front(alpha: f32, out: &mut Vec<Draw>) {
     #[cfg(feature = "brick")]
-    if draw_art(true,alpha,out) {return;}
+    if draw_original_console_art(true, alpha, out) || draw_art(true, alpha, out) { return; }
     front_bands(|x, y, w, h, c| out.push(band(x, y, w, h, c, alpha)));
 }
 
@@ -585,12 +487,6 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
 pub fn draw_empty_slot(out: &mut Vec<Draw>) {
     draw_slot_back(1.0, out);
     draw_slot_front(1.0, out);
-}
-
-/// Render the appropriate console bar on the currently selected shelf.
-pub fn draw_empty_slot_platform(platform: slot_store::Platform, out: &mut Vec<Draw>) {
-    draw_slot_back_for(platform, 1.0, out);
-    draw_slot_front_for(platform, 1.0, out);
 }
 
 fn travel(seat: f32, catch: f32) -> f32 {
@@ -673,4 +569,111 @@ mod gb_transition_tests {
             "the GB front must have an opaque surrounding case"
         );
     }
+}
+
+#[cfg(test)]
+mod disc_tests {
+    use super::*;
+
+    #[test]
+    fn cartridge_and_disc_use_the_same_opening() {
+        let render = |platform| {
+            let cart = Cart {
+                platform,
+                stem: "Test".into(),
+                rom: Default::default(),
+                label: None,
+                famicom_label: None,
+                title: String::new(),
+                code: String::new(),
+                shell: None,
+            };
+            let face = TexId::from_raw(77);
+            let mut draws = Vec::new();
+            SlotChrome {
+                cart: &cart,
+                face: Some(face),
+                rest: CX - cart_box(platform).0 as f32 / 2.0,
+                scale: 1.0,
+                seat: 0.5,
+                alert: None,
+                dim: 0.0,
+                screen: 0.0,
+                game: false,
+            }
+            .draw(&mut draws);
+            draws.retain(|draw| !matches!(*draw, Draw::Tex { tex, .. } if tex == face));
+            draws
+        };
+        let cartridge = render(slot_store::Platform::Gba);
+        for disc in [slot_store::Platform::Ps1, slot_store::Platform::Psp] {
+            assert!(render(disc) == cartridge, "the scoop must be identical on {disc:?}");
+        }
+    }
+
+    #[test]
+    fn playstation_discs_use_the_cartridge_catch_and_stay_seated() {
+        use slot_store::Platform;
+
+        let face = TexId::from_raw(77);
+        for platform in [Platform::Ps1, Platform::Psp] {
+            let cart = Cart {
+                platform,
+                stem: "Disc Test".into(),
+                rom: Default::default(),
+                label: None,
+                famicom_label: None,
+                title: String::new(),
+                code: String::new(),
+                shell: None,
+            };
+            let mut scene = SlotChrome {
+                cart: &cart,
+                face: Some(face),
+                rest: CX - cart_box(platform).0 as f32 / 2.0,
+                scale: 1.0,
+                seat: 0.0,
+                alert: None,
+                dim: 0.0,
+                screen: 0.0,
+                game: false,
+            };
+            let mut before = 0.0;
+            for seat in [0.0, CATCH_IN, CATCH_OUT, 0.9] {
+                scene.seat = seat;
+                let mut draws = Vec::new();
+                scene.draw(&mut draws);
+                let (y, w, h) = draws
+                    .iter()
+                    .find_map(|draw| match *draw {
+                        Draw::Tex { y, w, h, tex, .. } if tex == face => Some((y, w, h)),
+                        _ => None,
+                    })
+                    .expect("still-visible disc should be drawn face-on");
+                assert_eq!(w, h);
+                assert!(y > before);
+                if seat == CATCH_IN {
+                    assert!((y + h - LIP_Y).abs() < 0.01, "the disc catches at the lip");
+                }
+                before = y;
+            }
+            scene.seat = 1.0;
+            for screen in [0.0, 0.5] {
+                scene.screen = screen;
+                let mut draws = Vec::new();
+                scene.draw(&mut draws);
+                let (y, w, h, alpha) = draws
+                    .iter()
+                    .find_map(|draw| match *draw {
+                        Draw::Tex { y, w, h, tex, alpha, .. } if tex == face => Some((y, w, h, alpha)),
+                        _ => None,
+                    })
+                    .expect("the disc stays seated through the handoff");
+                assert!((y - SEATED_Y).abs() < 0.01);
+                assert_eq!((w, h), (SEATED_W as f32, SEATED_W as f32));
+                assert_eq!(alpha, 1.0 - screen);
+            }
+        }
+    }
+
 }

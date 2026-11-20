@@ -3,18 +3,22 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CString};
 use std::marker::PhantomData;
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use libloading::Library;
 
 use crate::core::{AvInfo, ButtonMask, CoreError, RetroCore, GBA_H, GBA_W};
 use crate::ffi::*;
+use crate::hardware::{Callback, Renderer};
 use crate::link::Link;
 use crate::rumble::Rumble;
 
 const VIDEO_BYTES: usize = (GBA_W * GBA_H * 4) as usize;
 
 static LIVE: AtomicBool = AtomicBool::new(false);
+// There is only one live libretro core. PPSSPP fetches this opaque name from
+// its internal emulation thread, where the host's thread-local guard is absent.
+static HARDWARE_FRAMEBUFFER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum PixelFormat {
@@ -23,6 +27,9 @@ enum PixelFormat {
 }
 
 struct Host {
+    hardware_allowed: bool,
+    hardware_callback: Option<Callback>,
+    renderer: Option<Renderer>,
     video: Vec<u8>,
     /// The canvas `video` holds, GBA-sized unless set_canvas says otherwise.
     canvas: (u32, u32),
@@ -91,8 +98,38 @@ unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u1
     with_host(|h| h.rumble.set(port, effect, strength)).unwrap_or(false)
 }
 
+unsafe extern "C" fn hardware_framebuffer() -> usize {
+    HARDWARE_FRAMEBUFFER.load(Ordering::Acquire)
+}
+
+unsafe extern "C" fn hardware_proc(name: *const c_char) -> Option<unsafe extern "C" fn()> {
+    if name.is_null() { return None; }
+    with_host(|h| h.renderer.as_ref()?.proc_address(std::ffi::CStr::from_ptr(name))).flatten()
+}
+
 unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     match cmd {
+        14 | 0x1000e => { // RETRO_ENVIRONMENT_SET_HW_RENDER
+            if data.is_null() { return false; }
+            let cb = &mut *data.cast::<Callback>();
+            with_host(|h| {
+                if !h.hardware_allowed || h.renderer.is_some() || cb.version().is_none() { return false; }
+                cb.framebuffer = Some(hardware_framebuffer);
+                cb.proc_address = Some(hardware_proc);
+                h.hardware_callback = Some(*cb);
+                true
+            }).unwrap_or(false)
+        }
+        56 | 0x10038 => { // RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER
+            if data.is_null() { return false; }
+            with_host(|h| {
+                if !h.hardware_allowed { return false; }
+                // PPSSPP's backend selector accepts a GLES3 preference. It
+                // then asks for its actual context, which can be GLES2.
+                *data.cast::<u32>() = 4; // RETRO_HW_CONTEXT_OPENGLES3
+                true
+            }).unwrap_or(false)
+        }
         GET_CAN_DUPE => {
             if data.is_null() {
                 return false;
@@ -373,6 +410,12 @@ unsafe extern "C" fn video_refresh(
         return;
     }
     with_host(|h| {
+        if data as usize == usize::MAX { // RETRO_HW_FRAME_BUFFER_VALID
+            if let (Some(renderer), Some(cb)) = (&mut h.renderer, h.hardware_callback) {
+                renderer.copy_frame(width, height, cb.bottom_left, h.canvas, &mut h.video);
+            }
+            return;
+        }
         if h.fill {
             fill_canvas(h, data, width, height, pitch);
             return;
@@ -548,10 +591,18 @@ impl LibretroCore {
     }
 
     pub fn open_with(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
+        Self::open_host(dylib, system_dir, save_dir, false)
+    }
+
+    pub fn open_hardware(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
+        Self::open_host(dylib, system_dir, save_dir, true)
+    }
+
+    fn open_host(dylib: &Path, system_dir: &Path, save_dir: &Path, hardware_allowed: bool) -> Result<Self, CoreError> {
         if LIVE.swap(true, Ordering::SeqCst) {
             return Err(CoreError::Unsupported("a core is already open".into()));
         }
-        Self::open_inner(dylib, system_dir, save_dir)
+        Self::open_inner(dylib, system_dir, save_dir, hardware_allowed)
             .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
     }
 
@@ -620,7 +671,7 @@ impl LibretroCore {
             .map(|s| s.to_string())
     }
 
-    fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
+    fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path, hardware_allowed: bool) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
         let version = unsafe { (api.api_version)() };
@@ -628,6 +679,9 @@ impl LibretroCore {
             return Err(CoreError::Unsupported(format!("libretro api {version}")));
         }
         let mut host = Box::new(Host {
+            hardware_allowed,
+            hardware_callback: None,
+            renderer: None,
             video: vec![0; VIDEO_BYTES],
             canvas: (GBA_W, GBA_H),
             format: PixelFormat::Xrgb8888,
@@ -681,8 +735,22 @@ impl LibretroCore {
         if !self.loaded {
             return;
         }
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.unload_game)() };
+        if self.host.renderer.as_ref().is_some_and(Renderer::make_current) {
+            if let Some(destroy) = self.host.hardware_callback.and_then(|cb| cb.destroy) {
+                let _a = Active::bind(&mut self.host);
+                // PPSSPP owns the callback target until retro_unload_game.
+                unsafe { destroy() };
+            }
+        }
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.unload_game)() };
+        }
+        if self.host.renderer.take().is_some() {
+            // context_destroy/retro_unload_game have stopped the core's thread.
+            HARDWARE_FRAMEBUFFER.store(0, Ordering::Release);
+        }
+        self.host.hardware_callback = None;
         self.loaded = false;
     }
 
@@ -762,7 +830,21 @@ impl RetroCore for LibretroCore {
         }
         self.loaded = true;
         let mut av = SystemAvInfo::default();
-        unsafe { (self.api.get_system_av_info)(&mut av) };
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.get_system_av_info)(&mut av) };
+        }
+        if self.host.hardware_allowed {
+            let cb = self.host.hardware_callback.ok_or_else(|| CoreError::Load("core did not request a supported GLES context".into()))?;
+            let (w, h) = self.host.canvas;
+            let renderer = Renderer::new(cb, av.geometry.max_width.max(w), av.geometry.max_height.max(h))?;
+            HARDWARE_FRAMEBUFFER.store(renderer.framebuffer(), Ordering::Release);
+            self.host.renderer = Some(renderer);
+            if let Some(reset) = cb.reset {
+                let _a = Active::bind(&mut self.host);
+                unsafe { reset() };
+            }
+        }
         self.av = AvInfo {
             fps: av.timing.fps,
             sample_rate: av.timing.sample_rate,
@@ -779,9 +861,18 @@ impl RetroCore for LibretroCore {
         if !self.loaded {
             return;
         }
+        if self.host.renderer.as_ref().is_some_and(|r| !r.make_current()) {
+            return;
+        }
         self.host.inputs = [p1.0, p2.0];
-        let _a = Active::bind(&mut self.host);
-        unsafe { (self.api.run)() };
+        let started = self.host.renderer.as_ref().map(|_| std::time::Instant::now());
+        {
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.run)() };
+        }
+        if let (Some(renderer), Some(started)) = (&mut self.host.renderer, started) {
+            renderer.record_run(started);
+        }
     }
 
     fn reset(&mut self) {
@@ -810,6 +901,7 @@ impl RetroCore for LibretroCore {
     }
 
     fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
+        if self.host.hardware_allowed { return Err(CoreError::Unsupported("PSP save states are disabled".into())); }
         let size = unsafe { (self.api.serialize_size)() };
         if size == 0 {
             return Err(CoreError::State("core reports no state".into()));
@@ -827,6 +919,7 @@ impl RetroCore for LibretroCore {
     }
 
     fn unserialize(&mut self, data: &[u8]) -> Result<(), CoreError> {
+        if self.host.hardware_allowed { return Err(CoreError::Unsupported("PSP save states are disabled".into())); }
         let ok = {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.unserialize)(data.as_ptr() as *const c_void, data.len()) }
@@ -946,6 +1039,9 @@ mod tests {
 
     fn host_with(options: HashMap<String, CString>, options_dirty: bool) -> Box<Host> {
         Box::new(Host {
+            hardware_allowed: false,
+            hardware_callback: None,
+            renderer: None,
             video: vec![0; VIDEO_BYTES],
             canvas: (GBA_W, GBA_H),
             format: PixelFormat::Xrgb8888,
@@ -970,6 +1066,24 @@ mod tests {
             disk: None,
             initial_disc: None,
         })
+    }
+
+    #[test]
+    fn psp_gets_a_preference_that_selects_its_opengl_backend() {
+        let mut host = host_with(HashMap::new(), false);
+        host.hardware_allowed = true;
+        let _active = Active::bind(&mut host);
+        let mut preferred = 0u32;
+        assert!(unsafe { environment(56, (&mut preferred as *mut u32).cast()) });
+        assert_eq!(preferred, 4); // PPSSPP accepts GLES3 as a preference and requests GLES2.
+    }
+
+    #[test]
+    fn psp_core_thread_can_get_the_host_framebuffer() {
+        HARDWARE_FRAMEBUFFER.store(7, Ordering::Release);
+        let target = std::thread::spawn(|| unsafe { hardware_framebuffer() }).join();
+        HARDWARE_FRAMEBUFFER.store(0, Ordering::Release);
+        assert_eq!(target.unwrap(), 7);
     }
 
     fn declaration(key: &str, value: &str) -> (Variable, CString, CString) {

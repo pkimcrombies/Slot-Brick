@@ -8,7 +8,7 @@ mod board;
 mod cart;
 mod cart_menu;
 mod disc;
-pub use disc::{disc_face, disc_shadow, DISC_PX};
+pub use disc::{disc_face, disc_shadow, umd_shadow, DISC_PX};
 mod label_adjust;
 mod label_grid;
 mod clock;
@@ -98,7 +98,7 @@ pub use shell::{
 };
 pub use silhouette::{gb_silhouette, silhouette, GbShell, NesShell, SnesShell};
 pub use slot_chrome::{
-    draw_empty_slot, draw_empty_slot_platform, draw_slot_name, ease, edge, housing, opening, recess, set_disc_slot, set_theme, SlotChrome,
+    draw_empty_slot, draw_slot_name, ease, edge, housing, opening, recess, set_theme, SlotChrome,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
 pub use sticker::{

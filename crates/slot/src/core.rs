@@ -37,6 +37,27 @@ pub struct Opened {
     pub named: bool,
 }
 
+/// Open PSP only when its native runtime is installed. A missing PSP core
+/// should eject the game instead of showing the software test pattern.
+pub fn open_psp(root: &Path) -> Result<LibretroCore, slot_retro::CoreError> {
+    let system = root::bios_dir(root);
+    if !system.join("PPSSPP/compat.ini").is_file() {
+        return Err(slot_retro::CoreError::Load("missing BIOS/PPSSPP assets".into()));
+    }
+    let saves = root::saves_dir(root).join("PSP");
+    std::fs::create_dir_all(&saves)?;
+    let mut core = LibretroCore::open_hardware(
+        &root.join("System").join(dylib_name(Core::Ppsspp)), &system, &saves,
+    )?;
+    let (w, h) = Platform::Psp.canvas();
+    core.set_canvas(w, h);
+    core.set_option("ppsspp_internal_resolution", "480x272");
+    // The core starts in interpreter mode unless the frontend supplies this
+    // option. JIT is PPSSPP's declared default on platforms that support it.
+    core.set_option("ppsspp_cpu_core", "JIT");
+    Ok(core)
+}
+
 pub fn open_core(
     root: &Path,
     core: Core,
@@ -91,6 +112,10 @@ fn open_named(
     link: Option<u8>,
     paths: &[PathBuf],
 ) -> Option<Box<dyn RetroCore>> {
+    if core == Core::Ppsspp {
+        // Hardware cores enter through open_psp, which configures graphics and saves.
+        return None;
+    }
     let bios = root::bios_dir(root);
     let saves = root::saves_dir(root);
     for path in paths {
@@ -103,7 +128,7 @@ fn open_named(
                     Core::Fceumm => Some(Platform::Nes),
                     Core::Snes9x => Some(Platform::Snes),
                     Core::PcsxRearmed => Some(Platform::Ps1),
-                    Core::Mgba | Core::Gpsp => None,
+                    Core::Mgba | Core::Gpsp | Core::Ppsspp => None,
                 };
                 if let Some((w, h)) = platform.map(Platform::canvas) {
                     opened.set_canvas(w, h);
@@ -169,7 +194,7 @@ pub fn colour_option(which: Core, on: bool) -> Option<(&'static str, &'static st
             if on { "enabled" } else { "disabled" },
         )),
         // A NES, SNES or PlayStation drew on a TV, with no LCD to correct for.
-        Core::Fceumm | Core::Snes9x | Core::PcsxRearmed => None,
+        Core::Fceumm | Core::Snes9x | Core::PcsxRearmed | Core::Ppsspp => None,
     }
 }
 

@@ -502,7 +502,7 @@ fn hidden_systems_round_trip_and_a_card_from_before_them_hides_none() {
     for line in ["hidden_systems=nes,ps1\n", "hidden_systems=nes, ps1,n64\n", "hidden_systems=gba\nhidden_systems=nes\n"] {
         let older = text.replace("hidden_systems=nes,ps1\n", "");
         std::fs::write(d.path().join("Config/slot.state"), &older).unwrap();
-        assert_eq!(read_slot_state(d.path()).hidden_systems, [false; 6]);
+        assert_eq!(read_slot_state(d.path()).hidden_systems, [false; Platform::ALL.len()]);
         std::fs::write(d.path().join("Config/slot.state"), format!("{older}{line}")).unwrap();
         assert!(!read_slot_state(d.path()).shows(slot_store::Platform::Nes), "{line}");
         assert!(read_slot_state(d.path()).shows(slot_store::Platform::Gba), "{line}");

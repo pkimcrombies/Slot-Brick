@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::cart::{cart_box, gb_shell_of, nes_famicom_of, snes_shell_of, label_colour, label_text, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::silhouette::{GbShell, NesShell, SnesShell};
-use crate::slot_chrome::{draw_empty_slot, draw_empty_slot_platform, MOUTH_H};
+use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
 const SIDE_ALPHA: f32 = 0.55;
@@ -58,7 +58,7 @@ fn backing(cart: &Cart) -> Backing {
         slot_store::Platform::Nes if nes_famicom_of(cart) => Backing::Nes(NesShell::Famicom),
         slot_store::Platform::Nes => Backing::Nes(NesShell::Nes),
         slot_store::Platform::Snes => Backing::Snes(snes_shell_of(cart).unwrap_or(SnesShell::Us)),
-        slot_store::Platform::Ps1 => Backing::Disc,
+        slot_store::Platform::Ps1 | slot_store::Platform::Psp => Backing::Disc,
         _ => gb_shell_of(cart).map_or(Backing::Gba, Backing::Gb),
     }
 }
@@ -423,11 +423,7 @@ impl Shelf {
 
     pub fn draw(&self, shake: f32, out: &mut Vec<Draw>) {
         self.draw_row(None, shake, 0.0, 1.0, out);
-        if let Some(cart) = self.carts.first() {
-            draw_empty_slot_platform(cart.platform, out);
-        } else {
-            draw_empty_slot(out);
-        }
+        draw_empty_slot(out);
     }
 
     pub fn draw_row(

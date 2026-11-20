@@ -1,24 +1,36 @@
-//! A PlayStation game on the shelf is a disc: its own disc art when the player has some, or a
-//! printed disc of Slot's own with the game's name on it. It goes into a disc slot, spinning.
-use slot_store::Cart;
+//! Disc faces for the shelf. Scans supply the print inside Slot's own hub and rim.
+use std::sync::OnceLock;
+
+use slot_store::{Cart, Platform};
 
 use crate::cart::{label_colour, label_text, CartFace};
-use crate::text;
+use crate::{art, text};
 
 /// A disc's width and height on the shelf, at full size.
 pub const DISC_PX: u32 = 300;
-/// How far out each part of a disc reaches, as a share of its radius (a CD's 120 mm across:
-/// the 15 mm hole, the clear hub to 33 mm, the mirror band to 46 mm, then the print).
+/// Radii are fractions of the face's outer radius. The PS1 hole is 15 mm on a 120 mm CD.
 const HOLE: f32 = 0.125;
-const HUB: f32 = 0.29;
-const MIRROR: f32 = 0.38;
 const RIM: f32 = 0.985;
+const PS1_HUB: f32 = 0.21;
+const PS1_PRINT_INNER: f32 = 0.235;
+const PS1_PRINT_OUTER: f32 = 0.955;
+const PS1_EDGE: [u8; 3] = [0x76, 0x78, 0x81];
+const UMD_CENTER_Y: f32 = 148.0;
+const UMD_HUB_RADIUS: f32 = 65.5;
+const UMD_PRINT_INNER: f32 = 68.5;
+const UMD_PRINT_OUTER: f32 = 137.5;
+const UMD_DISC_RADIUS: f32 = 141.0;
+const UMD_HUB: [u8; 3] = [0xf1, 0xf0, 0xed];
+const UMD_SHELL_EDGE: [u8; 3] = [0xbc, 0xbc, 0xc0];
+const UMD_MARK_BOX: (f32, f32, f32, f32) = (0.29, 0.43, 0.42, 0.14);
+const EDGE_SAMPLES: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
 
 const SILVER: [u8; 3] = [0xc9, 0xca, 0xce];
 const HUB_GREY: [u8; 3] = [0xe2, 0xe4, 0xe8];
 const HUB_ALPHA: f32 = 0.55;
 /// The title's box: across the print above the hub.
 const TITLE_BOX: (f32, f32, f32, f32) = (0.18, 0.12, 0.64, 0.22);
+const UMD_TITLE_BOX: (f32, f32, f32, f32) = (0.22, 0.085, 0.56, 0.18);
 const TITLE_LINES: usize = 2;
 const TITLE_PX: f32 = 28.0;
 const TITLE_MIN_PX: f32 = 12.0;
@@ -34,6 +46,10 @@ const TAG_ALPHA: f32 = 0.75;
 /// game of several (`number`, from 1).
 pub fn disc_face(cart: &Cart, art: Option<Vec<u8>>, number: Option<usize>) -> CartFace {
     let n = DISC_PX;
+    let art = art.as_deref().filter(|pixels| pixels.len() == (n * n * 4) as usize);
+    if cart.platform == Platform::Psp {
+        return umd_face(cart, art);
+    }
     let title = label_text(cart);
     let print = label_colour(&title);
     let mut rgba = vec![0u8; (n * n * 4) as usize];
@@ -41,20 +57,15 @@ pub fn disc_face(cart: &Cart, art: Option<Vec<u8>>, number: Option<usize>) -> Ca
     for y in 0..n {
         for x in 0..n {
             let o = ((y * n + x) * 4) as usize;
+            let template_print = print_pixel(art, o, print);
             // Four samples a pixel, so every edge between the rings is smooth.
             let (mut sum, mut cover) = ([0.0f32; 3], 0.0f32);
-            for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+            for (sx, sy) in EDGE_SAMPLES {
                 let d = ((x as f32 + sx - r).powi(2) + (y as f32 + sy - r).powi(2)).sqrt() / r;
                 if !(HOLE..=1.0).contains(&d) {
                     continue;
                 }
-                let (colour, alpha) = match &art {
-                    Some(art) => ([art[o], art[o + 1], art[o + 2]], art[o + 3] as f32 / 255.0),
-                    None if d < HUB => (HUB_GREY, HUB_ALPHA),
-                    None if d < MIRROR => (shade(SILVER, 1.0 - 0.25 * (d - HUB) / (MIRROR - HUB)), 1.0),
-                    None if d > RIM => (shade(print, 0.7), 1.0),
-                    None => (print, 1.0),
-                };
+                let (colour, alpha) = ps1_surface(d, template_print);
                 for c in 0..3 {
                     sum[c] += colour[c] as f32 * alpha;
                 }
@@ -65,10 +76,21 @@ pub fn disc_face(cart: &Cart, art: Option<Vec<u8>>, number: Option<usize>) -> Ca
                     rgba[o + c] = (sum[c] / cover).round() as u8;
                 }
                 rgba[o + 3] = (cover / 4.0 * 255.0).round() as u8;
+            } else {
+                // Match the cut edge in transparent texels so linear filtering
+                // doesn't introduce a dark fringe around the rim or hole.
+                let dx = x as f32 + 0.5 - r;
+                let dy = y as f32 + 0.5 - r;
+                let padding = if dx * dx + dy * dy < (HOLE * r).powi(2) {
+                    HUB_GREY
+                } else {
+                    PS1_EDGE
+                };
+                rgba[o..o + 3].copy_from_slice(&padding);
             }
         }
     }
-    match (&art, number) {
+    match (art, number) {
         (None, number) => {
             print_title(&mut rgba, n, &title, print, TITLE_BOX, TITLE_LINES, TITLE_PX);
             if let Some(number) = number {
@@ -85,6 +107,94 @@ pub fn disc_face(cart: &Cart, art: Option<Vec<u8>>, number: Option<usize>) -> Ca
     CartFace { rgba, w: n, h: n }
 }
 
+fn print_pixel(art: Option<&[u8]>, offset: usize, fallback: [u8; 3]) -> [u8; 3] {
+    art.map_or(fallback, |pixels| {
+        let pixel = &pixels[offset..offset + 4];
+        let a = u16::from(pixel[3]);
+        std::array::from_fn(|c| {
+            ((u16::from(pixel[c]) * a + u16::from(SILVER[c]) * (255 - a) + 127) / 255) as u8
+        })
+    })
+}
+
+fn ps1_surface(radius: f32, print: [u8; 3]) -> ([u8; 3], f32) {
+    if radius < PS1_HUB {
+        (HUB_GREY, HUB_ALPHA)
+    } else if radius < PS1_PRINT_INNER {
+        (SILVER, 1.0)
+    } else if radius < PS1_PRINT_OUTER {
+        (print, 1.0)
+    } else if radius < RIM {
+        let bevel = (radius - PS1_PRINT_OUTER) / (RIM - PS1_PRINT_OUTER);
+        (shade(SILVER, 1.14 - 0.25 * bevel), 1.0)
+    } else {
+        (PS1_EDGE, 1.0)
+    }
+}
+
+fn umd_shell() -> &'static [u8] {
+    static SHELL: OnceLock<Vec<u8>> = OnceLock::new();
+    SHELL.get_or_init(|| {
+        // A domed top, straight sides and the broad, gently curved UMD base.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">
+          <path d="M150 1C232 1 299 68 299 150V246
+            C299 258 291 268 276 275C235 292 194 299 150 299
+            C106 299 65 292 24 275C9 268 1 258 1 246V150C1 68 68 1 150 1Z"
+            fill="#eeedeb" stroke="#bcbcc0" stroke-width="1.5"/>
+        </svg>"##;
+        art::render_svg(svg, DISC_PX, DISC_PX).expect("valid UMD casing")
+    })
+}
+
+fn umd_face(cart: &Cart, art: Option<&[u8]>) -> CartFace {
+    let n = DISC_PX;
+    let title = label_text(cart);
+    let print = label_colour(&title);
+    let mut rgba = umd_shell().to_vec();
+    for (i, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+        if pixel[3] == 0 {
+            pixel[..3].copy_from_slice(&UMD_SHELL_EDGE);
+            continue;
+        }
+        let x = (i % n as usize) as f32 - n as f32 / 2.0;
+        let y = (i / n as usize) as f32 - UMD_CENTER_Y;
+        let base = [pixel[0], pixel[1], pixel[2]];
+        let print = print_pixel(art, i * 4, print);
+        let mut sum = [0u16; 3];
+        for (sx, sy) in EDGE_SAMPLES {
+            let radius = ((x + sx).powi(2) + (y + sy).powi(2)).sqrt();
+            let colour = umd_surface(radius, print).unwrap_or(base);
+            for c in 0..3 {
+                sum[c] += u16::from(colour[c]);
+            }
+        }
+        for c in 0..3 {
+            pixel[c] = ((sum[c] + 2) / 4) as u8;
+        }
+    }
+    if art.is_none() {
+        print_title(&mut rgba, n, &title, print, UMD_TITLE_BOX, TITLE_LINES, TITLE_PX);
+    }
+    print_title(&mut rgba, n, "UMD", UMD_HUB, UMD_MARK_BOX, 1, 30.0);
+    CartFace { rgba, w: n, h: n }
+}
+
+fn umd_surface(radius: f32, print: [u8; 3]) -> Option<[u8; 3]> {
+    let colour = if radius < UMD_HUB_RADIUS {
+        UMD_HUB
+    } else if radius < UMD_PRINT_INNER {
+        SILVER
+    } else if radius < UMD_PRINT_OUTER {
+        print
+    } else if radius < UMD_DISC_RADIUS {
+        let bevel = (radius - UMD_PRINT_OUTER) / (UMD_DISC_RADIUS - UMD_PRINT_OUTER);
+        shade(SILVER, 1.08 - 0.32 * bevel)
+    } else {
+        return None;
+    };
+    Some(colour)
+}
+
 /// The disc's outline, black: what a disc on the shelf's edge, drawn see-through, is drawn on.
 pub fn disc_shadow() -> CartFace {
     let n = DISC_PX;
@@ -98,6 +208,14 @@ pub fn disc_shadow() -> CartFace {
         }
     }
     CartFace { rgba, w: n, h: n }
+}
+
+pub fn umd_shadow() -> CartFace {
+    let mut rgba = umd_shell().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[..3].fill(0);
+    }
+    CartFace { rgba, w: DISC_PX, h: DISC_PX }
 }
 
 fn print_title(
@@ -195,5 +313,55 @@ mod tests {
         assert_eq!(alpha(&face, c, c), 0, "the hole is not clear");
         assert_eq!(alpha(&face, c, DISC_PX - 10), 255, "the print is not solid");
         assert!(alpha(&face, c, c + (0.2 * c as f32) as u32) < 255, "the hub is not see-through");
+    }
+
+    #[test]
+    fn ps1_scan_supplies_print_and_the_template_supplies_the_disc() {
+        let cart = placeholder();
+        let c = DISC_PX / 2;
+        let index = |x, y| ((y * DISC_PX + x) * 4) as usize;
+        let ink = [44, 73, 178, 255];
+        let mut scan = ink.repeat((DISC_PX * DISC_PX) as usize);
+        let missing = index(c + 70, c);
+        scan[missing + 3] = 0;
+        let printed = disc_face(&cart, Some(scan), None);
+        let plain = disc_face(&cart, None, None);
+        for (x, y) in [(c, c + 23), (c, c + 30), (c, c + 146)] {
+            let i = index(x, y);
+            assert_eq!(&printed.rgba[i..i + 4], &plain.rgba[i..i + 4]);
+        }
+        let label = index(c, c + 70);
+        assert_eq!(&printed.rgba[label..label + 4], &ink);
+        assert_eq!(printed.rgba[missing + 3], 255, "a gap in the scan should not cut through the disc");
+        assert_eq!(alpha(&printed, c, c), 0);
+        assert_eq!(alpha(&printed, 0, 0), 0);
+    }
+
+    #[test]
+    fn psp_scan_supplies_the_print_around_a_solid_umd_hub() {
+        let mut cart = placeholder();
+        cart.platform = Platform::Psp;
+        let c = DISC_PX / 2;
+        let index = |x, y| ((y * DISC_PX + x) * 4) as usize;
+        let ink = [44, 73, 178, 255];
+        let mut scan = ink.repeat((DISC_PX * DISC_PX) as usize);
+        scan[index(c, c) + 3] = 0;
+        let nick = index(c + 90, c);
+        scan[nick + 3] = 0;
+        let printed = disc_face(&cart, Some(scan), None);
+        let plain = disc_face(&cart, None, None);
+        assert_eq!(alpha(&printed, c, c), 255);
+        assert_eq!(alpha(&printed, 0, 0), 0);
+        let shadow = umd_shadow();
+        for (x, y, expected) in [(20, 265, 255), (20, 280, 0), (20, 60, 0)] {
+            assert_eq!(alpha(&printed, x, y), expected, "UMD casing at ({x}, {y})");
+            assert_eq!(alpha(&shadow, x, y), expected, "UMD backing at ({x}, {y})");
+        }
+        for at in [index(c, c + 25), index(c, c + 145)] {
+            assert_eq!(&printed.rgba[at..at + 4], &plain.rgba[at..at + 4]);
+        }
+        let print = index(c, c + 100);
+        assert_eq!(&printed.rgba[print..print + 4], &ink);
+        assert_eq!(printed.rgba[nick + 3], 255);
     }
 }

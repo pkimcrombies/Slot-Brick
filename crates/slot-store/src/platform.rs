@@ -9,11 +9,12 @@ pub enum Platform {
     Nes,
     Snes,
     Ps1,
+    Psp,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 6] =
-        [Platform::Gba, Platform::Gb, Platform::Gbc, Platform::Nes, Platform::Snes, Platform::Ps1];
+    pub const ALL: [Platform; 7] =
+        [Platform::Gba, Platform::Gb, Platform::Gbc, Platform::Nes, Platform::Snes, Platform::Ps1, Platform::Psp];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -23,6 +24,7 @@ impl Platform {
             Platform::Nes => "Nintendo Entertainment System",
             Platform::Snes => "Super Nintendo Entertainment System",
             Platform::Ps1 => "PlayStation",
+            Platform::Psp => "PlayStation Portable",
         }
     }
 
@@ -35,6 +37,7 @@ impl Platform {
             Platform::Nes => 3,
             Platform::Snes => 4,
             Platform::Ps1 => 5,
+            Platform::Psp => 6,
         }
     }
 
@@ -46,6 +49,7 @@ impl Platform {
             Platform::Nes => "NES",
             Platform::Snes => "SNES",
             Platform::Ps1 => "PS1",
+            Platform::Psp => "PSP",
         }
     }
 
@@ -57,6 +61,7 @@ impl Platform {
             Platform::Snes => &["sfc", "smc"],
             // A .bin counts only when no .cue names it (see `ps1::games`).
             Platform::Ps1 => &["cue", "chd", "pbp", "m3u", "bin", "iso", "exe"],
+            Platform::Psp => &["iso", "cso", "pbp"],
         }
     }
 
@@ -69,6 +74,7 @@ impl Platform {
             // Whatever size it draws at (256 to 640 wide, 240 or 480 tall), a PlayStation
             // picture fills a 4:3 screen: each frame is stretched over the whole canvas.
             Platform::Ps1 => (640, 480),
+            Platform::Psp => (480, 272),
         }
     }
 
@@ -80,6 +86,7 @@ impl Platform {
             Platform::Gba | Platform::Gb | Platform::Gbc => (240, 160),
             Platform::Nes | Platform::Snes => (256, 240),
             Platform::Ps1 => (640, 480),
+            Platform::Psp => (480, 272),
         }
     }
 
@@ -96,6 +103,6 @@ impl Platform {
     /// Whether the shelf takes ROMs zipped or 7z'd. A disc would take too long to unpack on the
     /// Brick, and a .chd is compressed already.
     pub fn takes_archives(self) -> bool {
-        !matches!(self, Platform::Ps1)
+        !matches!(self, Platform::Ps1 | Platform::Psp)
     }
 }

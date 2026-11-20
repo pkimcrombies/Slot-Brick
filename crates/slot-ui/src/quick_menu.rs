@@ -76,6 +76,7 @@ pub enum QuickRow {
     ShowNes,
     ShowSnes,
     ShowPs1,
+    ShowPsp,
     ResetSettings,
     AboutVersion,
     AboutBuild,
@@ -94,7 +95,7 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 78] = [
+    pub const ALL: [QuickRow; 79] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -158,6 +159,7 @@ impl QuickRow {
         QuickRow::ShowNes,
         QuickRow::ShowSnes,
         QuickRow::ShowPs1,
+        QuickRow::ShowPsp,
         QuickRow::ResetSettings,
         QuickRow::AboutVersion,
         QuickRow::AboutBuild,
@@ -215,8 +217,8 @@ impl QuickRow {
     /// systems have a shelf, and what is printed around them.
     pub const LIBRARY: [QuickRow; 5] = [QuickRow::LibrarySort, QuickRow::LibraryShow, QuickRow::LibrarySystems, QuickRow::LibraryTitleCard, QuickRow::LibraryPlayTime];
     /// Library → Systems: each system's shelf shown or hidden, in the shelves' order.
-    pub const SYSTEMS: [QuickRow; 6] =
-        [QuickRow::ShowGba, QuickRow::ShowGb, QuickRow::ShowGbc, QuickRow::ShowNes, QuickRow::ShowSnes, QuickRow::ShowPs1];
+    pub const SYSTEMS: [QuickRow; 7] =
+        [QuickRow::ShowGba, QuickRow::ShowGb, QuickRow::ShowGbc, QuickRow::ShowNes, QuickRow::ShowSnes, QuickRow::ShowPs1, QuickRow::ShowPsp];
     /// Gameplay → Saving: when a game is saved without being asked.
     pub const SAVING: [QuickRow; 2] = [QuickRow::AutoSave, QuickRow::EjectSave];
 
@@ -271,6 +273,7 @@ impl QuickRow {
             QuickRow::ShowNes => Platform::Nes,
             QuickRow::ShowSnes => Platform::Snes,
             QuickRow::ShowPs1 => Platform::Ps1,
+            QuickRow::ShowPsp => Platform::Psp,
             _ => return None,
         })
     }
@@ -335,7 +338,7 @@ impl QuickRow {
             | QuickRow::ShowGbc
             | QuickRow::ShowNes
             | QuickRow::ShowSnes
-            | QuickRow::ShowPs1 => &QuickRow::SYSTEMS,
+            | QuickRow::ShowPs1 | QuickRow::ShowPsp => &QuickRow::SYSTEMS,
             QuickRow::SoundVolume
             | QuickRow::SoundMenu
             | QuickRow::SoundStar
@@ -440,6 +443,7 @@ impl QuickRow {
             QuickRow::ShowNes => "NES",
             QuickRow::ShowSnes => "SNES",
             QuickRow::ShowPs1 => "PlayStation",
+            QuickRow::ShowPsp => "PSP",
             QuickRow::ResetSettings => "Reset Settings",
             QuickRow::AboutVersion => "Version",
             QuickRow::AboutBuild => "Build",

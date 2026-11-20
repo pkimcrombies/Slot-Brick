@@ -14,7 +14,7 @@ use slot_store::{
     VOLUME_MAX,
 };
 use slot_ui::{
-    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_status_bar,
+    board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_status_bar,
     draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
     Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, PauseChoice, Placed, Polaroids,
     PowerChoice, QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome,
@@ -74,8 +74,6 @@ const SLOT_NAME_IN_MS: Millis = 200;
 const SLOT_NAME_HOLD_MS: Millis = 1200;
 const SLOT_NAME_OUT_MS: Millis = 800;
 const SLOT_NAME_ALPHA: f32 = 0.4;
-/// How long the slot takes to turn from a cartridge slot into a disc slot, or back.
-const DISC_SLOT_MS: Millis = 300;
 
 /// How far through its fade a name `t` ms after it came up is: in, held, then out.
 fn fade_level(t: Millis) -> f32 {
@@ -474,7 +472,6 @@ pub struct App {
     title_card_shown: Option<Millis>,
     /// How far the slot has turned into a disc slot (0 a cartridge slot, 1 a disc slot): it
     /// is one on the PlayStation's shelf and while a PlayStation game is in.
-    disc_slot: f32,
     star_face: Option<(TexId, u32, u32)>,
     /// System → Auto Clock: the time server being asked, and when to ask next.
     #[cfg(feature = "brick")]
@@ -654,7 +651,6 @@ impl App {
             played: slot_ui::Printed::default(),
             title_card: None,
             title_card_shown: None,
-            disc_slot: 0.0,
             star_face: None,
             #[cfg(feature = "brick")]
             clock_sync: None,
@@ -790,6 +786,8 @@ impl App {
             let platform = self.state.cart_platform;
             stem.and_then(|stem| self.seat_of(&stem, platform))
         };
+        // PSP games start from an explicit insertion.
+        let seated = seated.filter(|(at, i)| self.shelves[*at].1.carts[*i].platform != Platform::Psp);
         self.phase = Phase::Shelf;
         match seated {
             Some((at, i)) => {
@@ -824,7 +822,8 @@ impl App {
             let taken = shelf.take_faces();
             for (cart, face) in shelf.carts.iter().zip(taken) {
                 // What changed on the shelf (a label, a plastic) is kept for next time.
-                if let Some(kept) = self.all_carts.iter_mut().find(|c| c.platform == *platform && c.stem == cart.stem) {
+                if let Some(kept) = self.all_carts.iter_mut().find(|c| c.platform == *platform && c.stem == cart.stem
+                    && (*platform != Platform::Psp || c.rom == cart.rom)) {
                     *kept = cart.clone();
                 }
                 if let Some(face) = face {
@@ -1099,20 +1098,6 @@ impl App {
         self.shelf_named = None;
     }
 
-    /// The slot turns into a disc slot on the PlayStation's shelf, and back on the others.
-    fn turn_slot(&mut self, dt: f32) {
-        let disc = match &self.phase {
-            Phase::Shelf | Phase::QuickMenu { .. } => {
-                self.shelves.get(self.shelf_at).is_some_and(|(p, _)| *p == Platform::Ps1)
-            }
-            _ => self.seated_cart().is_some_and(|c| c.platform == Platform::Ps1),
-        };
-        let step = dt * 1000.0 / DISC_SLOT_MS as f32;
-        let to = if disc { 1.0 } else { 0.0 };
-        self.disc_slot += (to - self.disc_slot).clamp(-step, step);
-        slot_ui::set_disc_slot(ease(self.disc_slot));
-    }
-
     fn slot_name_alpha(&self) -> f32 {
         let Some(at) = self.shelf_named else {
             return 0.0;
@@ -1315,7 +1300,7 @@ impl App {
                 false => QuickValue::Minutes,
             }),
             QuickRow::LibraryTitleCard => Some(QuickValue::flag(self.state.title_card)),
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
                 row.shelf_of().map(|p| QuickValue::flag(self.state.shows(p)))
             }
             QuickRow::ResetSettings => self.reset_asked,
@@ -1359,9 +1344,9 @@ impl App {
         }
     }
 
-    pub fn set_disc_shadow(&mut self, face: TexId) {
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_disc_shadow(face);
+    pub fn set_disc_shadows(&mut self, cd: TexId, umd: TexId) {
+        for (platform, shelf) in &mut self.shelves {
+            shelf.set_disc_shadow(if *platform == Platform::Psp { umd } else { cd });
         }
     }
 
@@ -1459,7 +1444,10 @@ impl App {
             Phase::Doze { cart: Some(cart) } => cart,
             _ => return None,
         };
-        self.shelf().carts.iter().find(|c| c.stem == *stem)
+        // PSP images can share a title (ISO and CSO); keep the selected file's identity.
+        self.shelf().carts.get(self.shelf().index)
+            .filter(|c| c.platform == Platform::Psp && c.stem == *stem)
+            .or_else(|| self.shelf().carts.iter().find(|c| c.stem == *stem))
     }
 
     /// One game on the whole card (not one on show: a lone favorite isn't started at boot).
@@ -1806,7 +1794,7 @@ impl App {
     }
 
     pub fn records_rewind(&self) -> bool {
-        self.state.rewind && self.platform != Platform::Ps1
+        self.state.rewind && !matches!(self.platform, Platform::Ps1 | Platform::Psp)
     }
 
     /// The canvas the running core draws into.
@@ -1942,6 +1930,7 @@ impl App {
             Platform::Nes => self.state.shader_nes,
             Platform::Snes => self.state.shader_snes,
             Platform::Ps1 => self.state.shader_ps1,
+            Platform::Psp => Shader::Off,
         }
     }
 
@@ -1951,7 +1940,7 @@ impl App {
         match self.platform {
             Platform::Gb | Platform::Gbc => self.state.colour_correction_gb,
             Platform::Gba => self.state.colour_correction_gba,
-            Platform::Nes | Platform::Snes | Platform::Ps1 => false,
+            Platform::Nes | Platform::Snes | Platform::Ps1 | Platform::Psp => false,
         }
     }
 
@@ -2483,7 +2472,7 @@ impl App {
             | QuickRow::ShowGbc
             | QuickRow::ShowNes
             | QuickRow::ShowSnes
-            | QuickRow::ShowPs1
+            | QuickRow::ShowPs1 | QuickRow::ShowPsp
             | QuickRow::SoundMenu
             | QuickRow::SoundStar
             | QuickRow::SoundCart
@@ -2607,7 +2596,7 @@ impl App {
                 self.arrange();
                 return;
             }
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
                 let Some(platform) = row.shelf_of() else {
                     return;
                 };
@@ -2644,6 +2633,7 @@ impl App {
             Platform::Nes => (&mut self.state.shader_nes, &Shader::NES[..]),
             Platform::Snes => (&mut self.state.shader_snes, &Shader::NES[..]),
             Platform::Ps1 => (&mut self.state.shader_ps1, &Shader::NES[..]),
+            Platform::Psp => return,
         };
         *shader = shader.step(choices, right);
         let said = match *shader {
@@ -2887,7 +2877,6 @@ impl App {
 
     pub fn update(&mut self, dt: f32) {
         self.clock += dt as f64 * 1000.0;
-        self.turn_slot(dt);
         let now = self.now();
         if let Some(picker) = &mut self.disc_picker {
             picker.update(dt);
@@ -3505,14 +3494,14 @@ impl App {
                         self.shelf().draw_row(Some(&picker.stem), 0.0, CORE_PICKER_RECEDE * open, 1.0, out);
                         let fallback = self.shelf().find(&picker.stem).and_then(|(_, f)| f);
                         picker.draw(&self.disc_faces, fallback, self.now(), out);
-                        draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
+                        draw_empty_slot(out);
                     }
                     (Some(picker), Some(stem)) => {
                         let open = ease(picker.openness(self.now()));
                         let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
                         self.shelf()
                             .draw_row(Some(stem), 0.0, CORE_PICKER_RECEDE * open, dim, out);
-                        draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
+                        draw_empty_slot(out);
                     }
                     _ => {
                         // The built-in HOME -> Library -> Title Card option controls
@@ -3607,7 +3596,12 @@ impl App {
                     draw_menu_screen(std::slice::from_ref(face), 0, out);
                 }
             } else {
-                draw_menu_screen(&self.pause_menu_faces, index, out);
+                if self.platform == Platform::Psp {
+                    let faces: Vec<_> = Self::PSP_PAUSE_ROWS.iter().filter_map(|&i| self.pause_menu_faces.get(i).copied()).collect();
+                    draw_menu_screen(&faces, index, out);
+                } else {
+                    draw_menu_screen(&self.pause_menu_faces, index, out);
+                }
             }
         }
         self.hud.draw(self.now(), out);
@@ -4017,7 +4011,7 @@ impl App {
             return None;
         }
         let shelf = self.shelf();
-        shelf.carts.get(shelf.index).map(|c| c.rom.as_path())
+        shelf.carts.get(shelf.index).filter(|c| c.platform != Platform::Psp).map(|c| c.rom.as_path())
     }
 
     /// A game of several discs fans them out to pick one; any other goes straight in.
@@ -4152,7 +4146,7 @@ impl App {
     }
 
     fn eject(&mut self) {
-        if self.single_cart() {
+        if self.single_cart() && self.platform != Platform::Psp {
             return self.refuse();
         }
         let cart = match &mut self.phase {
@@ -4175,6 +4169,9 @@ impl App {
 
     fn flush_eject(&mut self, stem: &str) {
         self.settle_saves();
+        if self.platform == Platform::Psp {
+            return;
+        }
         let (Some(root), Some(snapshot)) = (&self.root, &self.snapshot) else {
             return;
         };
@@ -4341,6 +4338,8 @@ impl App {
         self.pause_buttons = false;
     }
 
+    const PSP_PAUSE_ROWS: [usize; 4] = [0, 3, 4, 5]; // Resume, Reset, Buttons, Quit
+
     fn pause_menu_input(&mut self, action: Action) {
         let Some(index) = self.pause_menu else {
             return;
@@ -4355,7 +4354,8 @@ impl App {
             }
             return;
         }
-        let last = PauseChoice::ALL.len() - 1;
+        let psp = self.platform == Platform::Psp;
+        let last = if psp { Self::PSP_PAUSE_ROWS.len() } else { PauseChoice::ALL.len() } - 1;
         match action {
             Action::GbaDown(Btn::Up) => {
                 self.pause_menu = Some(if index == 0 { last } else { index - 1 })
@@ -4365,12 +4365,12 @@ impl App {
             }
             Action::GbaDown(Btn::B) | Action::QuickMenu => self.pause_menu = None,
             // The second tap of a double-tap: the switcher, as from the game.
-            Action::Polaroids => {
+            Action::Polaroids if !psp => {
                 self.pause_menu = None;
                 self.open_polaroids();
             }
             Action::Eject => self.leave_paused(Self::eject),
-            Action::GbaDown(Btn::A) => match PauseChoice::ALL[index] {
+            Action::GbaDown(Btn::A) => match PauseChoice::ALL[if psp { Self::PSP_PAUSE_ROWS[index] } else { index }] {
                 PauseChoice::Resume => self.pause_menu = None,
                 PauseChoice::SaveState => {
                     self.pause_menu = None;
@@ -5614,6 +5614,9 @@ impl App {
     fn autosave(&mut self) {
         self.autosave_at = self.now() + self.autosave_ms();
         self.settle_saves();
+        if self.platform == Platform::Psp {
+            return;
+        }
         let (Some(root), Some(snapshot), Some(cart)) = (&self.root, &self.snapshot, self.seated())
         else {
             return;
@@ -5652,6 +5655,9 @@ impl App {
     pub fn flush_resume(&mut self) {
         self.settle_saves();
         self.autosave_at = self.now() + self.autosave_ms();
+        if self.platform == Platform::Psp {
+            return;
+        }
         let (Some(root), Some(snapshot), Some(cart)) = (&self.root, &self.snapshot, self.seated())
         else {
             return;
@@ -6559,7 +6565,7 @@ impl CartMenu {
             Platform::Gb | Platform::Gbc => vec![CartRow::Colour, CartRow::Finish, CartRow::Shape, CartRow::Reset],
             Platform::Gba => vec![CartRow::Colour, CartRow::Finish, CartRow::Reset],
             // A stand-in cart (see slot_ui::PS1_SHELL): nothing of it to choose yet.
-            Platform::Ps1 => vec![CartRow::Reset],
+            Platform::Ps1 | Platform::Psp => vec![CartRow::Reset],
         };
         let mut menu = CartMenu {
             stem: cart.stem.clone(),

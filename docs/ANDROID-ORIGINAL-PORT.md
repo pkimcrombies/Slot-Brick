@@ -58,3 +58,13 @@ Android's separate moving NES/SNES slot flaps, or its status bar and menus.
 
 Test the GBA regression and each new console's shelf and insertion/ejection
 before considering a release.
+
+## Personal GBA shelf colour
+
+For the grey TrimUI Brick Pro, GBA now deliberately reuses the **NES Original
+shelf background** RGB `228, 205, 203` (`#E4CDCB`) rather than Android's
+lavender GBA shelf. The **GBA cartridge shape, label and original GBA slot
+front/back PNGs remain unchanged**. GB, GBC, NES and SNES each retain their
+own existing Original shelf backgrounds and console slot artwork.
+
+This is a one-line palette override and can be reverted independently.

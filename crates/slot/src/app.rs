@@ -3334,7 +3334,7 @@ impl App {
     fn draw_shelf_background(&self, out: &mut Vec<Draw>) {
         // Baggio94/slot-for-android: menu_style.rs Original shelf palette.
         let colour: Option<[u8; 3]> = match self.shelves[self.shelf_at].0 {
-            Platform::Gba => Some([196, 198, 228]), // GBA lavender
+            Platform::Gba => Some([228, 205, 203]), // GBA: use NES rose-grey to match grey Brick
             Platform::Gb => Some([202, 211, 168]),   // Game Boy green
             Platform::Gbc => Some([243, 227, 160]),  // GBC pale yellow
             Platform::Nes => Some([228, 205, 203]),  // NES pale rose

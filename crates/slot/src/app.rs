@@ -14,7 +14,7 @@ use slot_store::{
     VOLUME_MAX,
 };
 use slot_ui::{
-    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_footer, draw_slot_name,
+    board_from, board_zoom, draw_backdrop, draw_empty_slot_platform, draw_footer,
     draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
     Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, PauseChoice, Placed, Polaroids,
     PowerChoice, QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome,
@@ -3519,11 +3519,9 @@ impl App {
                         draw_empty_slot_platform(self.shelves[self.shelf_at].0, out);
                     }
                     _ => {
-                        if let Some(foot) = self.shelf().selected_foot() {
-                            slot_ui::draw_title_card(self.title_card, foot, self.title_card_alpha(), out);
-                        }
+                        // Show only cartridges and the slot on the shelf.
+                        // Titles remain on the cartridge labels; no separate caption.
                         self.shelf().draw(self.shelf_shake(), out);
-                        draw_slot_name(self.shelf_platform, self.slot_name_alpha(), out);
                     }
                 }
                 draw_footer(

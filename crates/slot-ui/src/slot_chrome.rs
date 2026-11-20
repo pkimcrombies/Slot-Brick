@@ -249,9 +249,9 @@ fn disc_mix() -> f32 {
 #[cfg(feature = "brick")]
 fn original_gba_bar_face(front: bool) -> Option<Vec<u8>> {
     let bytes: &[u8] = if front {
-        include_bytes!("../../../assets/android-original/slot_front_gba.png")
+        include_bytes!("../../../assets/android-original/slot_front_gba_light.png")
     } else {
-        include_bytes!("../../../assets/android-original/slot_back_gba.png")
+        include_bytes!("../../../assets/android-original/slot_back_gba_light.png")
     };
     let mut decoder = png::Decoder::new(bytes);
     decoder.set_transformations(png::Transformations::normalize_to_color8());

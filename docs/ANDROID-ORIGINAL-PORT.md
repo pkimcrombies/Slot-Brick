@@ -68,3 +68,24 @@ front/back PNGs remain unchanged**. GB, GBC, NES and SNES each retain their
 own existing Original shelf backgrounds and console slot artwork.
 
 This is a one-line palette override and can be reverted independently.
+
+## Visual refinement: clean shelves and neutral GBA slot
+
+- The GBA shelf retains the NES Original rose-grey background (`#E4CDCB`).
+- Its rear/front slot bars now use Android's actual light GBA artwork,
+  `assets/slot_{back,front}_gba_light.png`, preserving GBA cartridge geometry
+  but using light neutral plastic rather than indigo.
+- The independent game-title card beneath the cartridge and the transient
+  console/platform caption above the slot are no longer rendered on the shelf.
+  This does not remove cartridge-label lettering, menu entries or system functionality.
+- The Android minimalist white `slot.` boot logo is included as a source asset,
+  but installing a frontend executable alone **does not** change the bootloader
+  splash. On Brick Pro stock firmware the logo is in an internal boot partition,
+  and the repository's stock Brick Logo app is not verified for Brick Pro. Do
+  not write that partition without model-specific verification and a backup.
+  The optional SD-card-based Slot OS boot image must be verified independently.
+
+Upstream asset paths:
+- `assets/slot_back_gba_light.png`
+- `assets/slot_front_gba_light.png`
+- `android/app/src/main/assets/slot-bootlogo-kpa-960x640.png`

@@ -1232,7 +1232,7 @@ impl App {
                 false => QuickValue::Minutes,
             }),
             QuickRow::LibraryTitleCard => Some(QuickValue::flag(self.state.title_card)),
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPsp => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
                 row.shelf_of().map(|p| QuickValue::flag(self.state.shows(p)))
             }
             QuickRow::ResetSettings => self.reset_asked,
@@ -2352,6 +2352,7 @@ impl App {
             | QuickRow::ShowGbc
             | QuickRow::ShowNes
             | QuickRow::ShowSnes
+            | QuickRow::ShowPs1
             | QuickRow::ShowPsp
             | QuickRow::SoundMenu
             | QuickRow::SoundStar
@@ -2476,7 +2477,7 @@ impl App {
                 self.arrange();
                 return;
             }
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPsp => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
                 let Some(platform) = row.shelf_of() else {
                     return;
                 };

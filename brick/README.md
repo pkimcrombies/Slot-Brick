@@ -113,8 +113,8 @@ SNES labels too, and RetroAchievements work.
 
 **PlayStation:** put games in `Slot/Games/PS1`: `.cue` with its `.bin` tracks,
 `.chd`, `.pbp`, `.iso`, or for a game of several discs an `.m3u` listing them. A game may have a
-folder of its own; each shows once on the shelf. PlayStation games are discs, not carts: on their
-shelf the slot turns into a disc slot, and a disc spins as it goes in. For a game of several discs
+folder of its own; each shows once in the shared carousel. PlayStation discs slide into the same
+slot as cartridges and PSP UMDs. For a game of several discs
 `A` fans its discs out; pick one with `Left` / `Right` and `A` puts it in. The fan opens on the
 disc you played last. To change discs when a game asks, hold `HOME` to eject, then put the next
 disc in: the game carries on with it. They run on PCSX ReARMed, with your BIOS when there is one in

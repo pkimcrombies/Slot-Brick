@@ -1,5 +1,5 @@
 #[test]
-fn psp_replaces_ps1_in_the_carousel_and_systems_list() {
+fn ps1_and_psp_are_discovered_in_the_same_carousel() {
     use slot_input::{Action, Btn};
     use slot_store::{Platform, SlotState};
     use slot_ui::QuickRow;
@@ -8,23 +8,21 @@ fn psp_replaces_ps1_in_the_carousel_and_systems_list() {
     slot::root::ensure(root.path());
     let state = SlotState { clock_set: true, ..Default::default() };
     slot_store::write_slot_state(root.path(), &state).unwrap();
-    let ps1 = root.path().join("Games/PS1/PS1 Disc.iso");
     for game in ["Games/GBA/Pocket.gba", "Games/PS1/PS1 Disc.iso", "Games/PSP/PSP Disc.iso"] {
         std::fs::write(root.path().join(game), []).unwrap();
     }
 
     let mut app = slot::app::App::boot(root.path());
     let systems: Vec<_> = app.carts().map(|cart| cart.platform).collect();
-    assert_eq!(systems, [Platform::Gba, Platform::Psp]);
+    assert_eq!(systems, [Platform::Gba, Platform::Ps1, Platform::Psp]);
     app.apply(Action::GbaDown(Btn::Right));
     app.apply(Action::GbaUp(Btn::Right));
     app.apply(Action::Insert);
-    assert_eq!(app.seated_cart().unwrap().platform, Platform::Psp);
+    assert_eq!(app.seated_cart().unwrap().platform, Platform::Ps1);
     assert_eq!(
         &QuickRow::SYSTEMS.map(QuickRow::label)[..],
-        &["Game Boy Advance", "Game Boy", "Game Boy Color", "NES", "SNES", "PSP"],
+        &["Game Boy Advance", "Game Boy", "Game Boy Color", "NES", "SNES", "PlayStation", "PSP"],
     );
-    assert!(ps1.is_file());
 }
 
 #[test]

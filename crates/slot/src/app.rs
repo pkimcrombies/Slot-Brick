@@ -498,8 +498,11 @@ const BANNER_SLIDE: Millis = 300;
 const BADGE_WAIT: Millis = 1500;
 
 fn shelves_of(carts: Vec<Cart>) -> Vec<(Platform, Shelf)> {
-    let mut rows: Vec<(Platform, Vec<Cart>)> =
-        Platform::ALL.iter().map(|p| (*p, Vec::new())).collect();
+    let mut rows: Vec<(Platform, Vec<Cart>)> = QuickRow::SYSTEMS
+        .into_iter()
+        .filter_map(QuickRow::shelf_of)
+        .map(|platform| (platform, Vec::new()))
+        .collect();
     for cart in carts {
         if let Some((_, row)) = rows.iter_mut().find(|(p, _)| *p == cart.platform) {
             row.push(cart);
@@ -553,8 +556,8 @@ static EARLY_APP: std::sync::Mutex<Option<std::thread::JoinHandle<App>>> =
 
 impl App {
     pub fn new(carts: Vec<Cart>) -> Self {
-        let all_carts = carts.clone();
         let shelves = shelves_of(carts);
+        let all_carts = shelves.iter().flat_map(|(_, shelf)| &shelf.carts).cloned().collect();
         let shelf_at = shelves
             .iter()
             .position(|(_, s)| !s.carts.is_empty())
@@ -1300,7 +1303,7 @@ impl App {
                 false => QuickValue::Minutes,
             }),
             QuickRow::LibraryTitleCard => Some(QuickValue::flag(self.state.title_card)),
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPsp => {
                 row.shelf_of().map(|p| QuickValue::flag(self.state.shows(p)))
             }
             QuickRow::ResetSettings => self.reset_asked,
@@ -2472,7 +2475,7 @@ impl App {
             | QuickRow::ShowGbc
             | QuickRow::ShowNes
             | QuickRow::ShowSnes
-            | QuickRow::ShowPs1 | QuickRow::ShowPsp
+            | QuickRow::ShowPsp
             | QuickRow::SoundMenu
             | QuickRow::SoundStar
             | QuickRow::SoundCart
@@ -2596,7 +2599,7 @@ impl App {
                 self.arrange();
                 return;
             }
-            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPs1 | QuickRow::ShowPsp => {
+            QuickRow::ShowGba | QuickRow::ShowGb | QuickRow::ShowGbc | QuickRow::ShowNes | QuickRow::ShowSnes | QuickRow::ShowPsp => {
                 let Some(platform) = row.shelf_of() else {
                     return;
                 };

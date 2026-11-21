@@ -17,9 +17,9 @@ Out in `dist-os/`:
   `brick/update-manifest.sh <channel> <version> dist-os/slot-os-update.zip <dir> update-os.txt`
   describes and signs it.
 - `boot.img`, `slot-os/`, `bootlogo.bmp`: the parts, for trying a change on a card without
-  flashing it (below). The logo now uses the original SLOT wordmark from
-  `slot-cfw/slot/card/System/bootlogo.bmp` (`brick/os/slot-wordmark-upstream.bmp`),
-  fitted to the bootloader's 1024x768 BMP V5 format.
+  flashing it (below). The logo uses the higher-resolution Slot wordmark in
+  `assets/android-original/slot-bootlogo-kpa-960x640.png`, downsampled to its display
+  size and centered in the bootloader's 1024x768 BMP V5 format.
 
 ## How it fits together
 

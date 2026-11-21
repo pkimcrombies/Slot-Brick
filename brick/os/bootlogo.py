@@ -1,6 +1,6 @@
 """Render the official SLOT wordmark as a TrimUI Slot OS bootloader logo.
 
-Original art: slot-cfw/slot, card/System/bootlogo.bmp (GPL-3.0-or-later).
+High-resolution wordmark: slot-for-android's slot-bootlogo-kpa-960x640.png.
 The uncompressed BMP V5 output format matches TrimUI u-boot.
 
 Usage: python3 brick/os/bootlogo.py <output.bmp>
@@ -12,16 +12,16 @@ from pathlib import Path
 from PIL import Image
 
 W, H = 1024, 768
-SOURCE = Path(__file__).with_name("slot-wordmark-upstream.bmp")
+SOURCE = Path(__file__).resolve().parents[2] / "assets/android-original/slot-bootlogo-kpa-960x640.png"
+WORDMARK_SIZE = (314, 120)
 
-wordmark = Image.open(SOURCE).convert("RGB")
-# Match the upstream wordmark's visual size relative to a 640x480 screen.
-wordmark = wordmark.resize(
-    (round(wordmark.width * W / 640), round(wordmark.height * H / 480)),
-    Image.Resampling.NEAREST,
-)
+with Image.open(SOURCE) as image:
+    luminance = image.convert("L")
+# Lift the wordmark off the source's dark backdrop and preserve its edge coverage.
+alpha = luminance.point(lambda value: round(max(0, min(1, (value - 22) / (242 - 22))) * 255))
+alpha = alpha.crop(alpha.getbbox()).resize(WORDMARK_SIZE, Image.Resampling.LANCZOS)
 screen = Image.new("RGB", (W, H), (0, 0, 0))
-screen.paste(wordmark, ((W - wordmark.width) // 2, (H - wordmark.height) // 2))
+screen.paste((244, 245, 249), ((W - alpha.width) // 2, (H - alpha.height) // 2), alpha)
 
 pixels = b"".join(
     b"".join(bytes((b, g, r, 255)) for r, g, b in (

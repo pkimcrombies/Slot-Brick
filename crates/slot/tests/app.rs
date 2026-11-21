@@ -331,7 +331,7 @@ fn tap(a: &mut App, btn: Btn) {
 }
 
 #[test]
-fn shoulder_jumps_wrap_between_letters_across_systems() {
+fn shoulder_jumps_wrap_between_letters_without_printing_them() {
     let mut a = app_with_platforms(&[
         (Platform::Gb, "Tetris"),
         (Platform::Gba, "Advance"),
@@ -340,16 +340,21 @@ fn shoulder_jumps_wrap_between_letters_across_systems() {
     ]);
     assert_eq!(a.selected_stem(), Some("Advance"));
     assert_eq!(a.slot_text(), None);
-    for (button, title, initial) in [
-        (Btn::R1, "Chromatic", "C"),
-        (Btn::R1, "Tetris", "T"),
-        (Btn::R1, "Advance", "A"),
-        (Btn::L1, "Tetris", "T"),
+    for (button, title) in [
+        (Btn::R1, "Chromatic"),
+        (Btn::R1, "Tetris"),
+        (Btn::R1, "Advance"),
+        (Btn::L1, "Tetris"),
     ] {
         tap(&mut a, button);
         assert_eq!(a.selected_stem(), Some(title));
-        assert_eq!(a.slot_text().as_deref(), Some(initial));
+        assert_eq!(a.slot_text(), None);
     }
+    tap(&mut a, Btn::Down);
+    assert_eq!(a.slot_text().as_deref(), Some("A"));
+    tap(&mut a, Btn::R1);
+    assert_eq!(a.selected_stem(), Some("Chromatic"));
+    assert_eq!(a.slot_text(), None);
 }
 
 #[test]

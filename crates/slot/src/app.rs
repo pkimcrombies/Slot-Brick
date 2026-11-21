@@ -1009,13 +1009,21 @@ impl App {
     fn shelf_mut(&mut self) -> &mut Shelf {
         &mut self.shelf
     }
-    fn jump_letter(&mut self, dir: i32) {
+    fn jump_letter(&mut self, dir: i32, show_letter: bool) {
         self.shelf.release_hold();
         self.play_held = None;
         let before = self.shelf().index;
         match dir > 0 {
             true => self.shelf_mut().jump_next_letter(),
             false => self.shelf_mut().jump_prev_letter(),
+        }
+        if !show_letter {
+            if self.slot_letter.take().is_some() {
+                self.shelf_platform = slot_ui::Printed::default();
+                self.shelf_named = None;
+                self.name_pending = false;
+            }
+            return;
         }
         if self.shelf().index == before {
             return;
@@ -2122,8 +2130,8 @@ impl App {
                 }
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
                 _ if self.disc_picker.is_some() => self.disc_picker_input(action),
-                Action::GbaDown(Btn::Up) => self.jump_letter(-1),
-                Action::GbaDown(Btn::Down) => self.jump_letter(1),
+                Action::GbaDown(Btn::Up) => self.jump_letter(-1, true),
+                Action::GbaDown(Btn::Down) => self.jump_letter(1, true),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
                 Action::ShelfRight | Action::GbaDown(Btn::Right) => {
                     self.shelf_mut().hold_right(now)
@@ -2139,8 +2147,8 @@ impl App {
                     }
                 }
                 Action::Insert => self.play(!self.state.eject_save),
-                Action::GbaDown(Btn::L1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(-1),
-                Action::GbaDown(Btn::R1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(1),
+                Action::GbaDown(Btn::L1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(-1, false),
+                Action::GbaDown(Btn::R1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(1, false),
                 Action::GbaDown(Btn::Y) => self.toggle_favorite(),
                 Action::GbaDown(Btn::Select) => self.cycle_sort(),
                 _ => {}

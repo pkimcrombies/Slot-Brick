@@ -37,9 +37,9 @@ doesn't flash anything to the device.
 
 | Button           | Action                                  |
 | ---------------- | --------------------------------------- |
-| `Left` / `Right` | Browse games                            |
+| `Left` / `Right` | Browse games across enabled systems     |
 | `Up` / `Down`    | Previous / next letter                  |
-| `L1` / `R1`      | Switch shelves (GBA, GB, GBC, NES, SNES, PlayStation) |
+| `L1` / `R1`      | Previous / next letter when sorted A–Z  |
 | Tap `A`          | Resume from the last save state (a game of several discs: fan them out, pick one, `A` again) |
 | Hold `A`         | Start the game fresh                    |
 | `START`          | Cart colour, finish, shape and label (GBA: and core) |
@@ -170,10 +170,10 @@ still running. Hardcore mode isn't available.
 
 **Library:** when you pick a game, a title card under its cart names it for a moment (**HOME → Library → Title Card** turns it off).
 Beside the battery, the shelf shows how long you have played it: in minutes ("200M"), or in hours and minutes ("3H20M", **HOME → Library → Play Time**). `Y` stars a game as a
-favorite. `SELECT` sorts the shelves A–Z, by the game played last,
+favorite. `SELECT` sorts the carousel A–Z, by the game played last,
 or by the most played, and names the order in the slot; **HOME → Library** has the same order
-(**Sort By**) and **Show: Favorites**, which leaves only your favorites on the shelves (all games,
-while you have none). **HOME → Library → Systems** hides the shelves of systems you don't play.
+(**Sort By**) and **Show: Favorites**, which leaves only your favorites in the carousel (all games,
+while you have none). **HOME → Library → Systems** filters games by console.
 Play time, last played and favorites are kept in `Slot/Config/library.txt`.
 
 **Reset Settings:** **HOME → System → Reset Settings**, then A again, puts every setting back to how it

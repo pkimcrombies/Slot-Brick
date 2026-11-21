@@ -1389,7 +1389,7 @@ fn sync_core_picker(
     if app.take_core_faces_stale() {
         (*asked, *built) = (None, None);
     }
-    let cart = app.selected_stem().and_then(|stem| app.carts().find(|c| c.stem == stem)).cloned();
+    let cart = app.selected_cart().cloned();
     let highlighted = cart.as_ref().map(crate::face_builder::face_key);
     if let Some(cart) = cart {
         if *asked != highlighted {

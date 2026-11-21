@@ -13,7 +13,7 @@ use crate::label_cache::label_art;
 
 const WORKERS: usize = 2;
 
-type Key = (usize, usize);
+type Key = (u64, usize);
 
 #[derive(Default)]
 struct Queue {
@@ -67,7 +67,7 @@ impl CartFaces {
             .asked
             .iter()
             .filter(|w| w.on_screen)
-            .map(|w| (w.shelf, w.index))
+            .map(|w| (w.revision, w.index))
             .collect();
         while !waiting.is_empty() {
             let Ok((key, face)) = self.built.recv() else {
@@ -85,11 +85,11 @@ impl CartFaces {
             self.pending.remove(&key);
         }
         for w in wants {
-            let key = (w.shelf, w.index);
+            let key = (w.revision, w.index);
             if self.pending.contains(&key) {
                 continue;
             }
-            if let Some(cart) = app.face_cart(w.shelf, w.index) {
+            if let Some(cart) = app.face_cart(w.index) {
                 queue.jobs.push_back((key, cart.clone()));
                 self.pending.insert(key);
             }
@@ -99,7 +99,10 @@ impl CartFaces {
 
     fn place(&mut self, app: &mut App, compositor: &mut Compositor, key: Key, face: CartFace) {
         self.pending.remove(&key);
-        self.asked.retain(|w| (w.shelf, w.index) != key);
+        self.asked.retain(|w| (w.revision, w.index) != key);
+        if key.0 != app.face_revision() {
+            return;
+        }
         let tex = match self.free.pop() {
             Some(tex) => {
                 compositor.update_texture(tex, face.w, face.h, &face.rgba);
@@ -107,7 +110,7 @@ impl CartFaces {
             }
             None => compositor.create_texture(face.w, face.h, &face.rgba),
         };
-        self.free.extend(app.set_cart_face(key.0, key.1, tex));
+        self.free.extend(app.set_cart_face(key.1, tex));
     }
 }
 

@@ -325,15 +325,15 @@ fn a_named_shelf_that_no_longer_has_the_cart_is_an_empty_slot() {
 }
 
 #[test]
-fn seating_a_cart_records_the_shelf_it_came_off() {
+fn seating_a_cart_records_its_system_even_with_a_shared_title() {
     let d = two_tetrises();
     let mut a = boot(d.path());
-    a.apply(Action::GbaDown(Btn::R1));
-    assert_eq!(
-        a.selected_stem(),
-        Some("Tetris"),
-        "the shoulder did not ring to the Game Boy shelf"
-    );
+    for _ in 0..2 {
+        a.apply(Action::GbaDown(Btn::Right));
+        a.apply(Action::GbaUp(Btn::Right));
+    }
+    let selected = a.selected_cart().unwrap();
+    assert_eq!((selected.stem.as_str(), selected.platform), ("Tetris", Platform::Gb));
     a.apply(Action::Insert);
     a.on_core_ready();
     for _ in 0..120 {

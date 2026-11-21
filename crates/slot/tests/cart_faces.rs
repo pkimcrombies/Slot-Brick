@@ -45,31 +45,32 @@ fn a_big_library_asks_only_for_the_carts_near_the_cursor() {
 }
 
 #[test]
-fn the_neighbouring_shelf_is_asked_for_after_what_is_on_screen() {
+fn mixed_systems_prefetch_in_carousel_order() {
     let app = library(40, 30);
     let wants = app.face_wants();
-    let gba = wants[0].shelf;
-    assert!(wants[..7].iter().all(|w| w.shelf == gba && w.on_screen));
-    assert!(
-        wants[7..14].iter().all(|w| w.shelf != gba && !w.on_screen),
-        "the next shelf's on-screen carts are not queued right after this one's"
-    );
+    let screen: Vec<_> = wants.iter().filter(|want| want.on_screen)
+        .map(|want| app.face_cart(want.index).unwrap().platform)
+        .collect();
+    assert_eq!(screen, [
+        Platform::Gb, Platform::Gb, Platform::Gba, Platform::Gb,
+        Platform::Gba, Platform::Gb, Platform::Gba,
+    ]);
+    assert!(wants[7..].iter().all(|want| !want.on_screen));
 }
-
 #[test]
 fn a_face_already_held_is_not_asked_for_again() {
     let mut app = library(500, 0);
-    app.set_cart_face(0, 0, TexId::from_raw(1));
+    app.set_cart_face(0, TexId::from_raw(1));
     assert!(app.face_wants().iter().all(|w| w.index != 0));
 }
 
 #[test]
 fn faces_far_from_the_cursor_are_shed_and_near_ones_kept() {
     let mut app = library(500, 0);
-    app.set_cart_face(0, 0, TexId::from_raw(1));
-    app.set_cart_face(0, 12, TexId::from_raw(2));
-    app.set_cart_face(0, 13, TexId::from_raw(3));
-    app.set_cart_face(0, 250, TexId::from_raw(4));
+    app.set_cart_face(0, TexId::from_raw(1));
+    app.set_cart_face(12, TexId::from_raw(2));
+    app.set_cart_face(13, TexId::from_raw(3));
+    app.set_cart_face(250, TexId::from_raw(4));
     let mut shed = app.shed_faces();
     shed.sort_by_key(|t| format!("{t:?}"));
     assert_eq!(shed, vec![TexId::from_raw(3), TexId::from_raw(4)]);

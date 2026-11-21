@@ -291,7 +291,8 @@ pub struct App {
     auto_check: crate::brick_update::AutoCheck,
     update_face: Option<(TexId, u32, u32)>,
     phase: Phase,
-    shelves: Vec<(Platform, Shelf)>,
+    shelf: Shelf,
+    face_revision: u64,
     /// Faces of carts whose label changed, for CartFaces to recycle and rebuild.
     stale_faces: Vec<TexId>,
     /// Two-line notices waiting their turn across the top of the screen (RetroAchievements).
@@ -302,7 +303,6 @@ pub struct App {
     banner_seq: u64,
     /// The rendered face, for the banner of that id.
     banner_face: Option<(u64, TexId)>,
-    shelf_at: usize,
     play_held: Option<Millis>,
     refusal: Option<Refusal>,
     refused_from: Option<f32>,
@@ -342,7 +342,7 @@ pub struct App {
     peel: Option<Peel>,
     core_board_face: Option<TexId>,
     core_lid_face: Option<TexId>,
-    core_faces_stem: Option<String>,
+    core_faces_rom: Option<PathBuf>,
     /// A label went on the cart under the lid: the lid is drawn again, as its key may not
     /// have changed (the label is written over in place).
     core_faces_stale: bool,
@@ -472,7 +472,6 @@ pub struct App {
     title_card_shown: Option<Millis>,
     /// How far the slot has turned into a disc slot (0 a cartridge slot, 1 a disc slot): it
     /// is one on the PlayStation's shelf and while a PlayStation game is in.
-    star_face: Option<(TexId, u32, u32)>,
     /// System → Auto Clock: the time server being asked, and when to ask next.
     #[cfg(feature = "brick")]
     clock_sync: Option<std::sync::mpsc::Receiver<Result<i64, String>>>,
@@ -486,7 +485,7 @@ const FACE_KEEP: i32 = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FaceWant {
-    pub shelf: usize,
+    pub revision: u64,
     pub index: usize,
     pub on_screen: bool,
 }
@@ -496,22 +495,6 @@ const BANNER_MS: Millis = 4500;
 const BANNER_SLIDE: Millis = 300;
 /// The longest a toast waits for its badge to download.
 const BADGE_WAIT: Millis = 1500;
-
-fn shelves_of(carts: Vec<Cart>) -> Vec<(Platform, Shelf)> {
-    let mut rows: Vec<(Platform, Vec<Cart>)> = QuickRow::SYSTEMS
-        .into_iter()
-        .filter_map(QuickRow::shelf_of)
-        .map(|platform| (platform, Vec::new()))
-        .collect();
-    for cart in carts {
-        if let Some((_, row)) = rows.iter_mut().find(|(p, _)| *p == cart.platform) {
-            row.push(cart);
-        }
-    }
-    rows.into_iter()
-        .map(|(platform, carts)| (platform, Shelf::new(carts)))
-        .collect()
-}
 
 /// What System → About's rows say, in QuickRow::ABOUT_INFO's order: the version, whether it is
 /// a Dev build (and its commit) or a release, the device, the firmware, and the SD card's space.
@@ -555,13 +538,11 @@ static EARLY_APP: std::sync::Mutex<Option<std::thread::JoinHandle<App>>> =
     std::sync::Mutex::new(None);
 
 impl App {
-    pub fn new(carts: Vec<Cart>) -> Self {
-        let shelves = shelves_of(carts);
-        let all_carts = shelves.iter().flat_map(|(_, shelf)| &shelf.carts).cloned().collect();
-        let shelf_at = shelves
-            .iter()
-            .position(|(_, s)| !s.carts.is_empty())
-            .unwrap_or(0);
+    pub fn new(mut carts: Vec<Cart>) -> Self {
+        carts.retain(|cart| QuickRow::SYSTEMS.iter().any(|row| row.shelf_of() == Some(cart.platform)));
+        carts.sort_by_cached_key(|cart| slot_store::sort_key(&cart.stem));
+        let all_carts = carts.clone();
+        let shelf = Shelf::new(carts);
         let state_writer = crate::state_writer::StateWriter::spawn();
         let card_failing = state_writer.card_failing();
         App {
@@ -571,13 +552,13 @@ impl App {
             card_read_only: false,
             card_check_at: 0,
             phase: Phase::Shelf,
-            shelves,
+            shelf,
+            face_revision: 0,
             stale_faces: Vec::new(),
             banners: std::collections::VecDeque::new(),
             banner: None,
             banner_seq: 0,
             banner_face: None,
-            shelf_at,
             play_held: None,
             refusal: None,
             refused_from: None,
@@ -615,7 +596,7 @@ impl App {
             peel: None,
             core_board_face: None,
             core_lid_face: None,
-            core_faces_stem: None,
+            core_faces_rom: None,
             core_faces_stale: false,
             core_socket_faces: Vec::new(),
             core_chip_faces: Vec::new(),
@@ -654,7 +635,6 @@ impl App {
             played: slot_ui::Printed::default(),
             title_card: None,
             title_card_shown: None,
-            star_face: None,
             #[cfg(feature = "brick")]
             clock_sync: None,
             #[cfg(feature = "brick")]
@@ -767,10 +747,7 @@ impl App {
         app.library = slot_store::Library::read(root);
         crate::boot_times::mark("  state and library read");
         app.arrange();
-        // At startup, each shelf starts at the top of its order.
-        for (_, shelf) in &mut app.shelves {
-            shelf.select(0);
-        }
+        app.shelf.select(0);
         app.autosave_at = app.autosave_ms();
         if app.state.clock_set {
             app.start();
@@ -783,18 +760,17 @@ impl App {
 
     fn start(&mut self) {
         let seated = if self.single_cart() {
-            Some((self.shelf_at, 0))
+            Some(0)
         } else {
             let stem = self.state.cart.clone();
             let platform = self.state.cart_platform;
             stem.and_then(|stem| self.seat_of(&stem, platform))
         };
         // PSP games start from an explicit insertion.
-        let seated = seated.filter(|(at, i)| self.shelves[*at].1.carts[*i].platform != Platform::Psp);
+        let seated = seated.filter(|&i| self.shelf.carts[i].platform != Platform::Psp);
         self.phase = Phase::Shelf;
         match seated {
-            Some((at, i)) => {
-                self.shelf_at = at;
+            Some(i) => {
                 self.shelf_mut().select(i);
                 self.insert(false);
                 if let Phase::Inserting { resumed, t, .. } = &mut self.phase {
@@ -811,62 +787,47 @@ impl App {
     }
 
     fn shelf(&self) -> &Shelf {
-        &self.shelves[self.shelf_at].1
+        &self.shelf
     }
 
     /// Puts every shelf in HOME → Library's order, with only the favorites when it says so (all
     /// the games, while none is a favorite). Each cart keeps its face, and each shelf the cart
     /// it had selected.
     fn arrange(&mut self) {
-        let mut faces = HashMap::new();
-        let mut picked = Vec::new();
-        for (platform, shelf) in &mut self.shelves {
-            picked.push(shelf.carts.get(shelf.index).map(|c| c.stem.clone()));
-            let taken = shelf.take_faces();
-            for (cart, face) in shelf.carts.iter().zip(taken) {
-                // What changed on the shelf (a label, a plastic) is kept for next time.
-                if let Some(kept) = self.all_carts.iter_mut().find(|c| c.platform == *platform && c.stem == cart.stem
-                    && (*platform != Platform::Psp || c.rom == cart.rom)) {
-                    *kept = cart.clone();
-                }
-                if let Some(face) = face {
-                    faces.insert((*platform, cart.stem.clone()), face);
-                }
+        let picked = self.selected_cart().map(|cart| cart.rom.clone());
+        let visible: HashMap<_, _> = self.shelf.carts.iter().map(|cart| (&cart.rom, cart)).collect();
+        for cart in &mut self.all_carts {
+            if let Some(kept) = visible.get(&cart.rom) {
+                *cart = (*kept).clone();
             }
         }
-        // Hidden systems have no shelf; with every system that has games hidden, all are shown.
-        let shown: Vec<Cart> = match self.all_carts.iter().any(|c| self.state.shows(c.platform)) {
-            true => self.all_carts.iter().filter(|c| self.state.shows(c.platform)).cloned().collect(),
-            false => self.all_carts.clone(),
-        };
-        let favorites_only = self.state.favorites_only && self.library.any_favorite(&shown);
-        for ((platform, shelf), pick) in self.shelves.iter_mut().zip(picked) {
-            let mut carts: Vec<Cart> = shown.iter().filter(|c| c.platform == *platform).cloned().collect();
-            slot_store::arrange(&mut carts, self.state.library_sort, favorites_only, &self.library);
-            let shelf_faces = carts.iter().map(|c| faces.remove(&(*platform, c.stem.clone()))).collect();
-            let starred = carts.iter().map(|c| self.library.get(*platform, &c.stem).favorite).collect();
-            shelf.replace(carts, shelf_faces, starred, pick.as_deref());
-            if let Some(star) = self.star_face {
-                shelf.set_star(star);
-            }
+        let faces = self.shelf.take_faces();
+        let mut faces: HashMap<_, _> = self.shelf.carts.iter().zip(faces)
+            .filter_map(|(cart, face)| Some((cart.rom.clone(), face?)))
+            .collect();
+
+        let mut carts = self.all_carts.clone();
+        if carts.iter().any(|cart| self.state.shows(cart.platform)) {
+            carts.retain(|cart| self.state.shows(cart.platform));
         }
+        let favorites_only = self.state.favorites_only && self.library.any_favorite(&carts);
+        slot_store::arrange(&mut carts, self.state.library_sort, favorites_only, &self.library);
+        let keep = picked.and_then(|rom| carts.iter().position(|cart| cart.rom == rom));
+        let shelf_faces = carts.iter().map(|cart| faces.remove(&cart.rom)).collect();
+        let starred = carts.iter().map(|cart| self.library.get(cart.platform, &cart.stem).favorite).collect();
+        self.shelf.replace(carts, shelf_faces, starred, keep);
         self.stale_faces.extend(faces.into_values());
-        if self.shelf().carts.is_empty() {
-            if let Some(to) = self.next_shelf(1) {
-                self.shelf_at = to;
-            }
-        }
+        self.face_revision = self.face_revision.wrapping_add(1);
         self.shelf_platform = slot_ui::Printed::default();
         self.name_pending = true;
     }
-
     /// Y on the shelf: the selected game is a favorite, or no longer one.
     fn toggle_favorite(&mut self) {
-        let platform = self.shelves[self.shelf_at].0;
         let at = self.shelf().index;
-        let Some(stem) = self.selected_stem().map(str::to_string) else {
+        let Some(cart) = self.selected_cart() else {
             return;
         };
+        let (platform, stem) = (cart.platform, cart.stem.clone());
         let record = self.library.get_mut(platform, &stem);
         record.favorite = !record.favorite;
         let favorite = record.favorite;
@@ -983,7 +944,7 @@ impl App {
         }
         self.play_tick = Some(now);
         if self.play_ms >= 1_000 {
-            let platform = self.shelves[self.shelf_at].0;
+            let platform = self.selected_cart().map_or(self.platform, |cart| cart.platform);
             let secs = self.play_ms / 1_000;
             self.play_ms %= 1_000;
             let cart = cart.clone();
@@ -1000,8 +961,8 @@ impl App {
         if !matches!(self.phase, Phase::Shelf) || self.cart_menu.is_some() || self.core_picker.is_some() {
             return None;
         }
-        let platform = self.shelves.get(self.shelf_at)?.0;
-        let secs = self.library.get(platform, self.selected_stem()?).played_secs;
+        let cart = self.selected_cart()?;
+        let secs = self.library.get(cart.platform, &cart.stem).played_secs;
         slot_store::played_text(secs, self.state.play_time_hours)
     }
 
@@ -1040,31 +1001,15 @@ impl App {
     }
 
     pub fn set_star_face(&mut self, star: (TexId, u32, u32)) {
-        self.star_face = Some(star);
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_star(star);
-        }
+        self.shelf.set_star(star);
     }
 
     fn shelf_mut(&mut self) -> &mut Shelf {
-        &mut self.shelves[self.shelf_at].1
+        &mut self.shelf
     }
-
-    fn switch_shelf(&mut self, by: i32) {
-        let Some(to) = self.next_shelf(by) else {
-            return;
-        };
-        self.shelf_mut().release_hold();
-        self.play_held = None;
-        self.shelf_at = to;
-        self.shelf_platform = slot_ui::Printed::default();
-        self.slot_letter = None;
-        self.slot_word = None;
-        self.shelf_named = None;
-        self.name_pending = true;
-    }
-
     fn jump_letter(&mut self, dir: i32) {
+        self.shelf.release_hold();
+        self.play_held = None;
         let before = self.shelf().index;
         match dir > 0 {
             true => self.shelf_mut().jump_next_letter(),
@@ -1108,27 +1053,11 @@ impl App {
         SLOT_NAME_ALPHA * ease(fade_level(self.now().saturating_sub(at)))
     }
 
-    fn next_shelf(&self, by: i32) -> Option<usize> {
-        let n = self.shelves.len() as i32;
-        (1..n)
-            .map(|step| (self.shelf_at as i32 + by * step).rem_euclid(n) as usize)
-            .find(|at| !self.shelves[*at].1.carts.is_empty())
+    fn seat_of(&self, stem: &str, platform: Option<Platform>) -> Option<usize> {
+        self.shelf.carts.iter().position(|cart| {
+            cart.stem == stem && platform.is_none_or(|want| cart.platform == want)
+        })
     }
-
-    fn seat_of(&self, stem: &str, platform: Option<Platform>) -> Option<(usize, usize)> {
-        self.shelves
-            .iter()
-            .enumerate()
-            .filter(|(_, (p, _))| platform.is_none_or(|want| *p == want))
-            .find_map(|(at, (_, shelf))| {
-                shelf
-                    .carts
-                    .iter()
-                    .position(|c| c.stem == stem)
-                    .map(|i| (at, i))
-            })
-    }
-
     pub fn confirm_clock(&mut self) {
         let Phase::SetClock {
             picker,
@@ -1328,36 +1257,26 @@ impl App {
     }
 
     pub fn set_cart_shadow(&mut self, face: TexId) {
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_shadow(face);
-        }
+        self.shelf.set_shadow(face);
     }
 
     pub fn set_nes_cart_shadows(&mut self, nes: TexId, famicom: TexId) {
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_nes_shadow(slot_ui::NesShell::Nes, nes);
-            shelf.set_nes_shadow(slot_ui::NesShell::Famicom, famicom);
-        }
+        self.shelf.set_nes_shadow(slot_ui::NesShell::Nes, nes);
+        self.shelf.set_nes_shadow(slot_ui::NesShell::Famicom, famicom);
     }
 
     pub fn set_snes_cart_shadows(&mut self, us: TexId, pal: TexId) {
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_snes_shadow(slot_ui::SnesShell::Us, us);
-            shelf.set_snes_shadow(slot_ui::SnesShell::Pal, pal);
-        }
+        self.shelf.set_snes_shadow(slot_ui::SnesShell::Us, us);
+        self.shelf.set_snes_shadow(slot_ui::SnesShell::Pal, pal);
     }
 
     pub fn set_disc_shadows(&mut self, cd: TexId, umd: TexId) {
-        for (platform, shelf) in &mut self.shelves {
-            shelf.set_disc_shadow(if *platform == Platform::Psp { umd } else { cd });
-        }
+        self.shelf.set_disc_shadows(cd, umd);
     }
 
     pub fn set_gb_cart_shadows(&mut self, notched: TexId, rounded: TexId) {
-        for (_, shelf) in &mut self.shelves {
-            shelf.set_gb_shadow(GbShell::Notched, notched);
-            shelf.set_gb_shadow(GbShell::Rounded, rounded);
-        }
+        self.shelf.set_gb_shadow(GbShell::Notched, notched);
+        self.shelf.set_gb_shadow(GbShell::Rounded, rounded);
     }
 
     pub fn set_wallpaper(&mut self, face: TexId) {
@@ -1409,15 +1328,7 @@ impl App {
         if let Some(word) = self.slot_word {
             return Some(word.to_string());
         }
-        match self.slot_letter {
-            Some(letter) => Some(letter.to_string()),
-            None => self.shelf_platform_name().map(str::to_string),
-        }
-    }
-
-    pub fn shelf_platform_name(&self) -> Option<&'static str> {
-        self.next_shelf(1)?;
-        Some(self.shelves[self.shelf_at].0.name())
+        self.slot_letter.map(|letter| letter.to_string())
     }
 
     pub fn set_battery_percent_face(&mut self, face: TexId, w: u32) {
@@ -1433,9 +1344,7 @@ impl App {
     }
 
     pub fn carts(&self) -> impl Iterator<Item = &Cart> {
-        self.shelves
-            .iter()
-            .flat_map(|(_, shelf)| shelf.carts.iter())
+        self.shelf.carts.iter()
     }
 
     pub fn seated_cart(&self) -> Option<&Cart> {
@@ -1447,10 +1356,7 @@ impl App {
             Phase::Doze { cart: Some(cart) } => cart,
             _ => return None,
         };
-        // PSP images can share a title (ISO and CSO); keep the selected file's identity.
-        self.shelf().carts.get(self.shelf().index)
-            .filter(|c| c.platform == Platform::Psp && c.stem == *stem)
-            .or_else(|| self.shelf().carts.iter().find(|c| c.stem == *stem))
+        self.selected_cart().filter(|cart| cart.stem == *stem)
     }
 
     /// One game on the whole card (not one on show: a lone favorite isn't started at boot).
@@ -1459,45 +1365,34 @@ impl App {
     }
 
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
-        let mut faces = faces.into_iter();
-        for (_, shelf) in &mut self.shelves {
-            let n = shelf.carts.len();
-            shelf.set_faces(faces.by_ref().take(n).collect());
-        }
+        self.shelf.set_faces(faces);
     }
 
     pub fn face_wants(&self) -> Vec<FaceWant> {
-        let here = self.shelf();
-        let screen = here.on_screen();
-        let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
-        for at in self.neighbour_shelves() {
-            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
-        }
-        wants.extend(
-            here.around(FACE_AHEAD)
-                .into_iter()
-                .filter(|i| !screen.contains(i))
-                .map(|i| (self.shelf_at, i)),
-        );
-        wants
-            .into_iter()
-            .filter(|(at, i)| self.shelves[*at].1.face(*i).is_none())
-            .map(|(shelf, index)| FaceWant {
-                shelf,
-                index,
-                on_screen: shelf == self.shelf_at && screen.contains(&index),
-            })
-            .collect()
+        let screen = self.shelf.on_screen();
+        screen.iter().copied().chain(
+            self.shelf.around(FACE_AHEAD).into_iter().filter(|index| !screen.contains(index)),
+        )
+        .filter(|&index| self.shelf.face(index).is_none())
+        .map(|index| FaceWant {
+            revision: self.face_revision,
+            index,
+            on_screen: screen.contains(&index),
+        })
+        .collect()
     }
 
-    pub fn face_cart(&self, shelf: usize, index: usize) -> Option<&Cart> {
-        self.shelves.get(shelf)?.1.carts.get(index)
+    pub fn face_cart(&self, index: usize) -> Option<&Cart> {
+        self.shelf.carts.get(index)
     }
 
-    pub fn set_cart_face(&mut self, shelf: usize, index: usize, tex: TexId) -> Option<TexId> {
-        self.shelves.get_mut(shelf)?.1.set_face(index, tex)
+    pub fn face_revision(&self) -> u64 {
+        self.face_revision
     }
 
+    pub fn set_cart_face(&mut self, index: usize, tex: TexId) -> Option<TexId> {
+        self.shelf.set_face(index, tex)
+    }
     /// The Wi-Fi / Cart Art overlay is open.
     #[cfg(feature = "brick")]
     pub fn overlay_open(&self) -> bool {
@@ -1520,50 +1415,31 @@ impl App {
             Some(root) => slot_store::labels_of(root, platform, stem),
             None => (label, None),
         };
-        for (p, shelf) in &mut self.shelves {
-            if *p != platform {
-                continue;
-            }
-            if let Some(i) = shelf.carts.iter().position(|c| c.stem == stem) {
-                shelf.carts[i].label = own.clone();
-                shelf.carts[i].famicom_label = famicom.clone();
-                self.stale_faces.extend(shelf.take_face(i));
+        for cart in self.all_carts.iter_mut().filter(|cart| cart.platform == platform && cart.stem == stem) {
+            cart.label.clone_from(&own);
+            cart.famicom_label.clone_from(&famicom);
+        }
+        for i in 0..self.shelf.carts.len() {
+            let cart = &mut self.shelf.carts[i];
+            if cart.platform == platform && cart.stem == stem {
+                cart.label.clone_from(&own);
+                cart.famicom_label.clone_from(&famicom);
+                self.stale_faces.extend(self.shelf.take_face(i));
             }
         }
+        self.face_revision = self.face_revision.wrapping_add(1);
     }
 
     pub fn shed_faces(&mut self) -> Vec<TexId> {
-        let neighbours = self.neighbour_shelves();
         let mut shed = std::mem::take(&mut self.stale_faces);
-        for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
-            let keep = if at == self.shelf_at {
-                shelf.around(FACE_KEEP)
-            } else if neighbours.contains(&at) {
-                shelf.on_screen()
-            } else {
-                Vec::new()
-            };
-            for i in 0..shelf.carts.len() {
-                if !keep.contains(&i) {
-                    shed.extend(shelf.take_face(i));
-                }
+        let keep = self.shelf.around(FACE_KEEP);
+        for i in 0..self.shelf.carts.len() {
+            if !keep.contains(&i) {
+                shed.extend(self.shelf.take_face(i));
             }
         }
         shed
     }
-
-    fn neighbour_shelves(&self) -> Vec<usize> {
-        let mut out = Vec::new();
-        for by in [1, -1] {
-            if let Some(at) = self.next_shelf(by) {
-                if !out.contains(&at) {
-                    out.push(at);
-                }
-            }
-        }
-        out
-    }
-
     pub fn set_snapshot(&mut self, snapshot: Box<dyn Snapshot>) {
         self.snapshot = Some(snapshot);
     }
@@ -2120,11 +1996,12 @@ impl App {
         self.refuse_seated();
     }
 
+    pub fn selected_cart(&self) -> Option<&Cart> {
+        self.shelf.carts.get(self.shelf.index)
+    }
+
     pub fn selected_stem(&self) -> Option<&str> {
-        self.shelf()
-            .carts
-            .get(self.shelf().index)
-            .map(|c| c.stem.as_str())
+        self.selected_cart().map(|cart| cart.stem.as_str())
     }
 
     pub fn battery(&self) -> Option<Battery> {
@@ -2256,8 +2133,8 @@ impl App {
                     }
                 }
                 Action::Insert => self.play(!self.state.eject_save),
-                Action::GbaDown(Btn::L1) => self.switch_shelf(-1),
-                Action::GbaDown(Btn::R1) => self.switch_shelf(1),
+                Action::GbaDown(Btn::L1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(-1),
+                Action::GbaDown(Btn::R1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(1),
                 Action::GbaDown(Btn::Y) => self.toggle_favorite(),
                 Action::GbaDown(Btn::Select) => self.cycle_sort(),
                 _ => {}
@@ -2913,12 +2790,10 @@ impl App {
             self.shelf_mut().release_hold();
         }
         let mut touched = false;
-        let at = self.shelf_at;
         let next = match &mut self.phase {
             Phase::Shelf => {
-                let shelf = &mut self.shelves[at].1;
-                shelf.tick(now);
-                shelf.update(dt);
+                self.shelf.tick(now);
+                self.shelf.update(dt);
                 None
             }
             Phase::Inserting {
@@ -2963,7 +2838,7 @@ impl App {
                 self.link_loaded = None;
             }
             if let Some(cart) = &seated {
-                let platform = self.shelves[self.shelf_at].0;
+                let platform = self.selected_cart().map_or(self.platform, |cart| cart.platform);
                 self.library.get_mut(platform, cart).last_played = self.utc_secs();
                 self.save_library();
             }
@@ -3321,7 +3196,7 @@ impl App {
     /// Android Original per-console shelf colour; preserve existing PS1 background.
     fn draw_shelf_background(&self, out: &mut Vec<Draw>) {
         // Baggio94/slot-for-android: menu_style.rs Original shelf palette.
-        let colour: Option<[u8; 3]> = match self.shelves[self.shelf_at].0 {
+        let colour: Option<[u8; 3]> = match self.selected_cart().map_or(Platform::Gba, |cart| cart.platform) {
             Platform::Gba => Some([228, 205, 203]), // GBA: use NES rose-grey to match grey Brick
             Platform::Gb => Some([202, 211, 168]),   // Game Boy green
             Platform::Gbc => Some([243, 227, 160]),  // GBC pale yellow
@@ -3495,7 +3370,7 @@ impl App {
                         let picker = self.disc_picker.as_ref().expect("checked above");
                         let open = ease(picker.openness(self.now()));
                         self.shelf().draw_row(Some(&picker.stem), 0.0, CORE_PICKER_RECEDE * open, 1.0, out);
-                        let fallback = self.shelf().find(&picker.stem).and_then(|(_, f)| f);
+                        let fallback = self.shelf.face(self.shelf.index);
                         picker.draw(&self.disc_faces, fallback, self.now(), out);
                         draw_empty_slot(out);
                     }
@@ -3513,6 +3388,7 @@ impl App {
                             slot_ui::draw_title_card(self.title_card, foot, self.title_card_alpha(), out);
                         }
                         self.shelf().draw(self.shelf_shake(), out);
+                        slot_ui::draw_slot_name(self.shelf_platform, self.slot_name_alpha(), out);
                     }
                 }
                 // Android-style top corners: clock left, battery and Wi-Fi right.
@@ -3636,9 +3512,10 @@ impl App {
     }
 
     fn chrome(&self, stem: &str, dim: f32, out: &mut Vec<Draw>) {
-        let Some((cart, face)) = self.shelf().find(stem) else {
+        let Some(cart) = self.selected_cart().filter(|cart| cart.stem == stem) else {
             return;
         };
+        let face = self.shelf.face(self.shelf.index);
         // A disc picked from a game's several goes in wearing its own face.
         let face = self.chosen_disc.and_then(|(_, f)| f).filter(|_| cart.platform == Platform::Ps1).or(face);
         let alpha = self.alert_alpha();
@@ -3711,7 +3588,7 @@ impl App {
     pub fn set_core_board_faces(&mut self, board: TexId, lid: TexId) {
         self.core_board_face = Some(board);
         self.core_lid_face = Some(lid);
-        self.core_faces_stem = self.selected_stem().map(str::to_string);
+        self.core_faces_rom = self.selected_cart().map(|cart| cart.rom.clone());
     }
 
     pub fn set_core_part_faces(
@@ -3879,10 +3756,7 @@ impl App {
                     turn,
                 });
             }
-        } else if let Some((_, Some(tex))) = self
-            .selected_stem()
-            .and_then(|stem| self.shelf().find(stem))
-        {
+        } else if let Some(tex) = self.shelf.face(self.shelf.index) {
             let (lid, turn) = lid_from(shelf, progress);
             out.push(Draw::Turned {
                 x: lid.x,
@@ -4000,7 +3874,7 @@ impl App {
     }
 
     fn auto_link(&self, stem: &str) -> Option<(&Cart, LinkKind)> {
-        let cart = self.shelf().carts.iter().find(|c| c.stem == stem)?;
+        let cart = self.selected_cart().filter(|cart| cart.stem == stem)?;
         let auto = link_kind(&cart.code, &cart.title, slot_store::header_clean(&cart.rom));
         Some((cart, auto))
     }
@@ -4078,7 +3952,7 @@ impl App {
             return None;
         }
         let picker = self.disc_picker.as_ref()?;
-        let game = self.shelf().carts.iter().find(|c| c.stem == picker.stem)?.clone();
+        let game = self.selected_cart().filter(|cart| cart.stem == picker.stem)?.clone();
         let root = self.root.clone();
         Some(
             picker
@@ -4727,7 +4601,7 @@ impl App {
                 crate::cart_art::forget_choices(root);
             }
             if peel_on_picker {
-                self.core_faces_stem = None;
+                self.core_faces_rom = None;
                 self.core_faces_stale = true;
             }
         }
@@ -5194,9 +5068,9 @@ impl App {
     }
 
     fn core_faces_ready(&self) -> bool {
-        self.core_faces_stem
+        self.core_faces_rom
             .as_deref()
-            .is_some_and(|stem| self.selected_stem() == Some(stem))
+            .is_some_and(|rom| self.selected_cart().is_some_and(|cart| cart.rom == rom))
     }
 
     fn core_picker_input(&mut self, action: Action) {

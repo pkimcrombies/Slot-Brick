@@ -331,208 +331,43 @@ fn tap(a: &mut App, btn: Btn) {
 }
 
 #[test]
-fn the_shoulders_ring_over_the_shelves() {
-    let mut a = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gb, "Tetris")]);
-    assert_eq!(a.selected_stem(), Some("Emerald"));
-    tap(&mut a, Btn::R1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Tetris"),
-        "R1 did not reach the Game Boy shelf"
-    );
-    tap(&mut a, Btn::R1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Emerald"),
-        "the ring did not come back round"
-    );
-    tap(&mut a, Btn::L1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Tetris"),
-        "L1 did not reach the Game Boy shelf"
-    );
-}
-
-#[test]
-fn a_colour_cart_stands_on_a_shelf_of_its_own() {
+fn shoulder_jumps_wrap_between_letters_across_systems() {
     let mut a = app_with_platforms(&[
-        (Platform::Gba, "Emerald"),
         (Platform::Gb, "Tetris"),
+        (Platform::Gba, "Advance"),
         (Platform::Gbc, "Chromatic"),
+        (Platform::Psp, "Alpha"),
     ]);
-    tap(&mut a, Btn::R1);
-    assert_eq!(a.selected_stem(), Some("Tetris"));
-    tap(&mut a, Btn::R1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Chromatic"),
-        "the Colour cart shares the Game Boy shelf"
-    );
-    tap(&mut a, Btn::R1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Emerald"),
-        "three shelves did not ring back round to the first"
-    );
-    tap(&mut a, Btn::L1);
-    assert_eq!(a.selected_stem(), Some("Chromatic"));
-}
-
-#[test]
-fn every_shelf_keeps_the_cart_it_was_left_on() {
-    let mut a = app_with_platforms(&[
-        (Platform::Gba, "Emerald"),
-        (Platform::Gba, "Fusion"),
-        (Platform::Gb, "Tetris"),
-        (Platform::Gb, "Zelda"),
-    ]);
-    tap(&mut a, Btn::Right);
-    assert_eq!(a.selected_stem(), Some("Fusion"));
-    tap(&mut a, Btn::R1);
-    assert_eq!(a.selected_stem(), Some("Tetris"));
-    tap(&mut a, Btn::Right);
-    assert_eq!(a.selected_stem(), Some("Zelda"));
-
-    tap(&mut a, Btn::L1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Fusion"),
-        "the Game Boy Advance shelf forgot where it was"
-    );
-    tap(&mut a, Btn::R1);
-    assert_eq!(
-        a.selected_stem(),
-        Some("Zelda"),
-        "the Game Boy shelf forgot where it was"
-    );
-}
-
-#[test]
-fn a_shelf_comes_back_settled_where_it_was_left() {
-    let mut a = app_with_platforms(&[
-        (Platform::Gba, "Aaa"),
-        (Platform::Gba, "Bbb"),
-        (Platform::Gba, "Ccc"),
-        (Platform::Gb, "Tetris"),
-    ]);
-    let faces: Vec<TexId> = (0..4).map(|i| TexId::from_raw(700 + i)).collect();
-    a.set_faces(faces.clone());
-    tap(&mut a, Btn::Right);
-    tap(&mut a, Btn::Right);
-    for _ in 0..120 {
-        a.update(1.0 / 60.0);
+    assert_eq!(a.selected_stem(), Some("Advance"));
+    assert_eq!(a.slot_text(), None);
+    for (button, title, initial) in [
+        (Btn::R1, "Chromatic", "C"),
+        (Btn::R1, "Tetris", "T"),
+        (Btn::R1, "Advance", "A"),
+        (Btn::L1, "Tetris", "T"),
+    ] {
+        tap(&mut a, button);
+        assert_eq!(a.selected_stem(), Some(title));
+        assert_eq!(a.slot_text().as_deref(), Some(initial));
     }
-    let settled = tex_at(&frame(&a), faces[2])
-        .expect("no face for the selected cart")
-        .1;
-
-    tap(&mut a, Btn::R1);
-    assert!(
-        tex_at(&frame(&a), faces[3]).is_some(),
-        "the Game Boy cart has no face of its own"
-    );
-    tap(&mut a, Btn::L1);
-    a.update(1.0 / 60.0);
-    let back = tex_at(&frame(&a), faces[2])
-        .expect("no face on the way back")
-        .1;
-    assert!(
-        (back[0] - settled[0]).abs() < 1.0,
-        "the row came back at {} rather than settled at {}",
-        back[0],
-        settled[0]
-    );
 }
 
 #[test]
-fn the_shoulders_do_nothing_when_there_is_one_shelf_to_be_on() {
-    let mut a = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gba, "Fusion")]);
+fn shoulder_jumps_leave_a_single_letter_group_in_place() {
+    let mut a = app_with_platforms(&[(Platform::Gba, "Advance"), (Platform::Psp, "Alpha")]);
     for btn in [Btn::L1, Btn::R1] {
         tap(&mut a, btn);
-        assert_eq!(
-            a.selected_stem(),
-            Some("Emerald"),
-            "{btn:?} moved a shelf with no neighbour"
-        );
-        assert_eq!(
-            a.toast(),
-            None,
-            "{btn:?} said something about doing nothing"
-        );
-        assert_eq!(
-            a.shelf_shake(),
-            0.0,
-            "{btn:?} refused where it should have done nothing"
-        );
+        assert_eq!(a.selected_stem(), Some("Advance"));
+        assert_eq!(a.toast(), None);
+        assert_eq!(a.shelf_shake(), 0.0);
     }
 }
 
 #[test]
-fn the_switch_changes_the_name_on_the_band_and_says_nothing() {
-    let mut a = app_with_platforms(&[
-        (Platform::Gba, "Emerald"),
-        (Platform::Gb, "Tetris"),
-        (Platform::Gbc, "Chromatic"),
-    ]);
-    assert_eq!(
-        a.shelf_platform_name(),
-        Some("Game Boy Advance"),
-        "the card did not open on the GBA"
-    );
-    for (btn, want) in [
-        (Btn::R1, "Game Boy"),
-        (Btn::R1, "Game Boy Color"),
-        (Btn::R1, "Game Boy Advance"),
-        (Btn::L1, "Game Boy Color"),
-    ] {
-        a.apply_at(Action::GbaDown(btn), 1_000);
-        assert_eq!(
-            a.shelf_platform_name(),
-            Some(want),
-            "{btn:?} left the wrong name on the case"
-        );
-        assert_eq!(a.toast(), None, "{btn:?} put a banner up over the carts");
-    }
-    a.update(5.0);
-    assert_eq!(
-        a.shelf_platform_name(),
-        Some("Game Boy Color"),
-        "the name faded"
-    );
-}
-
-#[test]
-fn a_card_on_one_shelf_names_nothing_because_there_is_nowhere_to_switch_to() {
-    let mut alone = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gba, "Fusion")]);
-    assert_eq!(
-        alone.shelf_platform_name(),
-        None,
-        "a card with only Game Boy Advance carts named its platform anyway"
-    );
-    for btn in [Btn::L1, Btn::R1] {
-        alone.apply_at(Action::GbaDown(btn), 1_000);
-        assert_eq!(
-            alone.shelf_platform_name(),
-            None,
-            "{btn:?} named a shelf on a card that has one"
-        );
-    }
-
-    let two = app_with_platforms(&[(Platform::Gba, "Emerald"), (Platform::Gb, "Tetris")]);
-    assert_eq!(
-        two.shelf_platform_name(),
-        Some("Game Boy Advance"),
-        "a card with two shelves did not say which one it was on"
-    );
-}
-
-#[test]
-fn the_carousel_opens_on_a_shelf_that_has_carts() {
+fn the_carousel_opens_when_only_one_system_has_games() {
     let a = app_with_platforms(&[(Platform::Gbc, "Chromatic")]);
     assert_eq!(a.selected_stem(), Some("Chromatic"));
 }
-
 #[test]
 fn the_shoulders_belong_to_the_game_while_one_is_playing() {
     let mut a = app_with_platforms(&[
@@ -555,7 +390,7 @@ fn the_shoulders_belong_to_the_game_while_one_is_playing() {
 }
 
 #[test]
-fn a_held_direction_does_not_follow_the_shelf_it_was_pressed_on() {
+fn an_alphabet_jump_releases_a_held_direction() {
     let mut a = app_with_platforms(&[
         (Platform::Gba, "Aaa"),
         (Platform::Gba, "Bbb"),
@@ -572,7 +407,7 @@ fn a_held_direction_does_not_follow_the_shelf_it_was_pressed_on() {
     assert_eq!(
         a.selected_stem(),
         Some("Bbb"),
-        "the row walked on by itself once the shelf came back"
+        "the row kept moving after the alphabet jump"
     );
 }
 

@@ -51,6 +51,7 @@ enum Backing {
     Nes(NesShell),
     Snes(SnesShell),
     Disc,
+    Umd,
 }
 
 fn backing(cart: &Cart) -> Backing {
@@ -58,7 +59,8 @@ fn backing(cart: &Cart) -> Backing {
         slot_store::Platform::Nes if nes_famicom_of(cart) => Backing::Nes(NesShell::Famicom),
         slot_store::Platform::Nes => Backing::Nes(NesShell::Nes),
         slot_store::Platform::Snes => Backing::Snes(snes_shell_of(cart).unwrap_or(SnesShell::Us)),
-        slot_store::Platform::Ps1 | slot_store::Platform::Psp => Backing::Disc,
+        slot_store::Platform::Ps1 => Backing::Disc,
+        slot_store::Platform::Psp => Backing::Umd,
         _ => gb_shell_of(cart).map_or(Backing::Gba, Backing::Gb),
     }
 }
@@ -67,6 +69,7 @@ pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
     pub scroll: f32,
+    spacing: f32,
     faces: Vec<Option<TexId>>,
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
@@ -76,6 +79,7 @@ pub struct Shelf {
     snes_shadow: Option<TexId>,
     snes_pal_shadow: Option<TexId>,
     disc_shadow: Option<TexId>,
+    umd_shadow: Option<TexId>,
     /// Each cart's shadow shape: reading it needs the ROM, so it is read once, not per frame.
     shells: Vec<Backing>,
     /// Which carts are favorites, starred on the shelf, and the star.
@@ -89,8 +93,13 @@ pub struct Shelf {
 }
 
 impl Shelf {
+    fn spacing_for(carts: &[Cart]) -> f32 {
+        carts.iter().map(|cart| cart_box(cart.platform).0).max().unwrap_or(CART_W) as f32
+    }
+
     pub fn new(carts: Vec<Cart>) -> Self {
         Shelf {
+            spacing: Self::spacing_for(&carts),
             shells: carts.iter().map(backing).collect(),
             faces: vec![None; carts.len()],
             favorites: vec![false; carts.len()],
@@ -107,6 +116,7 @@ impl Shelf {
             snes_shadow: None,
             snes_pal_shadow: None,
             disc_shadow: None,
+            umd_shadow: None,
             ride: 0.0,
             vel: 0.0,
             held: None,
@@ -122,8 +132,8 @@ impl Shelf {
 
     /// The same shelf with `carts` on it instead (another order, or fewer), each with its face
     /// if it has one, and `keep` still selected if it is there.
-    pub fn replace(&mut self, carts: Vec<Cart>, faces: Vec<Option<TexId>>, favorites: Vec<bool>, keep: Option<&str>) {
-        let at = keep.and_then(|stem| carts.iter().position(|c| c.stem == stem));
+    pub fn replace(&mut self, carts: Vec<Cart>, faces: Vec<Option<TexId>>, favorites: Vec<bool>, keep: Option<usize>) {
+        self.spacing = Self::spacing_for(&carts);
         self.shells = carts.iter().map(backing).collect();
         self.faces = faces;
         self.faces.resize(carts.len(), None);
@@ -132,7 +142,7 @@ impl Shelf {
         self.carts = carts;
         self.held = None;
         self.star_pop = None;
-        self.select(at.unwrap_or(0).min(self.carts.len().saturating_sub(1)));
+        self.select(keep.unwrap_or(0).min(self.carts.len().saturating_sub(1)));
     }
 
     /// The star goes on with a pop, or comes off with a smaller one (see `update`).
@@ -187,8 +197,9 @@ impl Shelf {
         }
     }
 
-    pub fn set_disc_shadow(&mut self, face: TexId) {
-        self.disc_shadow = Some(face);
+    pub fn set_disc_shadows(&mut self, cd: TexId, umd: TexId) {
+        self.disc_shadow = Some(cd);
+        self.umd_shadow = Some(umd);
     }
 
     pub fn set_faces(&mut self, faces: Vec<TexId>) {
@@ -400,7 +411,7 @@ impl Shelf {
             .map_or(CART_W, |c| cart_box(c.platform).0) as f32;
         let offset = self.scroll_target() - self.scroll;
         let scale = shrink(offset);
-        (OUT_W as f32 / 2.0 + offset * w - w * scale / 2.0, scale)
+        (OUT_W as f32 / 2.0 + offset * self.spacing - w * scale / 2.0, scale)
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -442,7 +453,7 @@ impl Shelf {
                 continue;
             };
             let cart = &self.carts[i];
-            if hidden == Some(cart.stem.as_str()) {
+            if i == self.index && hidden == Some(cart.stem.as_str()) {
                 continue;
             }
             let offset = target + slot as f32 - self.scroll;
@@ -452,7 +463,7 @@ impl Shelf {
             let (cw, ch) = cart_box(cart.platform);
             let (w, h) = (cw as f32 * scale, ch as f32 * scale);
             let away = offset.signum() * (1.0 + offset.abs());
-            let x = OUT_W as f32 / 2.0 + offset * cw as f32 - w / 2.0 + away * PART * recede;
+            let x = OUT_W as f32 / 2.0 + offset * self.spacing - w / 2.0 + away * PART * recede;
             if x + w <= 0.0 || x >= OUT_W as f32 || alpha <= 0.0 {
                 continue;
             }
@@ -467,6 +478,7 @@ impl Shelf {
                     Some(Backing::Snes(SnesShell::Us)) => self.snes_shadow,
                     Some(Backing::Snes(SnesShell::Pal)) => self.snes_pal_shadow,
                     Some(Backing::Disc) => self.disc_shadow,
+                    Some(Backing::Umd) => self.umd_shadow,
                     Some(Backing::Gba) | None => self.shadow,
                 };
                 if let Some(tex) = backing {
@@ -511,7 +523,7 @@ impl Shelf {
             if let (Some(pop), Some((tex, sw, sh))) = (self.star_scale(i), self.star) {
                 let (sw, sh) = (sw as f32 * scale, sh as f32 * scale);
                 let (cx, cy) = match self.shells.get(i) {
-                    Some(Backing::Disc) => (x + w * 0.854, y + h * 0.146),
+                    Some(Backing::Disc | Backing::Umd) => (x + w * 0.854, y + h * 0.146),
                     _ => (x + w - sw * 0.25, y + sh * 0.25),
                 };
                 let (sw, sh) = (sw * pop, sh * pop);

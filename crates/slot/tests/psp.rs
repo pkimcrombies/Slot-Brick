@@ -16,8 +16,8 @@ fn psp_replaces_ps1_in_the_carousel_and_systems_list() {
     let mut app = slot::app::App::boot(root.path());
     let systems: Vec<_> = app.carts().map(|cart| cart.platform).collect();
     assert_eq!(systems, [Platform::Gba, Platform::Psp]);
-    app.apply(Action::GbaDown(Btn::R1));
-    app.apply(Action::GbaUp(Btn::R1));
+    app.apply(Action::GbaDown(Btn::Right));
+    app.apply(Action::GbaUp(Btn::Right));
     app.apply(Action::Insert);
     assert_eq!(app.seated_cart().unwrap().platform, Platform::Psp);
     assert_eq!(
@@ -25,6 +25,52 @@ fn psp_replaces_ps1_in_the_carousel_and_systems_list() {
         &["Game Boy Advance", "Game Boy", "Game Boy Color", "NES", "SNES", "PSP"],
     );
     assert!(ps1.is_file());
+}
+
+#[test]
+fn the_carousel_browses_mixed_systems_in_title_order() {
+    use slot_input::{Action, Btn};
+    use slot_store::{Platform, SlotState};
+
+    let root = tempfile::tempdir().unwrap();
+    slot::root::ensure(root.path());
+    let state = SlotState { clock_set: true, ..Default::default() };
+    slot_store::write_slot_state(root.path(), &state).unwrap();
+    for game in ["Games/GBA/Zulu.gba", "Games/PSP/Alpha.iso", "Games/GB/Beta.gb"] {
+        std::fs::write(root.path().join(game), []).unwrap();
+    }
+    let mut app = slot::app::App::boot(root.path());
+    assert_eq!(app.selected_stem(), Some("Alpha"));
+    app.apply(Action::GbaDown(Btn::Right));
+    app.apply(Action::GbaUp(Btn::Right));
+    assert_eq!(app.selected_stem(), Some("Beta"));
+    app.apply(Action::GbaDown(Btn::L1));
+    assert_eq!(app.selected_stem(), Some("Alpha"));
+    app.apply(Action::Insert);
+    assert_eq!(app.seated_cart().unwrap().platform, Platform::Psp);
+}
+
+#[test]
+fn matching_names_from_two_systems_insert_the_selected_file() {
+    use slot_input::{Action, Btn};
+    use slot_store::{Platform, SlotState};
+
+    let root = tempfile::tempdir().unwrap();
+    slot::root::ensure(root.path());
+    slot_store::write_slot_state(
+        root.path(),
+        &SlotState { clock_set: true, ..Default::default() },
+    ).unwrap();
+    let psp = root.path().join("Games/PSP/Shared Name.iso");
+    std::fs::write(&psp, []).unwrap();
+    std::fs::write(root.path().join("Games/GBA/Shared Name.gba"), []).unwrap();
+
+    let mut app = slot::app::App::boot(root.path());
+    assert_eq!(app.selected_cart().unwrap().platform, Platform::Gba);
+    app.apply(Action::GbaDown(Btn::Right));
+    app.apply(Action::GbaUp(Btn::Right));
+    app.apply(Action::Insert);
+    assert_eq!(app.seated_cart().unwrap().rom, psp);
 }
 
 #[test]

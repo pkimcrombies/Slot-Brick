@@ -434,7 +434,9 @@ impl Frontend {
         Self::upload_paper(compositor);
         crate::boot_times::mark("  paper");
         #[cfg(feature = "brick")]
-        slot_ui::upload_slot_art(|w,h,rgba|compositor.create_texture(w,h,rgba));
+        slot_ui::upload_slot_art(slot_power::model() == slot_power::Model::BrickPro, |w, h, rgba| {
+            compositor.create_texture(w, h, rgba)
+        });
         crate::boot_times::mark("  slot art");
         if self.rebuild.is_none() {
             self.cart_faces.sync(self.session.app_mut(), compositor);

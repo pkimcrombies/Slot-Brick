@@ -286,7 +286,7 @@ fn original_console_bar_face(platform: slot_store::Platform, front: bool) -> Opt
 }
 
 #[cfg(feature = "brick")]
-pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
+pub fn upload_slot_art(brick_pro: bool, mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
     if ART.get().is_some() {return;}
     if let (Some(back),Some(front))=(slot_art_face(false),slot_art_face(true)) {
         let _=ART.set((upload(back.w,back.h,&back.rgba),upload(front.w,front.h,&front.rgba)));
@@ -303,11 +303,21 @@ pub fn upload_slot_art(mut upload: impl FnMut(u32,u32,&[u8])->TexId) {
         (slot_store::Platform::Nes, &ORIGINAL_NES_ART),
         (slot_store::Platform::Snes, &ORIGINAL_SNES_ART),
     ] {
-        if let (Some(back), Some(front)) = (
+        if let (Some(mut back), Some(mut front)) = (
             original_console_bar_face(platform, false),
             original_console_bar_face(platform, true),
         ) {
             if platform == slot_store::Platform::Gb {
+                if brick_pro {
+                    // Match the Brick Pro housing and leave the dark recess and alpha intact.
+                    for pixel in back.chunks_exact_mut(4).chain(front.chunks_exact_mut(4)) {
+                        let luma = (f32::from(pixel[0]) + f32::from(pixel[1]) + f32::from(pixel[2])) / 3.0;
+                        let strength = ((luma - 85.0) / 80.0).clamp(0.0, 1.0);
+                        for (channel, delta) in pixel[..3].iter_mut().zip([13.0, 7.0, 11.0]) {
+                            *channel = channel.saturating_add((strength * delta).round() as u8);
+                        }
+                    }
+                }
                 // Use the same downsampled pixels as ORIGINAL_GB_ART, so the
                 // opening and its antialiased edge always align precisely.
                 let mask = black_mask_from_front(&front);

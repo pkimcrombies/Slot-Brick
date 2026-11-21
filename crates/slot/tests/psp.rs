@@ -29,6 +29,7 @@ fn psp_replaces_ps1_in_the_carousel_and_systems_list() {
 
 #[test]
 fn the_carousel_browses_mixed_systems_in_title_order() {
+    use slot_gfx::{Draw, OUT_H, OUT_W};
     use slot_input::{Action, Btn};
     use slot_store::{Platform, SlotState};
 
@@ -40,14 +41,27 @@ fn the_carousel_browses_mixed_systems_in_title_order() {
         std::fs::write(root.path().join(game), []).unwrap();
     }
     let mut app = slot::app::App::boot(root.path());
+    let assert_nes_pink = |app: &slot::app::App| {
+        let mut draws = Vec::new();
+        app.draw(&mut draws);
+        let background = draws.first().and_then(|draw| match *draw {
+            Draw::Rect { x, y, w, h, colour }
+                if x == 0.0 && y == 0.0 && w == OUT_W as f32 && h == OUT_H as f32 => Some(colour),
+            _ => None,
+        });
+        assert_eq!(background, Some([228.0 / 255.0, 205.0 / 255.0, 203.0 / 255.0, 1.0]));
+    };
     assert_eq!(app.selected_stem(), Some("Alpha"));
+    assert_nes_pink(&app);
     app.apply(Action::GbaDown(Btn::Right));
     app.apply(Action::GbaUp(Btn::Right));
     assert_eq!(app.selected_stem(), Some("Beta"));
+    assert_nes_pink(&app);
     app.apply(Action::GbaDown(Btn::L1));
     assert_eq!(app.selected_stem(), Some("Alpha"));
     app.apply(Action::Insert);
     assert_eq!(app.seated_cart().unwrap().platform, Platform::Psp);
+    assert_nes_pink(&app);
 }
 
 #[test]

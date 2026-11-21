@@ -3193,25 +3193,15 @@ impl App {
         }
     }
 
-    /// Android Original per-console shelf colour; preserve existing PS1 background.
-    fn draw_shelf_background(&self, out: &mut Vec<Draw>) {
-        // Baggio94/slot-for-android: menu_style.rs Original shelf palette.
-        let colour: Option<[u8; 3]> = match self.selected_cart().map_or(Platform::Gba, |cart| cart.platform) {
-            Platform::Gba => Some([228, 205, 203]), // GBA: use NES rose-grey to match grey Brick
-            Platform::Gb => Some([202, 211, 168]),   // Game Boy green
-            Platform::Gbc => Some([243, 227, 160]),  // GBC pale yellow
-            Platform::Nes => Some([228, 205, 203]),  // NES pale rose
-            Platform::Snes => Some([205, 211, 222]), // SNES blue grey
-            _ => None,
-        };
-        if let Some([r, g, b]) = colour {
-            out.push(Draw::Rect {
-                x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
-                colour: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
-            });
-        } else {
-            draw_backdrop(self.wallpaper, out);
-        }
+    /// Share the Android Original NES pink across the carousel and its transitions.
+    fn draw_shelf_background(out: &mut Vec<Draw>) {
+        out.push(Draw::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: OUT_W as f32,
+            h: OUT_H as f32,
+            colour: [228.0 / 255.0, 205.0 / 255.0, 203.0 / 255.0, 1.0],
+        });
     }
 
     pub fn draw(&self, out: &mut Vec<Draw>) {
@@ -3363,7 +3353,7 @@ impl App {
             }
             .draw(out),
             Phase::Shelf => {
-                self.draw_shelf_background(out);
+                Self::draw_shelf_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     // A game's discs fanned out: the rest of the shelf steps back behind them.
                     _ if self.disc_picker.is_some() => {
@@ -3410,14 +3400,14 @@ impl App {
             }
             Phase::Inserting { cart, resumed, .. } => {
                 if !resumed {
-                    self.draw_shelf_background(out);
+                    Self::draw_shelf_background(out);
                     self.shelf()
                         .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 }
                 self.chrome(cart, self.seat(), out);
             }
             Phase::Ejecting { cart, .. } => {
-                self.draw_shelf_background(out);
+                Self::draw_shelf_background(out);
                 self.shelf()
                     .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 self.chrome(cart, self.seat(), out);

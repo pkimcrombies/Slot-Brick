@@ -11,7 +11,7 @@ use slot_ui::{
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
     quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
-    wallpaper_face, word_face, word_face_ink, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
+    wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
     QuickRow, QuickValue, RebuildScreen, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
     HUD_ICON_PX, HUD_INK, LEGEND,
 };
@@ -326,6 +326,7 @@ struct Clocks {
     shelf: Option<TexId>,
     picked: Option<String>,
     shown: String,
+    status_scale: [f32; 2],
     battery: String,
     battery_tex: Option<TexId>,
     platform: String,
@@ -1101,6 +1102,12 @@ fn sync_switcher(app: &mut App, compositor: &mut Compositor, texes: Faces, state
 }
 
 fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
+    let scale = if cfg!(feature = "brick") { compositor.ui_scale() } else { [1.0, 1.0] };
+    let scale_changed = scale != clocks.status_scale;
+    if scale_changed {
+        clocks.status_scale = scale;
+        app.set_status_text_scale(scale);
+    }
     let picked = app.picker().map(|p| p.text());
     if picked != clocks.picked {
         clocks.picked = picked;
@@ -1110,10 +1117,9 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
         }
     }
     let shown = hhmm(app.wall_secs());
-    if shown != clocks.shown {
-        let face = word_face_ink(&shown, SHELF_STATUS_INK);
+    if shown != clocks.shown || scale_changed {
+        let (face, w) = word_face_ink_scaled(&shown, SHELF_STATUS_INK, scale);
         clocks.shown = shown;
-        let w = face.w;
         let id = upload(compositor, &mut clocks.shelf, face);
         app.set_shelf_clock_face(id, w);
     }
@@ -1152,11 +1158,10 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
         .battery()
         .map(|b| format!("{}%", b.percent))
         .unwrap_or_default();
-    if battery_shown != clocks.battery {
+    if battery_shown != clocks.battery || scale_changed {
         clocks.battery = battery_shown.clone();
         if !battery_shown.is_empty() {
-            let face = word_face_ink(&battery_shown, SHELF_STATUS_INK);
-            let w = face.w;
+            let (face, w) = word_face_ink_scaled(&battery_shown, SHELF_STATUS_INK, scale);
             let id = upload(compositor, &mut clocks.battery_tex, face);
             app.set_battery_percent_face(id, w);
         }

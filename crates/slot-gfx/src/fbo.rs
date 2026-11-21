@@ -185,6 +185,10 @@ impl Compositor {
         self.size = size;
     }
 
+    pub fn ui_scale(&self) -> [f32; 2] {
+        [self.size.0 as f32 / OUT_W as f32, self.size.1 as f32 / OUT_H as f32]
+    }
+
     pub fn set_frame_split(&mut self, canvas_y: Option<f32>) {
         self.split = canvas_y;
     }

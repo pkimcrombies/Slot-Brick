@@ -313,8 +313,8 @@ pub fn upload_slot_art(brick_pro: bool, mut upload: impl FnMut(u32,u32,&[u8])->T
                     for pixel in back.chunks_exact_mut(4).chain(front.chunks_exact_mut(4)) {
                         let luma = (f32::from(pixel[0]) + f32::from(pixel[1]) + f32::from(pixel[2])) / 3.0;
                         let strength = ((luma - 85.0) / 80.0).clamp(0.0, 1.0);
-                        for (channel, delta) in pixel[..3].iter_mut().zip([13.0, 7.0, 11.0]) {
-                            *channel = channel.saturating_add((strength * delta).round() as u8);
+                        for (channel, delta) in pixel[..3].iter_mut().zip([8.0, 2.0, -9.0]) {
+                            *channel = channel.saturating_add_signed((strength * delta).round() as i8);
                         }
                     }
                 }

@@ -412,6 +412,7 @@ pub struct App {
     slot_word: Option<&'static str>,
     shelf_named: Option<Millis>,
     shelf_clock: slot_ui::Printed,
+    status_text_scale: [f32; 2],
     hud: Hud,
     screen: f32,
     lift: f32,
@@ -676,6 +677,7 @@ impl App {
             slot_word: None,
             shelf_named: None,
             shelf_clock: slot_ui::Printed::default(),
+            status_text_scale: [1.0, 1.0],
             hud: Hud::new(),
             screen: 0.0,
             lift: 1.0,
@@ -1337,6 +1339,10 @@ impl App {
 
     pub fn set_shelf_clock_face(&mut self, face: TexId, w: u32) {
         self.shelf_clock = slot_ui::Printed::new(face, w);
+    }
+
+    pub fn set_status_text_scale(&mut self, scale: [f32; 2]) {
+        self.status_text_scale = scale;
     }
 
     pub fn phase(&self) -> &Phase {
@@ -3391,6 +3397,7 @@ impl App {
                     self.wifi_face(),
                     self.update_face(),
                     self.shelf_clock,
+                    self.status_text_scale,
                     out,
                 );
             }

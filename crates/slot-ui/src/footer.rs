@@ -93,6 +93,20 @@ fn printed(x: f32, p: Printed, out: &mut Vec<Draw>) {
     draw_printed(x, FOOTER_Y, p, out);
 }
 
+pub(crate) fn draw_status_text(x: f32, y: f32, p: Printed, [sx, sy]: [f32; 2], out: &mut Vec<Draw>) {
+    let Some(tex) = p.face.filter(|_| p.w > 0) else {
+        draw_printed(x, y, p, out);
+        return;
+    };
+    out.push(Draw::Tex {
+        x: (x * sx).round() / sx,
+        y: (y * sy).round() / sy,
+        w: (p.w as f32 * sx).round() / sx,
+        h: (HINT_H as f32 * sy).round() / sy,
+        tex,
+        alpha: 1.0,
+    });
+}
 
 /// Android-style shelf status line, 12px from the top and 24px from both edges.
 /// The clock is black at top-left; black battery, connected Wi-Fi and update
@@ -107,10 +121,11 @@ pub fn draw_status_bar(
     wifi: Option<(TexId, u32, u32)>,
     update: Option<(TexId, u32, u32)>,
     clock: Printed,
+    text_scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
     // Clock uses a dedicated black word texture; don't recolour global HUD text.
-    draw_printed(STATUS_MARGIN, STATUS_TOP_Y, clock, out);
+    draw_status_text(STATUS_MARGIN, STATUS_TOP_Y, clock, text_scale, out);
 
     let battery_right = OUT_W as f32 - STATUS_MARGIN;
     let battery_top = STATUS_TOP_Y + (HINT_H as f32 - GAUGE_H) / 2.0;
@@ -121,6 +136,7 @@ pub fn draw_status_bar(
         percent,
         bolt,
         [0.0, 0.0, 0.0, 1.0],
+        text_scale,
         out,
     );
 
@@ -146,7 +162,7 @@ mod status_position_tests {
     fn clock_starts_in_the_top_left_corner() {
         let mut out = Vec::new();
         let clock = Printed { face: None, w: 50 };
-        draw_status_bar(None, Printed::default(), None, None, None, clock, &mut out);
+        draw_status_bar(None, Printed::default(), None, None, None, clock, [1.0, 1.0], &mut out);
         assert!(matches!(out.first(), Some(Draw::Rect { x, y, w, h, .. })
             if *x == STATUS_MARGIN && *y == STATUS_TOP_Y
             && *w == 50.0 && *h == HINT_H as f32));
@@ -155,7 +171,33 @@ mod status_position_tests {
     #[test]
     fn disconnected_wifi_slot_is_empty() {
         let mut out = Vec::new();
-        draw_status_bar(None, Printed::default(), None, None, None, Printed::default(), &mut out);
+        draw_status_bar(None, Printed::default(), None, None, None, Printed::default(), [1.0, 1.0], &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn status_text_uses_one_texel_per_canvas_pixel() {
+        let scale = [1.6, 1.6];
+        let clock = TexId::from_raw(10);
+        let percent = TexId::from_raw(11);
+        let (clock_face, clock_width) = crate::word_face_ink_scaled("08:08", [0; 3], scale);
+        let (percent_face, percent_width) = crate::word_face_ink_scaled("100%", [0; 3], scale);
+        let battery = Battery { percent: 100, charge: slot_power::Charge::Discharging };
+        let mut out = Vec::new();
+        draw_status_bar(
+            Some(battery), Printed::new(percent, percent_width), None, None, None,
+            Printed::new(clock, clock_width), scale, &mut out,
+        );
+        for (id, face) in [(clock, clock_face), (percent, percent_face)] {
+            let (x, y, w, h) = out.iter().find_map(|&draw| match draw {
+                Draw::Tex { x, y, w, h, tex, .. } if tex == id => Some((x, y, w, h)),
+                _ => None,
+            }).unwrap();
+            for coordinate in [x * scale[0], y * scale[1]] {
+                assert!((coordinate - coordinate.round()).abs() < 0.001);
+            }
+            assert!((w * scale[0] - face.w as f32).abs() < 0.001);
+            assert!((h * scale[1] - face.h as f32).abs() < 0.001);
+        }
     }
 }

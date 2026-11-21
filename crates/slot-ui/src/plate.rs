@@ -107,13 +107,22 @@ pub fn word_face(text: &str) -> UndoFace {
 
 /// Render a status label using the existing font and metrics in a chosen ink.
 pub fn word_face_ink(text: &str, ink: [u8; 3]) -> UndoFace {
-    let w = word_width(text);
-    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    word_face_ink_scaled(text, ink, [1.0, 1.0]).0
+}
+
+/// Rasterize at canvas resolution while keeping the word's logical layout width.
+pub fn word_face_ink_scaled(text: &str, ink: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
+    let width = word_width(text);
+    let w = (width as f32 * sx).round() as u32;
+    let h = (HINT_H as f32 * sy).round() as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
     if let Some(font) = text::label_font() {
-        let layout = text::fit(font, text, w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink);
+        let mut layout = text::fit(font, text, width as f32, 1, LABEL_PX, LABEL_MIN_PX);
+        layout.px *= sy;
+        layout.tracking *= sy;
+        text::draw_centred(&mut rgba, w, h, &layout, ink);
     }
-    UndoFace { rgba, w, h: HINT_H }
+    (UndoFace { rgba, w, h }, width)
 }
 
 pub fn hint_quad(x: f32, y: f32, w: f32, face: Option<TexId>) -> Draw {

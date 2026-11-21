@@ -1,7 +1,7 @@
 use slot_gfx::{Draw, TexId};
 use slot_power::{Battery, Charge};
 
-use crate::footer::Printed;
+use crate::footer::{draw_status_text, Printed};
 use crate::hud::HUD_INK;
 use crate::plate::HINT_H;
 
@@ -131,6 +131,7 @@ pub fn draw_status_gauge(
     percent: Printed,
     bolt: Option<TexId>,
     ink: [f32; 4],
+    text_scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
     let Some(b) = battery else { return };
@@ -150,7 +151,6 @@ pub fn draw_status_gauge(
         rect(x + 2.0 * WALL, y + 2.0 * WALL, fill, GAUGE_H - 4.0 * WALL, out);
     }
 
-    let mut px = x + GAUGE_W + NUB_W + GAP;
     if b.charge == Charge::Charging {
         let bx = x + GAUGE_W + NUB_W + BOLT_GAP;
         if let Some(tex) = bolt {
@@ -163,18 +163,16 @@ pub fn draw_status_gauge(
                 alpha: 1.0,
             });
         }
-        px = bx + BOLT_W + STATUS_BOLT_TEXT_GAP;
     }
 
-    if let Some(tex) = percent.face.filter(|_| percent.w > 0) {
-        out.push(Draw::Tex {
-            x: px,
-            y: y + (GAUGE_H - HINT_H as f32) / 2.0,
-            w: percent.w as f32,
-            h: HINT_H as f32,
-            tex,
-            alpha: 1.0,
-        });
+    if percent.face.is_some() {
+        draw_status_text(
+            right - percent.w as f32,
+            y + (GAUGE_H - HINT_H as f32) / 2.0,
+            percent,
+            text_scale,
+            out,
+        );
     }
 }
 
@@ -201,7 +199,7 @@ mod status_tests {
         let p = Printed { face: None, w: 35 };
         let right = 696.0;
         let mut out = Vec::new();
-        draw_status_gauge(right, 18.5, battery, p, None, [0.0, 0.0, 0.0, 1.0], &mut out);
+        draw_status_gauge(right, 18.5, battery, p, None, [0.0, 0.0, 0.0, 1.0], [1.0, 1.0], &mut out);
         assert!(matches!(out.first(), Some(Draw::Rect { x, y, colour, .. })
             if (*x - (right - status_gauge_width(battery, p))).abs() < 0.01
             && (*y - 18.5).abs() < 0.01

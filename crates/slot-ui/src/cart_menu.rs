@@ -283,3 +283,66 @@ pub fn cart_menu_caret_face(right: bool) -> UndoFace {
     }
     face
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cartridge_rows_use_system_settings_rhythm_and_align_to_right_edge() {
+        assert_eq!(PITCH, QUICK_PITCH);
+        assert_eq!(rows_top(4), quick_top(4));
+        assert_eq!(rows_top(3), quick_top(3));
+        assert_eq!(PANEL_RIGHT, OUT_W as f32 - QUICK_EDGE);
+        assert!(LABEL_W > 0.0);
+        assert!(VALUE_X - (PANEL_X + LABEL_W) >= 16.0);
+        assert!(VALUE_X + VALUE_W + 24.0 <= PANEL_RIGHT);
+        assert!(rows_top(4) + 4.0 * PITCH < LEGEND_Y);
+    }
+
+    #[test]
+    fn cartridge_menu_is_black_and_keeps_the_large_cart_without_selection_box() {
+        let rows = [CartRow::Colour, CartRow::Finish, CartRow::Shape, CartRow::Reset];
+        let tex = TexId::from_raw(38);
+        let view = CartMenuView {
+            rows: &rows, row: CartRow::Colour,
+            colour: 0, finish: 0, shape: 0,
+            cart: Some((tex, 120, 135)), recess: None, faces: None, online: true,
+        };
+        let mut out = Vec::new();
+        view.draw(&mut out);
+        assert_eq!(out.len(), 2, "no painted selection bar or decorative panel");
+        assert!(matches!(&out[0], Draw::Rect { colour, .. }
+            if *colour == MENU_BACKGROUND));
+        assert!(matches!(&out[1], Draw::Tex { tex: shown, .. }
+            if *shown == tex), "cart preview remains visible at the left");
+    }
+
+    fn assert_ink(face: &UndoFace, expected: [u8; 3]) {
+        let pixels: Vec<_> = face.rgba.chunks_exact(4).filter(|px| px[3] > 0).collect();
+        assert!(!pixels.is_empty(), "the label face should contain visible glyphs");
+        assert!(pixels.iter().all(|p| p[..3] == expected),
+            "every visible pixel uses the shared menu palette");
+    }
+
+    #[test]
+    fn cartridge_labels_values_and_arrows_use_quick_menu_selection_colours() {
+        assert_ink(&cart_menu_label_face(CartRow::Colour, false), MENU_TEXT_INK);
+        assert_ink(&cart_menu_label_face(CartRow::Colour, true), MENU_SELECTION_INK);
+        assert_ink(&cart_menu_value_face("Game Boy Color", false), MENU_MUTED_INK);
+        assert_ink(&cart_menu_value_face("Game Boy Color", true), MENU_SELECTION_INK);
+        assert_ink(&cart_menu_label_face(CartRow::Reset, true), MENU_SELECTION_INK);
+        assert_ink(&cart_menu_caret_face(true), MENU_SELECTION_INK);
+        let longest = cart_menu_value_face("Europe / Japan", true);
+        assert!(longest.w as f32 <= VALUE_W + 1.0,
+            "a long value must not intrude into the right caret");
+    }
+
+    #[test]
+    fn cartridge_hint_faces_keep_cancel_change_save_reset_and_label() {
+        let faces = cart_menu_legend_faces();
+        assert_eq!(faces.len(), 5);
+        assert!(faces.iter().all(|face| face.w > 0 && face.h == HINT_H));
+    }
+}
+

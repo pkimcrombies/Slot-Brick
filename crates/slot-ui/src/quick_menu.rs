@@ -1,7 +1,7 @@
 use crate::draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
 use crate::plate::{arrows_hint_face_scaled, centred_hints, hint_face_scaled, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
 use crate::power_menu::{MENU_H, MENU_INK, MENU_PAD, MENU_PX};
-use crate::slot_chrome::{edge, opening};
+use crate::slot_chrome::edge;
 use crate::text::{self, Case};
 
 /// The Brick Pro: set once at startup, it adds the Brick Pro's own rows (the stick lights).
@@ -701,6 +701,7 @@ const CARET_GAP: f32 = 14.0;
 const CARET_PX: f32 = 24.0;
 pub const QUICK_SPLIT: f32 = LEGEND_Y - 2.0;
 pub const QUICK_TEXT_H: u32 = MENU_H;
+pub const MENU_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const DIM_INK: [u8; 3] = [0x9a, 0x9a, 0xa4];
 
 pub fn quick_label_face(row: QuickRow) -> UndoFace {
@@ -846,7 +847,7 @@ impl QuickMenu<'_> {
             y: 0.0,
             w: OUT_W as f32,
             h: OUT_H as f32,
-            colour: opening(),
+            colour: MENU_BACKGROUND,
         });
         out.push(Draw::Rect {
             x: 0.0,

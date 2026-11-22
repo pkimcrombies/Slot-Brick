@@ -1,7 +1,7 @@
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_ui::{
-    centred_hints, edge, menu_hint_face_scaled, music_text_face, opening, pixel_aligned_texture,
-    UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y,
+    centred_hints, edge, menu_hint_face_scaled, music_text_face, pixel_aligned_texture, UndoFace,
+    HINT_H, LEGEND_GAP, LEGEND_Y, MENU_BACKGROUND,
 };
 
 use crate::music::{Music, Status, Track};
@@ -43,7 +43,7 @@ impl MusicView {
             scale,
             draws: Vec::new(),
         };
-        p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], opening());
+        p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MENU_BACKGROUND);
         if let Some(track) = &music.track {
             p.playing(music, track);
         } else {

@@ -92,7 +92,7 @@
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
   1 minute/2 minutes; default 1 minute), and **Dim brightness**
   (physical backlight step 1-9, default 1). **X** on Now Playing cycles
-  repeat; the indicator at bottom-right (32×32, below progress and time)
+  repeat; the indicator at bottom-right (28×28, below progress and time)
   now loads the exact UXWing Repeat Off/All/One transparent PNG icons from
   `Slot/System/music-icons/repeat-{off,all,one}.png`, cached as three GPU
   textures and tinted muted-ink/rose. The installer downloads and verifies
@@ -258,6 +258,17 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Music margin/icon refinement:** Shared Shelf HUD left
+  clock at x=24, while Music used `QUICK_EDGE=32`. Exposed the
+  existing `STATUS_MARGIN` from `slot_ui` and made Music's
+  `EDGE=STATUS_MARGIN=24`, aligning tabs, artwork, list rows and
+  playback/progress left edges without changing screen semantics.
+  Reduced UXWing repeat texture from 32x32 to 28x28, retaining the
+  bottom-right anchor (x=588, y=432 and 20px bottom clearance)
+  and smaller RGBA decode/upload. Added layout tests.
+  Rust/ARM64 build and device visual verification pending.
+
 
 - **2026-11-23 UXWing repeat icon layout regression:** installer pinned
   `3d9ae19` stopped before touching SD: 265 passed, 1 failed, 8 ignored

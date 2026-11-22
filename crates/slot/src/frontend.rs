@@ -1190,7 +1190,14 @@ impl Frontend {
         }
         let now = Instant::now();
         self.power_fade.begin_sleep(now, &self.draws);
-        self.power_fade.sleep_frame_needed(now)
+        let needs_frame = self.power_fade.sleep_frame_needed(now);
+        if !needs_frame {
+            // The device's backlight has stayed on through the 300ms fade,
+            // including the final black frame swapped by device_app. Only
+            // now is it safe to turn off the physical LCD illumination.
+            self.session.app_mut().finish_doze_fade();
+        }
+        needs_frame
     }
 
     #[cfg(feature = "brick")]
@@ -1888,6 +1895,8 @@ mod power_fade_tests {
         assert_eq!(PowerFade::progress(start, start, SLEEP_FADE), 0.0);
         assert_eq!(PowerFade::progress(start + SLEEP_FADE, start, SLEEP_FADE), 1.0);
         assert!(fade.sleep_frame_needed(start + SLEEP_FADE)); // Last solid black frame
+        // The caller only closes the hardware backlight on this false return,
+        // i.e. one loop iteration after the fully black frame was swapped.
         assert!(!fade.sleep_frame_needed(start + SLEEP_FADE));
     }
 

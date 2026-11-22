@@ -82,8 +82,16 @@
   physical playback controls. Device feedback on this redesign is pending.
 - Fades are in `crates/slot/src/frontend.rs` (`NavFade`, `PowerFade`);
   sleep handling also uses `device_app.rs`. Boot 440ms, menu 220ms,
-  sleep 300ms, wake 360ms, shutdown 210ms. Returning from game ejection
-  **must not** add a black navigation fade; fix `85b0331` was confirmed smooth.
+  sleep 300ms, wake 360ms, shutdown 210ms. **Brick sleep-fade fix
+  (2026-11-22):** `App::doze()` had called `Power::on_close()` too early,
+  physically setting the backlight to zero before the 300ms GPU fade could
+  become visible. For Brick only, defer that hardware close until
+  `Frontend::sleep_fade_frame()` has presented its last black frame;
+  `App::finish_doze_fade()` closes once then, with a mock-backlight test
+  to protect mid-fade brightness and wake restoration. Non-Brick lid
+  semantics, the 3.3s suspend delay and wake fade remain unchanged.
+  Returning from game ejection **must not** add a black navigation fade;
+  fix `85b0331` was confirmed smooth.
   First-frame boot fade must also work when Slot starts in `Phase::Inserting`
   (saved cartridge), not only `Phase::Shelf`; track this independent of
   later navigation transitions.

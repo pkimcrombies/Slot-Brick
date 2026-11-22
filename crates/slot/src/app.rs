@@ -4176,8 +4176,23 @@ impl App {
             if let Err(e) = leds.sleep() { eprintln!("slot: LEDs sleep: {e}"); }
         }
         self.radio.ask(RadioJob::Cool);
+        // On Brick, the sleep fade still needs the LCD backlight for 300 ms.
+        // device_app will close it after presenting the fully black frame.
+        // Other platforms keep their existing immediate lid-close behavior.
+        #[cfg(not(feature = "brick"))]
         if let Some(power) = &mut self.power {
             power.on_close();
+        }
+    }
+
+    /// The Brick display must not go dark before the sleep animation has
+    /// actually reached and presented its final black frame.
+    #[cfg(feature = "brick")]
+    pub(crate) fn finish_doze_fade(&mut self) {
+        if matches!(self.phase, Phase::Doze { .. }) {
+            if let Some(power) = &mut self.power {
+                power.on_close();
+            }
         }
     }
 
@@ -6695,6 +6710,61 @@ mod quiet_poweroff_tests {
         exiting.apply(Action::GbaDown(Btn::A));
         assert!(exiting.restarting());
         assert!(!exiting.shutdown_haptic);
+    }
+
+    /// Mimics the real Brick Platform's immediate backlight register writes.
+    /// This catches a regression where Doze used to turn off the LCD before
+    /// its fade reached the panel, making a correct GPU fade invisible.
+    struct RecordingBacklight {
+        root: PathBuf,
+        writes: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl slot_power::Platform for RecordingBacklight {
+        fn set_backlight(&mut self, step: u8) {
+            self.writes.lock().unwrap().push(step);
+        }
+        fn battery(&self) -> Option<slot_power::Battery> { None }
+        fn charge(&self) -> slot_power::Charge { slot_power::Charge::Unknown }
+        fn set_led(&mut self, _: slot_power::LedState) {}
+        fn poweroff(&mut self) -> ! { panic!("poweroff during backlight test") }
+        fn restart(&mut self) -> ! { panic!("restart during backlight test") }
+        fn root(&self) -> &std::path::Path { &self.root }
+        fn now(&self) -> i64 { 1_800_000_000 }
+        fn set_clock(&mut self, _: i64) {}
+        fn set_rumble(&mut self, _: u16) {}
+    }
+
+    #[test]
+    fn brick_doze_keeps_backlight_on_until_last_black_fade_frame() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let platform = RecordingBacklight {
+            root: root.path().to_path_buf(),
+            writes: writes.clone(),
+        };
+        app.set_power(Power::new(Box::new(platform), std::time::Duration::from_secs(180)));
+        app.power.as_mut().unwrap().set_backlight(5);
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(5));
+
+        app.doze();
+        assert!(matches!(app.phase(), Phase::Doze { .. }));
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(5),
+            "hardware backlight must stay on while the GPU fades to black");
+        app.finish_doze_fade();
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(0));
+        let count = writes.lock().unwrap().len();
+        app.finish_doze_fade();
+        assert_eq!(writes.lock().unwrap().len(), count,
+            "finish_doze_fade must not repeatedly write the backlight");
+        app.wake();
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(5),
+            "waking must restore the configured brightness");
     }
 
     #[test]

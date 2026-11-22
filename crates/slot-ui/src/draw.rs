@@ -1,7 +1,7 @@
 pub use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 
 /// Place a texture rasterized at display resolution on the same physical pixel grid.
-pub(crate) fn pixel_aligned_texture(
+pub fn pixel_aligned_texture(
     tex: TexId,
     [x, y]: [f32; 2],
     [w, h]: [f32; 2],

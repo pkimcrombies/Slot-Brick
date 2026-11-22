@@ -92,10 +92,11 @@ pub enum QuickRow {
     SoundLabel,
     SoundVolume,
     UpdateCheck,
+    Music,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 79] = [
+    pub const ALL: [QuickRow; 80] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -175,6 +176,7 @@ impl QuickRow {
         QuickRow::SoundLabel,
         QuickRow::SoundVolume,
         QuickRow::UpdateCheck,
+        QuickRow::Music,
     ];
 
     #[cfg(not(feature = "brick"))]
@@ -183,7 +185,10 @@ impl QuickRow {
     pub const SYSTEM: [QuickRow; 7] = [QuickRow::DateTime, QuickRow::Font, QuickRow::Rumble, QuickRow::SystemSounds, QuickRow::BatteryShutdown, QuickRow::ResetSettings, QuickRow::About];
 
     #[cfg(feature = "brick")]
-    pub const MAIN: [QuickRow; 5] = [QuickRow::Screen,QuickRow::Game,QuickRow::Library,QuickRow::Online,QuickRow::System];
+    pub const MAIN: [QuickRow; 6] = [
+        QuickRow::Screen, QuickRow::Game, QuickRow::Library, QuickRow::Online, QuickRow::Music,
+        QuickRow::System,
+    ];
     /// System: the Brick's lights, its clock, the font, rumble, Slot's sounds, the battery,
     /// asking GitHub for a newer Slot, every setting back to how it came, and what Slot is.
     #[cfg(feature = "brick")]
@@ -423,6 +428,7 @@ impl QuickRow {
             QuickRow::Saving => "Saving",
             QuickRow::AutoClock => "Auto Clock",
             QuickRow::UpdateCheck => "Check for Updates",
+            QuickRow::Music => "Music",
             QuickRow::Font => "Font",
             QuickRow::Lights => "LEDs",
             QuickRow::LedMode => "All LEDs",
@@ -492,7 +498,7 @@ impl QuickRow {
             self,
             QuickRow::DateTime | QuickRow::About | QuickRow::Screen | QuickRow::Game | QuickRow::Lights | QuickRow::Wifi | QuickRow::CartArt | QuickRow::Achievements | QuickRow::Update | QuickRow::System | QuickRow::Library
                 | QuickRow::LibrarySystems | QuickRow::ResetSettings | QuickRow::AboutLabel | QuickRow::SystemSounds
-                | QuickRow::Online | QuickRow::Clock | QuickRow::Saving
+                | QuickRow::Online | QuickRow::Clock | QuickRow::Saving | QuickRow::Music
                 | QuickRow::ScreenGb | QuickRow::ScreenGba | QuickRow::ScreenNes | QuickRow::ScreenSnes | QuickRow::ScreenPs1
         )
     }
@@ -799,12 +805,16 @@ pub fn quick_legend_faces() -> [UndoFace; 4] {
     quick_legend_faces_scaled([1.0, 1.0]).map(|(face, _)| face)
 }
 
+pub fn menu_hint_face_scaled(key: &str, label: &str, scale: [f32; 2]) -> (UndoFace, u32) {
+    hint_face_scaled(key, label, scale, Case::Lower)
+}
+
 pub fn quick_legend_faces_scaled(scale: [f32; 2]) -> [(UndoFace, u32); 4] {
     [
-        hint_face_scaled("B", "back", scale, Case::Lower),
+        menu_hint_face_scaled("B", "back", scale),
         arrows_hint_face_scaled("change", scale, Case::Lower),
-        hint_face_scaled("A", "open", scale, Case::Lower),
-        hint_face_scaled("A", "reset", scale, Case::Lower),
+        menu_hint_face_scaled("A", "open", scale),
+        menu_hint_face_scaled("A", "reset", scale),
     ]
 }
 

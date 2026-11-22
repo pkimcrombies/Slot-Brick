@@ -111,6 +111,23 @@ fn the_quick_menu_is_only_on_the_carousel() {
     assert_eq!(a.quick_menu(), None);
 }
 
+#[cfg(feature = "brick")]
+#[test]
+fn music_opens_from_the_menu_and_returns_to_the_same_carousel() {
+    let (_d, mut a, _) = on_carousel();
+    press(&mut a, Btn::Right);
+    let row = QuickRow::Music;
+    assert!(QuickRow::MAIN.contains(&row));
+    open_at(&mut a, row);
+    press(&mut a, Btn::A);
+    assert!(matches!(a.phase(), Phase::Music));
+    press(&mut a, Btn::B);
+    assert_eq!(a.quick_menu(), Some(row));
+    press(&mut a, Btn::B);
+    assert!(matches!(a.phase(), Phase::Shelf));
+    assert_eq!(a.selected_stem(), Some("Fusion"));
+}
+
 #[test]
 fn up_and_down_move_the_bar_and_wrap_at_the_ends() {
     let (_d, mut a, _) = on_carousel();

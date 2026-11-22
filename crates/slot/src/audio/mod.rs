@@ -72,8 +72,12 @@ pub fn open_sink() -> Box<dyn AudioSink> {
     Box::new(AlsaSink::new())
 }
 
-/// The simulator has no speaker: sound is played into nothing at the speed a speaker would.
+/// The simulator has no speaker. Scenarios can use the device's audio pace.
 #[cfg(feature = "sim")]
 pub fn open_sink() -> Box<dyn AudioSink> {
-    Box::new(StubSink::draining())
+    if std::env::var_os("SLOT_SIM_REALTIME_AUDIO").is_some() {
+        Box::new(StubSink::real_time())
+    } else {
+        Box::new(StubSink::draining())
+    }
 }

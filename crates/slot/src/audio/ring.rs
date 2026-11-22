@@ -101,6 +101,23 @@ impl Ring {
         }
     }
 
+    /// Drop queued audio from the previous source before a new track or screen takes over.
+    pub(crate) fn discard(&self) {
+        let mut i = self.lock();
+        i.drained += i.len as u64;
+        i.head = 0;
+        i.len = 0;
+        i.pending.clear();
+        i.placed = 0;
+        i.voice.clear();
+        i.voice_kind = None;
+        i.voice_laid = 0;
+        self.queued.store(0, Ordering::Relaxed);
+        self.priming.store(false, Ordering::Relaxed);
+        drop(i);
+        self.room.notify_all();
+    }
+
     pub fn push_blocking(&self, samples: &[i16]) {
         if self.muted() || self.capacity_frames() == 0 || !self.consuming.load(Ordering::Relaxed) {
             self.push(samples);

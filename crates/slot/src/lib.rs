@@ -18,6 +18,8 @@ pub mod face_builder;
 pub mod fonts;
 pub mod frames;
 pub mod frontend;
+mod music;
+mod music_view;
 pub mod input;
 pub mod label_cache;
 pub mod latency;

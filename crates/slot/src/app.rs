@@ -269,12 +269,15 @@ pub enum Phase {
         cart: String,
     },
     About,
+    Music,
     Doze {
         cart: Option<String>,
     },
 }
 
 pub struct App {
+    music: Option<crate::music::Music>,
+    music_draws: Vec<Draw>,
     #[cfg(feature = "brick")]
     pub(crate) wifi: Option<crate::brick_wifi::WifiMenu>,
     #[cfg(feature = "brick")]
@@ -574,6 +577,8 @@ impl App {
             net_up: false,
             net_on: false,
             wifi_face: None,
+            music: None,
+            music_draws: Vec::new(),
             #[cfg(feature = "brick")]
             auto_check: Default::default(),
             update_face: None,
@@ -1198,6 +1203,21 @@ impl App {
         }
     }
 
+    pub(crate) fn music(&self) -> Option<&crate::music::Music> {
+        self.music.as_ref()
+    }
+
+    pub(crate) fn music_mut(&mut self) -> Option<&mut crate::music::Music> {
+        if self.power_menu.is_some() || self.shutting_down() {
+            return None;
+        }
+        self.music.as_mut()
+    }
+
+    pub(crate) fn set_music_draws(&mut self, draws: Vec<Draw>) {
+        self.music_draws = draws;
+    }
+
     pub fn quick_value(&self, row: QuickRow) -> Option<QuickValue> {
         #[cfg(feature = "brick")]
         if row.led_setting() { return self.brick_leds.as_ref().and_then(|leds| leds.value(row)).or(Some(QuickValue::Unavailable)); }
@@ -1228,6 +1248,7 @@ impl App {
             QuickRow::SwapAb => Some(QuickValue::flag(self.state.swap_ab)),
             QuickRow::AutoClock => Some(QuickValue::flag(self.state.auto_clock)),
             QuickRow::UpdateCheck => Some(QuickValue::flag(self.state.update_check)),
+            QuickRow::Music => None,
             QuickRow::LibrarySort => Some(match self.state.library_sort {
                 slot_store::LibrarySort::Az => QuickValue::SortAz,
                 slot_store::LibrarySort::Console => QuickValue::SortConsole,
@@ -2189,6 +2210,14 @@ impl App {
                 self.menu_sound(MenuSound::Back);
             }
             Phase::QuickMenu { row } => self.quick_menu_input(row, action),
+            Phase::Music => {
+                if self.music.as_mut().is_some_and(|music| music.input(action)) {
+                    self.music = None;
+                    self.music_draws.clear();
+                    self.phase = Phase::QuickMenu { row: QuickRow::Music };
+                    self.menu_sound(MenuSound::Back);
+                }
+            }
             _ => {}
         }
     }
@@ -2281,6 +2310,12 @@ impl App {
 
     fn open_quick_row(&mut self, row: QuickRow) {
         match row {
+            QuickRow::Music => {
+                if let Some(root) = &self.root {
+                    self.music = Some(crate::music::Music::open(root));
+                    self.phase = Phase::Music;
+                }
+            }
             QuickRow::Wifi => {
                 #[cfg(feature = "brick")]
                 {self.wifi=Some(crate::brick_wifi::WifiMenu::new());}
@@ -2498,6 +2533,7 @@ impl App {
             QuickRow::LibraryPlayTime => s.play_time_hours = !s.play_time_hours,
             QuickRow::LibraryTitleCard => s.title_card = !s.title_card,
             QuickRow::UpdateCheck => s.update_check = !s.update_check,
+            QuickRow::Music => return,
             QuickRow::AutoClock => {
                 s.auto_clock = !s.auto_clock;
                 // Turned on: the clock is set as soon as Wi-Fi allows.
@@ -3363,6 +3399,7 @@ impl App {
                 disabled: QuickRow::ALL.map(|r| self.quick_disabled(r)),
             }
             .draw(out),
+            Phase::Music => out.extend_from_slice(&self.music_draws),
             Phase::Shelf => {
                 Self::draw_shelf_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
@@ -4081,6 +4118,8 @@ impl App {
     }
 
     fn doze(&mut self) {
+        self.music = None;
+        self.music_draws.clear();
         #[cfg(feature = "brick")]
         {self.wifi=None;}
         if self.link_active() {
@@ -4122,7 +4161,7 @@ impl App {
     #[cfg(feature = "brick")]
     pub(crate) fn idle_doze(&mut self) {
         if self.link_active() {return}
-        if matches!(self.phase, Phase::Shelf | Phase::QuickMenu { .. } | Phase::Playing { .. }) {
+        if matches!(self.phase, Phase::Shelf | Phase::QuickMenu { .. } | Phase::Playing { .. } | Phase::Music) {
             self.doze();
         }
     }

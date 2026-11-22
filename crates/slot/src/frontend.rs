@@ -76,6 +76,7 @@ pub struct Frontend {
     about: AboutFace,
     quick_clock: QuickClock,
     quick_menu_scale: [f32; 2],
+    music_view: crate::music_view::MusicView,
     overlay_tex: OverlayTex,
     #[cfg(feature = "brick")]
     wifi_tex: Option<TexId>,
@@ -404,6 +405,7 @@ impl Frontend {
             about: AboutFace::default(),
             quick_clock: QuickClock::default(),
             quick_menu_scale: [1.0, 1.0],
+            music_view: crate::music_view::MusicView::default(),
             overlay_tex: OverlayTex::default(),
             #[cfg(feature = "brick")]
             wifi_tex: None,
@@ -748,7 +750,7 @@ impl Frontend {
         if self.rebuild.is_some() || self.app().link_active() || self.session.actually_fast_forwarding() || self.session.actually_rewinding() {return Mode::Boost}
         match self.app().phase() {
             Phase::Playing{..} if self.session.observed_speed()==Some(crate::emu::Speed::Normal)=>Mode::Game,
-            Phase::Shelf|Phase::QuickMenu{..} if self.last_input.elapsed()>Duration::from_secs(2)=>Mode::Menu,
+            Phase::Shelf|Phase::QuickMenu{..}|Phase::Music if self.last_input.elapsed()>Duration::from_secs(2)=>Mode::Menu,
             _=>Mode::Boost,
         }
     }
@@ -759,7 +761,7 @@ impl Frontend {
         if self.app().wifi.as_ref().map(|w|w.dirty).unwrap_or(false) {return true}
         if self.app().banner_active() {return true}
         if self.render_effects()!=self.rendered_effects {return true}
-        if self.rebuild.is_some() || !matches!(self.app().phase(),Phase::Shelf|Phase::QuickMenu{..}) || self.last_input.elapsed()<Duration::from_secs(2) || self.last_render.elapsed()>=Duration::from_secs(1) {return true}
+        if self.rebuild.is_some() || !matches!(self.app().phase(),Phase::Shelf|Phase::QuickMenu{..}|Phase::Music) || self.last_input.elapsed()<Duration::from_secs(2) || self.last_render.elapsed()>=Duration::from_secs(1) {return true}
         let mut probe=Vec::new();self.app().draw(&mut probe);
         probe!=self.draws
     }
@@ -827,6 +829,10 @@ impl Frontend {
         sync_disc_faces(self.session.app_mut(), compositor, &mut self.clocks);
         sync_about(self.session.app_mut(), compositor, &mut self.about);
         sync_quick_clock(self.session.app_mut(), compositor, &mut self.quick_clock, self.quick_menu_scale);
+        if let Some(music) = self.session.app().music() {
+            let draws = self.music_view.render(music, compositor, self.quick_menu_scale);
+            self.session.app_mut().set_music_draws(draws);
+        }
         sync_named_texts(self.session.app_mut(), compositor, &mut self.overlay_tex, self.quick_menu_scale);
         sync_overlay(self.session.app_mut(), compositor, &mut self.overlay_tex);
         sync_label_grid(self.session.app_mut(), compositor, &mut self.label_grid_tex);
@@ -978,6 +984,7 @@ impl Frontend {
         if !self.auto_sleep || self.rebuild.is_some() || self.app().link_active() {return}
         let limit = match self.app().phase() {
             Phase::Shelf | Phase::QuickMenu { .. } => IDLE_MENU,
+            Phase::Music if !self.app().music().is_some_and(crate::music::Music::playing) => IDLE_MENU,
             Phase::Playing { .. } => IDLE_GAME,
             _ => return,
         };

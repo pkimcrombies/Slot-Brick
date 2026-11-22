@@ -22,6 +22,7 @@ pub struct Session {
     app: App,
     emu: Option<EmuHandle>,
     sink: Box<dyn AudioSink>,
+    music_active: bool,
     gestures: Gestures,
     pad: Pad,
     rewinding: bool,
@@ -54,6 +55,7 @@ impl Session {
             root,
             emu: None,
             sink,
+            music_active: false,
             gestures: if cfg!(feature = "brick") { Gestures::brick() } else { Gestures::new() },
             prefetch: Prefetch::default(),
             pad: Pad::default(),
@@ -254,6 +256,20 @@ impl Session {
 
     pub fn update(&mut self, dt: f32) {
         self.bridge_link(|app| app.update(dt));
+        let level = self.app.output_volume();
+        if let Some(music) = self.app.music_mut() {
+            let ring = self.sink.ring();
+            if !self.music_active {
+                ring.set_idle(true);
+                ring.discard();
+            }
+            music.update_audio(&ring, level);
+            self.music_active = true;
+        } else if std::mem::take(&mut self.music_active) {
+            let ring = self.sink.ring();
+            ring.discard();
+            ring.set_idle(false);
+        }
         if let Some(emu) = &self.emu {
             emu.set_volume(self.app.output_volume());
             crate::badge::prefetch(&self.root, emu.take_badge_urls());

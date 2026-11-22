@@ -26,6 +26,25 @@ impl StubSink {
         sink
     }
 
+    #[cfg(feature = "sim")]
+    pub fn real_time() -> Self {
+        let sink = StubSink::new();
+        let ring = sink.ring.clone();
+        std::thread::spawn(move || {
+            let period = std::time::Duration::from_millis(10);
+            let mut samples = Vec::new();
+            loop {
+                std::thread::sleep(period);
+                let frames = ring.sample_rate() as usize / 100;
+                if frames > 0 {
+                    samples.resize(frames * 2, 0);
+                    ring.fill(&mut samples);
+                }
+            }
+        });
+        sink
+    }
+
     pub fn muted(&self) -> bool {
         self.ring.muted()
     }

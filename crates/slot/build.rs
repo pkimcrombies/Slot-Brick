@@ -9,6 +9,12 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=vendor/dr_mp3");
+    cc::Build::new()
+        .file("vendor/dr_mp3/slot_mp3.c")
+        .warnings(false)
+        .compile("slot_mp3");
+
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
 

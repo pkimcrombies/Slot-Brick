@@ -278,9 +278,27 @@ pub fn run() {
         #[cfg(feature = "brick")]
         {
             frontend.idle_sleep();
-            cpu.mode(frontend.power_mode(),frontend.audio_underruns());
-            if matches!(frontend.app().phase(), slot::app::Phase::Doze { .. }) {
+            // Briefly keep the normal rendering clock while darkening the
+            // screen, then restore standby clocks for the rest of suspend.
+            let dozing = matches!(frontend.app().phase(), slot::app::Phase::Doze { .. });
+            let fading = dozing && frontend.sleep_fade_frame();
+            cpu.mode(
+                if fading { slot::brick_power::Mode::Boost } else { frontend.power_mode() },
+                frontend.audio_underruns(),
+            );
+            if dozing {
                 let since = *sleep_since.get_or_insert_with(Instant::now);
+                // A short wake-safe fade to black before kernel suspend.
+                // Keep the existing 3.3s suspend preparation and power handling.
+                let mut woke_this_cycle = false;
+                if fading {
+                    frontend.render(&mut compositor, surface.window_size());
+                    if let Err(e) = surface.swap() {
+                        eprintln!("slot: sleep fade: {e}");
+                        cpu.restore();
+                        std::process::exit(1);
+                    }
+                }
                 // Let the paused audio sink release ALSA and pending saves finish.
                 if !sleep_attempted && since.elapsed() >= Duration::from_millis(3300) {
                     sleep_attempted = true;
@@ -298,6 +316,7 @@ pub fn run() {
                         let woke = match &result {
                             Ok(status) if status.success() || confirmed || cancelled => {
                                 frontend.resume_sleep(&mut input);
+                                woke_this_cycle = true;
                                 sleep_since = None;
                                 sleep_attempted = false;
                                 true
@@ -314,8 +333,10 @@ pub fn run() {
                 }
                 pacer = Pacer::new();
                 #[cfg(feature = "sim")]
-                sim.tick(format!("{:?}", frontend.app().phase()), false, true, || surface.read_rgba());
-                std::thread::sleep(Duration::from_millis(100));
+                sim.tick(format!("{:?}", frontend.app().phase()), fading, true, || surface.read_rgba());
+                std::thread::sleep(Duration::from_millis(
+                    if woke_this_cycle { 0 } else if fading { 16 } else { 100 }
+                ));
                 continue;
             }
             sleep_since = None;

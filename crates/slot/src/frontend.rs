@@ -47,6 +47,10 @@ const ALERT_INK: [u8; 3] = [0xf0, 0xb4, 0x3c];
 /// Fade from the hardware boot logo into Slot, then into each navigated menu.
 const BOOT_FADE: Duration = Duration::from_millis(440);
 const MENU_FADE: Duration = Duration::from_millis(220);
+const SLEEP_FADE: Duration = Duration::from_millis(300);
+const WAKE_FADE: Duration = Duration::from_millis(360);
+/// Power-off still uses the existing 250 ms confirmation interval.
+const SHUTDOWN_FADE: Duration = Duration::from_millis(210);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NavScene {
@@ -118,6 +122,70 @@ impl NavFade {
     }
 }
 
+/// Power transitions reuse the last visible draw list, so entering Doze or the
+/// shutdown screen never exposes an abrupt black frame. Rendering is time-bound.
+#[derive(Default)]
+struct PowerFade {
+    sleep: Option<(Instant, Vec<Draw>)>,
+    sleep_black_presented: bool,
+    wake: Option<Instant>,
+    shutdown: Option<(Instant, Vec<Draw>)>,
+}
+
+impl PowerFade {
+    fn progress(now: Instant, since: Instant, length: Duration) -> f32 {
+        let t = (now.saturating_duration_since(since).as_secs_f32()
+            / length.as_secs_f32()).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    fn begin_sleep(&mut self, now: Instant, last_frame: &[Draw]) {
+        if self.sleep.is_none() {
+            self.sleep = Some((now, last_frame.to_vec()));
+            self.sleep_black_presented = false;
+            self.wake = None;
+        }
+    }
+
+    /// Render the fade frames plus one final fully black frame, then stop.
+    fn sleep_frame_needed(&mut self, now: Instant) -> bool {
+        let Some((start, _)) = &self.sleep else { return false };
+        if now.saturating_duration_since(*start) < SLEEP_FADE {
+            return true;
+        }
+        if !self.sleep_black_presented {
+            self.sleep_black_presented = true;
+            return true;
+        }
+        false
+    }
+
+    fn resume(&mut self, now: Instant) {
+        self.sleep = None;
+        self.sleep_black_presented = false;
+        self.wake = Some(now);
+    }
+
+    fn wake_opacity(&self, now: Instant) -> f32 {
+        self.wake.map_or(0.0, |since| 1.0 - Self::progress(now, since, WAKE_FADE))
+    }
+
+    fn wake_active(&self, now: Instant) -> bool {
+        self.wake.is_some_and(|since| now.saturating_duration_since(since) < WAKE_FADE)
+    }
+
+    fn begin_shutdown(&mut self, now: Instant, last_frame: &[Draw]) {
+        if self.shutdown.is_none() {
+            self.shutdown = Some((now, last_frame.to_vec()));
+        }
+    }
+
+    fn shutdown_active(&self, now: Instant) -> bool {
+        self.shutdown.as_ref().is_some_and(|(since, _)|
+            now.saturating_duration_since(*since) < SHUTDOWN_FADE)
+    }
+}
+
 pub struct Frontend {
     session: Session,
     start: Instant,
@@ -127,6 +195,7 @@ pub struct Frontend {
     last_render: Instant,
     rendered_effects: (f32,f32,f32,Option<f32>),
     nav_fade: NavFade,
+    power_fade: PowerFade,
     draws: Vec<Draw>,
     polaroid_texes: Vec<TexId>,
     title_tex: Option<TexId>,
@@ -454,6 +523,7 @@ impl Frontend {
             last_render: now,
             rendered_effects: (0.0,0.0,0.0,None),
             nav_fade: NavFade::default(),
+            power_fade: PowerFade::default(),
             draws: Vec::new(),
             polaroid_texes: Vec::new(),
             title_tex: None,
@@ -818,6 +888,8 @@ impl Frontend {
     pub fn audio_underruns(&self)->u64 {self.session.audio_ring().underruns()}
     #[cfg(feature = "brick")]
     pub fn needs_render(&self)->bool {
+        if self.power_fade.wake_active(Instant::now())
+            || self.power_fade.shutdown_active(Instant::now()) {return true}
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.
@@ -868,6 +940,10 @@ impl Frontend {
         // so an initial library rebuild cannot consume the boot animation.
         let scene = NavScene::from_phase(self.session.app().phase());
         self.nav_fade.update(scene, Instant::now());
+        if self.session.app().shutting_down()
+            && !matches!(self.session.app().phase(), Phase::Doze { .. }) {
+            self.power_fade.begin_shutdown(Instant::now(), &self.draws);
+        }
         if let Some(frame) = self.session.frame() {
             compositor.upload_game(&frame);
             crate::latency::taken();
@@ -959,15 +1035,44 @@ impl Frontend {
         );
         self.draws.clear();
         self.session.app().draw(&mut self.draws);
-        let opacity = self.nav_fade.opacity(Instant::now());
-        if opacity > 0.0 {
+        let now = Instant::now();
+        if matches!(self.session.app().phase(), Phase::Doze { .. }) {
+            if let Some((start, frozen)) = &self.power_fade.sleep {
+                self.draws.clone_from(frozen);
+                self.draws.push(Draw::Rect {
+                    x: 0.0, y: 0.0,
+                    w: OUT_W as f32, h: OUT_H as f32,
+                    colour: [0.0, 0.0, 0.0, PowerFade::progress(now, *start, SLEEP_FADE)],
+                });
+            }
+        } else if let Some((start, frozen)) = &self.power_fade.shutdown {
+            // Crossfade the previous screen into the existing shutdown label.
+            // The app's opaque shutdown background must not appear abruptly.
+            let progress = PowerFade::progress(now, *start, SHUTDOWN_FADE);
+            let labels: Vec<Draw> = self.draws.iter().filter_map(|draw| {
+                if let Draw::Tex { x, y, w, h, tex, alpha } = *draw {
+                    Some(Draw::Tex { x, y, w, h, tex, alpha: alpha * progress })
+                } else {
+                    None
+                }
+            }).collect();
+            self.draws.clone_from(frozen);
             self.draws.push(Draw::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: OUT_W as f32,
-                h: OUT_H as f32,
-                colour: [0.0, 0.0, 0.0, opacity],
+                x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+                colour: [0.0, 0.0, 0.0, progress],
             });
+            self.draws.extend(labels);
+        } else {
+            let opacity = self.nav_fade.opacity(now).max(self.power_fade.wake_opacity(now));
+            if opacity > 0.0 {
+                self.draws.push(Draw::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: OUT_W as f32,
+                    h: OUT_H as f32,
+                    colour: [0.0, 0.0, 0.0, opacity],
+                });
+            }
         }
         compositor.draw_list(&self.draws);
     }
@@ -1034,10 +1139,29 @@ impl Frontend {
         if self.rebuild.is_some() {
             return;
         }
+        let was_doze = matches!(self.session.app().phase(), Phase::Doze { .. });
         self.session.feed(events, now);
         let dt = self.last.elapsed().as_secs_f32();
         self.last = Instant::now();
         self.session.update(dt);
+        // A second Power press may wake during the pre-suspend preparation.
+        // That path does not go through resume_sleep().
+        if was_doze && !matches!(self.session.app().phase(), Phase::Doze { .. })
+            && !self.session.app().shutting_down() {
+            self.power_fade.resume(Instant::now());
+        }
+    }
+
+    /// Called from the Brick's Doze loop to draw a short fade even though
+    /// normal frames are suppressed while waiting for kernel suspend.
+    #[cfg(feature = "brick")]
+    pub fn sleep_fade_frame(&mut self) -> bool {
+        if !matches!(self.app().phase(), Phase::Doze { .. }) {
+            return false;
+        }
+        let now = Instant::now();
+        self.power_fade.begin_sleep(now, &self.draws);
+        self.power_fade.sleep_frame_needed(now)
     }
 
     #[cfg(feature = "brick")]
@@ -1051,6 +1175,7 @@ impl Frontend {
         let _ = input.poll(self.now()); // discard the kernel's queued wake key
         self.session.reset_sleep_input();
         self.session.app_mut().wake();
+        self.power_fade.resume(Instant::now());
         self.last = Instant::now();
         self.wake_guard = Some(self.last + Duration::from_millis(750));
         self.last_input = self.last;
@@ -1681,5 +1806,53 @@ mod navigation_fade_tests {
         fade.update(None, now + Duration::from_millis(10));
         assert!(!fade.active(now + Duration::from_millis(10)));
         assert_eq!(fade.opacity(now + Duration::from_millis(10)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod power_fade_tests {
+    use super::*;
+
+    #[test]
+    fn sleep_fade_darkens_the_last_frame_once_then_stops_rendering() {
+        let start = Instant::now();
+        let mut fade = PowerFade::default();
+        let draws = vec![Draw::Rect {
+            x: 0.0, y: 0.0, w: 640.0, h: 480.0,
+            colour: [1.0, 1.0, 1.0, 1.0],
+        }];
+        fade.begin_sleep(start, &draws);
+        assert_eq!(fade.sleep.as_ref().unwrap().1, draws);
+        assert!(fade.sleep_frame_needed(start));
+        assert!(fade.sleep_frame_needed(start + SLEEP_FADE / 2));
+        assert_eq!(PowerFade::progress(start, start, SLEEP_FADE), 0.0);
+        assert_eq!(PowerFade::progress(start + SLEEP_FADE, start, SLEEP_FADE), 1.0);
+        assert!(fade.sleep_frame_needed(start + SLEEP_FADE)); // Last solid black frame
+        assert!(!fade.sleep_frame_needed(start + SLEEP_FADE));
+    }
+
+    #[test]
+    fn wake_fades_in_even_when_the_destination_is_a_game() {
+        let start = Instant::now();
+        let mut fade = PowerFade::default();
+        fade.begin_sleep(start, &[]);
+        fade.resume(start + Duration::from_secs(5));
+        let resumed = start + Duration::from_secs(5);
+        assert!(fade.sleep.is_none());
+        assert_eq!(fade.wake_opacity(resumed), 1.0);
+        assert!(fade.wake_opacity(resumed + WAKE_FADE / 2) < 1.0);
+        assert_eq!(fade.wake_opacity(resumed + WAKE_FADE), 0.0);
+        assert!(!fade.wake_active(resumed + WAKE_FADE));
+    }
+
+    #[test]
+    fn shutdown_crossfade_completes_before_existing_poweroff_deadline() {
+        let start = Instant::now();
+        let mut fade = PowerFade::default();
+        fade.begin_shutdown(start, &[]);
+        assert!(SHUTDOWN_FADE < Duration::from_millis(250));
+        assert_eq!(PowerFade::progress(start, start, SHUTDOWN_FADE), 0.0);
+        assert_eq!(PowerFade::progress(start + SHUTDOWN_FADE, start, SHUTDOWN_FADE), 1.0);
+        assert!(!fade.shutdown_active(start + SHUTDOWN_FADE));
     }
 }

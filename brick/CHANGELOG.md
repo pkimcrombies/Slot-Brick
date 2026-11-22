@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music has a Now Playing section alongside Albums and Artists. Press B to browse without stopping the song, and return from Albums with L1. Music also shows the same clock, battery, Wi-Fi and update indicators as the shelf.
 - Music Settings → Dim brightness: choose the screen backlight level (1–9) used after the music dim timer, independently of normal brightness. Defaults to the lowest nonzero level.
 - Gameplay → Swap A/B: trade A and B's places, in games and in Slot's own menus. Also reachable without leaving the game: HOME's own menu now has a Buttons entry with the same switch.
 - Fixed: Online → Cart Art found no labels for GB, GBC and GBA games, neither for every game at once nor when searching for one. The label server changed its picture format. Thanks to @aanchondo055-prog for reporting it.

@@ -55,8 +55,12 @@
   Music opens on Now Playing; B returns to the existing browser/album detail
   without stopping or discarding queued music. L1/R1 now cycle all three
   sections, from any Music page, including while a track is playing. On Now
-  Playing, A pauses/resumes, D-pad Left/Right skip previous/next track, and
-  X cycles repeat. D-pad Up/Down have no playback action. User-requested
+  Playing with an active song, A pauses/resumes, D-pad Left/Right skip
+  previous/next track, and X cycles repeat. With **no song loaded**, all
+  D-pad directions and A leave the empty Now Playing screen unchanged;
+  L1/R1 alone switch sections, while B still returns to the previous
+  browser as a normal Back action. D-pad Up/Down have no playback action.
+  User-requested
   seeking has been removed from the player controls; the low-level seek_by(0)
   remains internally for suspend/resume accuracy. Button hints such as
   "x repeat" and "x list" are intentionally absent on Music screens.
@@ -240,6 +244,13 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 empty Now Playing navigation:** after a device report,
+  removed the old Right/A shortcut to Albums while there is no active
+  track. All D-pad/analog navigation and A are inert in this state;
+  L1/R1 continue to switch Music sections, and B remains Back.
+  Regression test added in `295d65e`. Pending Rust/ARM64/device validation.
+
 
 - **2026-11-23 section-switch regression:** installer pinned to `5a522cd`
   stopped safely after 260 passed, 1 failed, 8 ignored in

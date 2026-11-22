@@ -583,8 +583,9 @@ impl Music {
 
     /// Music's three sections cycle in the same direction everywhere:
     /// Now Playing <-> Albums <-> Artists, wrapping at either end.
-    /// Retain the current browser page when visiting Now Playing so B can
-    /// always return to the album/artist the user was exploring.
+    /// A shoulder-button section switch always enters that section's root,
+    /// even when Now Playing was opened from an album's track list. B from
+    /// Now Playing still returns to the untouched browse stack instead.
     fn navigate_section(&mut self, forward: bool) {
         let current = if self.now_playing_view {
             0
@@ -601,13 +602,7 @@ impl Music {
             _ => None,
         };
         if let Some(page) = page {
-            let same_section = matches!(
-                (page, self.browse[0].page),
-                (Page::Albums, Page::Albums) | (Page::Artists, Page::Artists)
-            );
-            if !same_section {
-                self.browse = vec![Location { page, cursor: 0 }];
-            }
+            self.browse = vec![Location { page, cursor: 0 }];
         }
     }
 
@@ -1449,6 +1444,42 @@ mod tests {
         assert_eq!(music.playing_position(), Some((0, 2)));
         music.input(Action::GbaDown(Btn::L1));
         assert_eq!(music.playing_position(), Some((0, 2)));
+    }
+
+    #[test]
+    fn section_switch_from_now_playing_enters_albums_root_not_song_list() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        std::fs::create_dir_all(&folder).unwrap();
+        silent_mp3(&folder.join("01.mp3"), 2);
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::Y)); // opens the album list, then plays
+        assert!(music.showing_now_playing());
+        assert!(music.showing_tracks(), "playback retains its browser origin");
+        assert_eq!(music.playing_position(), Some((0, 1)));
+        music.input(Action::GbaDown(Btn::R1)); // Now Playing -> Albums
+        assert!(!music.showing_now_playing());
+        assert!(music.is_root(), "section must not open the song list");
+        assert_eq!(music.label(), "albums");
+        assert_eq!(music.playing_position(), Some((0, 1)), "audio state unchanged");
+        music.input(Action::GbaDown(Btn::L1)); // Albums -> Now Playing
+        assert!(music.showing_now_playing());
+        assert_eq!(music.playing_position(), Some((0, 1)));
+    }
+
+    #[test]
+    fn back_from_now_playing_still_restores_the_origin_song_list() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        std::fs::create_dir_all(&folder).unwrap();
+        silent_mp3(&folder.join("01.mp3"), 2);
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::B));
+        assert!(!music.showing_now_playing());
+        assert!(music.showing_tracks(), "B returns to the original album");
+        assert_eq!(music.playing_position(), Some((0, 1)));
     }
 
     #[test]

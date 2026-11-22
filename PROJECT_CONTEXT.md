@@ -20,6 +20,11 @@
 
 - Keep everything **native Slot (Rust)**. Do not introduce Trimpod, Flutter,
   ClassiPod itself, or a separate music launcher.
+- Slot System, cartridge and utility menus use a restrained **black**
+  background, off-white labels, muted values, pink selected text, aligned
+  columns and consistent row spacing. Avoid bulky highlight bars/panels.
+  Preserve physical cartridge previews and functional button hints; Music
+  alone retains its separate warm-ivory palette.
 - Slot launcher and system menus remain minimal **black**. Native Music uses
   **soft warm ivory (#F5F1EA; changed from near-white #F8F7F4 after user
   feedback on 2026-11-22)**, charcoal text and darker dusty-rose selection
@@ -266,6 +271,24 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 cartridge Start-menu visual alignment:** The shared
+  `slot-ui/src/cart_menu.rs` renderer (GB/GBC/NES/SNES Start) now
+  uses Slot's `MENU_BACKGROUND` black canvas, `QUICK_PITCH` 48px
+  centered row rhythm, a text-only two-column label/value layout,
+  `MENU_TEXT_INK` for ordinary labels, `MENU_MUTED_INK` for ordinary
+  values and `MENU_SELECTION_INK` rose for the selected label/value
+  and its two adjustment carets. Removes the old filled highlight slab.
+  Uses lower-case text with a smaller fallback font for long shell
+  shapes/names; keeps the large live cart preview on the left. Footer
+  hints remain (B Cancel, directional Change, A Save/Reset, Y Label)
+  and grey out Y when offline. `CartMenuFaces.labels` now stores
+  normal/selected pairs, pre-uploaded once in `frontend.rs`.
+  No `app.rs` control, storage, shell geometry, or label-search
+  behaviour changes. GBA's animated core/lid picker remains intentionally
+  separate. Added four layout/palette/legend tests; Rust build and
+  Brick Pro hardware checks are pending.
+
 
 - **2026-11-23 Settings as fourth Music tab (not compiled/device-tested):**
   Four-section L1/R1 wrap order is Now Playing, Albums, Artists, Settings.

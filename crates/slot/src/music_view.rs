@@ -1052,6 +1052,23 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
+    fn uxwing_repeat_pngs_decode_to_small_rgba_textures() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&[
+                0, 0, 0, 255, 255, 255, 255, 0,
+                0, 0, 0, 255, 255, 255, 255, 0,
+            ]).unwrap();
+        }
+        let decoded = decode_repeat_icon(&png_bytes).expect("valid transparent PNG");
+        assert_eq!(decoded.len(), (REPEAT_ICON_SIDE * REPEAT_ICON_SIDE * 4) as usize);
+        assert!(decode_repeat_icon(b"not a png").is_none());
+    }
+
+    #[test]
     fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
         assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
             "repeat must sit below the progress bar and timestamps");

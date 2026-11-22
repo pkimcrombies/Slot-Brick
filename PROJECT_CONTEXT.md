@@ -52,14 +52,19 @@
   **Now Playing navigation and background browsing (2026-11-23, not yet
   ARM64-compiled or device-tested):** the real Music entry defaults to a
   standalone **Now Playing** section, with Albums and Artists alongside it.
-  Music opens on Now Playing; B returns to the existing browser/album detail
-  without stopping or discarding queued music. L1/R1 now cycle all three
-  sections, from any Music page, including while a track is playing. On Now
-  Playing with an active song, A pauses/resumes, D-pad Left/Right skip
+  Music opens on Now Playing. **B from Now Playing** opens the track list
+  belonging to the currently playing album, with that song highlighted
+  (regardless of the last browsed album); B again opens the Albums root
+  and highlights the playing album. Without a track B opens Albums root.
+  B on an Albums/Artists root does nothing: only **HOME/Menu**
+  (`Action::QuickMenu`) exits Music and returns to Slot's menu. Start opens
+  Music Settings rather than exiting. L1/R1 cycle all three Music sections
+  from any page, including while a track is playing. On Now Playing with
+  an active song, A pauses/resumes, D-pad Left/Right skip
   previous/next track, and X cycles repeat. With **no song loaded**, all
   D-pad directions and A leave the empty Now Playing screen unchanged;
-  L1/R1 alone switch sections, while B still returns to the previous
-  browser as a normal Back action. D-pad Up/Down have no playback action.
+  L1/R1 alone switch sections, while B intentionally opens Albums root.
+  D-pad Up/Down have no playback action.
   User-requested
   seeking has been removed from the player controls; the low-level seek_by(0)
   remains internally for suspend/resume accuracy. Button hints such as
@@ -68,9 +73,9 @@
   browser location: audio decoding, repeat, metadata, album cover and track
   count all use the playing album even when the user browses another album.
   Automatically advancing tracks never takes over the current browsing
-  screen or selection. B on the browser's root or HOME/QuickMenu still exits
-  Music entirely and stops its music; playback outside the Music phase has
-  NOT been introduced.
+  screen or selection. Browsing and B do not exit Music or stop audio;
+  HOME/Menu still exits Music and stops its music. Playback outside
+  the Music phase has NOT been introduced.
   **Shared shelf HUD in Music:** `app.rs` uses the same
   `slot_ui::draw_status_bar` for Music and Shelf. Clock stays at the top-left,
   battery/charging, connected Wi-Fi and update symbol at top-right with the
@@ -102,7 +107,8 @@
   missing dates sort last and never use filesystem timestamps.
   Playback controls: A pause/resume, Left/Right previous/next song,
   L1/R1 switch the three Music sections, X changes repeat mode.
-  No seek gestures; B leaves Now Playing without stopping playback.
+  No seek gestures. B opens the playing album's song list without
+  stopping playback; HOME/Menu is the only exit from Music.
   **Music sleep/resume + dim (2026-11-23, pending device validation):**
   Physical backlight dimming is optional, applies only while Music is actively
   playing and the settings screen is closed. Previously it halved the
@@ -244,6 +250,17 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Music Back/exit policy:** B from Now Playing with a
+  current track always opens `Page::Album(track.album)` under an Albums
+  root, selecting the playing track (not a previously browsed album).
+  Root Albums cursor follows sorted album ID, so B again selects that
+  album in Albums/Cover Flow. Empty Now Playing B opens Albums root.
+  B at Albums/Artists root never exits. Only `Action::QuickMenu`
+  (physical HOME/Menu) exits Music; Start is Music Settings. Updated
+  integration and unit regressions in `music.rs` / `quick_menu.rs`.
+  Rust tests, ARM64 build and on-device verification are pending.
+
 
 - **2026-11-23 empty Now Playing navigation:** after a device report,
   removed the old Right/A shortcut to Albums while there is no active

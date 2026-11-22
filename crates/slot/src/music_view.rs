@@ -12,6 +12,8 @@ const ROWS: usize = 6;
 const TITLE_TOP: f32 = 42.0;
 const LIST_TOP: f32 = 104.0;
 const ROW_H: f32 = 48.0;
+const ALBUM_COVER_SIDE: f32 = 40.0;
+const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
 const COVER_SIDE: f32 = 128.0;
 const COVER_X: f32 = OUT_W as f32 - EDGE - COVER_SIDE;
 const COVER_Y: f32 = 124.0;
@@ -31,6 +33,7 @@ struct CachedFace {
 pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
     cover: MusicCover,
+    album_covers: [MusicCover; ROWS],
 }
 
 impl MusicView {
@@ -43,6 +46,19 @@ impl MusicView {
         let cover = music.track.as_ref().and_then(|track| {
             self.cover.texture(&music.song(track).path, music.playing_album(), compositor)
         });
+        // Reuse a fixed number of cover decoders and GPU textures as the list scrolls.
+        // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
+        let first = music.cursor().saturating_sub(ROWS - 1);
+        let mut album_art = [None; ROWS];
+        if music.track.is_none() {
+            for (slot, art) in album_art.iter_mut().enumerate() {
+                if let Some(album) = music.album_for_row(first + slot) {
+                    if let Some(song) = album.songs.first() {
+                        *art = self.album_covers[slot].texture(&song.path, album, compositor);
+                    }
+                }
+            }
+        }
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -54,7 +70,7 @@ impl MusicView {
         if let Some(track) = &music.track {
             p.playing(music, track, cover);
         } else {
-            p.browser(music);
+            p.browser(music, &album_art);
         }
         p.draws
     }
@@ -69,7 +85,7 @@ struct Painter<'a> {
 }
 
 impl Painter<'_> {
-    fn browser(&mut self, music: &Music) {
+    fn browser(&mut self, music: &Music, album_art: &[Option<(TexId, [u32; 2])>; ROWS]) {
         if music.is_root() {
             let (albums, artists) = if music.viewing_artists() {
                 (MENU_MUTED_INK, MENU_TEXT_INK)
@@ -96,11 +112,30 @@ impl Painter<'_> {
             let y = LIST_TOP + (i - first) as f32 * ROW_H;
             let ink = if i == cursor { MENU_SELECTION_INK } else { MENU_TEXT_INK };
             let (label, subtitle) = music.row(i);
-            if let Some(subtitle) = subtitle {
-                self.text_ink(label, 23, [EDGE, y + 1.0], ink);
-                self.text_ink(subtitle, 14, [EDGE, y + 28.0], MENU_MUTED_INK);
+            // Albums gain a thumbnail; artist and track rows keep their existing layout.
+            let x = if music.album_for_row(i).is_some() {
+                if let Some((texture, pixels)) = album_art[i - first] {
+                    let size = pixels.map(|n| n as f32 * ALBUM_COVER_SIDE / THUMBNAIL as f32);
+                    self.draws.push(pixel_aligned_texture(
+                        texture,
+                        [
+                            EDGE + (ALBUM_COVER_SIDE - size[0]) / 2.0,
+                            y + (ROW_H - size[1]) / 2.0,
+                        ],
+                        size,
+                        self.scale,
+                        1.0,
+                    ));
+                }
+                ALBUM_TEXT_X
             } else {
-                self.text_ink(label, 24, [EDGE, y + 6.0], ink);
+                EDGE
+            };
+            if let Some(subtitle) = subtitle {
+                self.text_ink(label, 23, [x, y + 1.0], ink);
+                self.text_ink(subtitle, 14, [x, y + 28.0], MENU_MUTED_INK);
+            } else {
+                self.text_ink(label, 24, [x, y + 6.0], ink);
             }
         }
     }
@@ -219,4 +254,16 @@ impl Painter<'_> {
 fn timestamp(seconds: f64) -> String {
     let seconds = seconds as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+#[cfg(test)]
+mod album_thumbnail_layout_tests {
+    use super::*;
+
+    #[test]
+    fn album_thumbnails_fit_existing_rows_without_overlapping_text() {
+        assert!(ALBUM_COVER_SIDE <= ROW_H);
+        assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
+        assert!(ALBUM_TEXT_X < OUT_W as f32 - EDGE);
+    }
 }

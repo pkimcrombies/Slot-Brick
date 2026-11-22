@@ -311,6 +311,19 @@ impl Music {
         }
     }
 
+    /// Returns an album only for rows that actually represent albums.
+    /// Artist-name and individual-track rows must not display album thumbnails.
+    pub(crate) fn album_for_row(&self, index: usize) -> Option<&Album> {
+        match self.location().page {
+            Page::Albums => self.library.albums.get(index),
+            Page::Artist(artist) => {
+                let album = *self.library.artists.get(artist)?.albums.get(index)?;
+                self.library.albums.get(album)
+            }
+            Page::Artists | Page::Album(_) => None,
+        }
+    }
+
     pub(crate) fn showing_tracks(&self) -> bool {
         matches!(self.location().page, Page::Album(_))
     }
@@ -501,6 +514,37 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cover_rows_are_albums_only_in_root_and_artist_album_lists() {
+        use crate::music_library::Artist;
+        let album = Album {
+            title: "alpha".into(),
+            artist: "artist".into(),
+            songs: vec![Song {
+                path: std::path::PathBuf::from("alpha.mp3"),
+                title: "song".into(),
+                artist: "artist".into(),
+                disc: 1,
+                track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![album],
+            artists: vec![Artist {
+                name: "artist".into(),
+                albums: vec![0],
+            }],
+        });
+        assert_eq!(music.album_for_row(0).unwrap().title, "alpha");
+        assert!(music.album_for_row(1).is_none());
+        music.browse[0].page = Page::Artists;
+        assert!(music.album_for_row(0).is_none());
+        music.open_page(Page::Artist(0));
+        assert_eq!(music.album_for_row(0).unwrap().title, "alpha");
+        music.open_page(Page::Album(0));
+        assert!(music.album_for_row(0).is_none());
+    }
     use std::fs;
 
     fn silent_mp3(path: &Path, channels: u8) {

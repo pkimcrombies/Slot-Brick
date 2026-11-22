@@ -45,15 +45,20 @@
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
-- Album root now defaults to **native Cover Flow** on warm white: selected
-  central cover, compressed/dim neighbouring covers, mirrored reflections,
-  title/artist below, 260ms eased Left/Right movement. **X** toggles the
-  original album list; **L1/R1** switches Albums/Artists; **A** opens album,
-  **Y** starts album, **B** exits root. Artists and tracks stay lists.
-  Implementation is in `music.rs`, `music_view.rs`, with the animation
-  redraw gate in `frontend.rs`. The first installer hit a legacy list-mode
-  test (Right previously changed to Artists); the fixed test toggles X into
-  list mode before asserting its old navigation. Device verification pending.
+- Album root defaults to **native Cover Flow** on warm white. The first
+  flat approximation (260ms / screen-plane tilt) was rejected by the user.
+  Replacement is based on ClassiPod's **Original** carousel, not Big:
+  `adeeteya/Classipod` master:
+  `lib/features/music/cover_flow/widgets/cover_flow_carousel.dart`.
+  Translate its offset (0.25 screen for first neighbour, then 0.085),
+  22% side scale, 0.95 radian Y rotation, perspective 0.35/size,
+  distance draw order, 400ms easeOutSine, and quarter-height mirrored
+  reflection into native `slot-gfx` GLSL/Draw::CoverFlow. No Flutter.
+  `X` toggles original list, `L1/R1` Albums/Artists, `A` opens,
+  `Y` plays, `B` leaves root. Artists/tracks unchanged.
+  Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
+  `music_view.rs`. The `frontend.rs` animation redraw gate must stay
+  bounded. Hardware and ARM64 compile verification are still pending.
 - Now Playing was redesigned (commit `7515789`): **214px artwork on left**,
   track/artist/album and position on right, progress/time at bottom. Keep
   physical playback controls. Device feedback on this redesign is pending.
@@ -101,10 +106,10 @@
 
 1. Confirm latest **warm-white Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
-2. Test and refine the **native Cover Flow** inspired by
-   `adeeteya/Classipod` on the actual Brick Pro (positions, reflections,
-   text and motion). Keep the original list accessible via **X**.
-   ClassiPod is *visual reference only*, not code to port wholesale.
+2. Test the **ClassiPod Original-faithful GPU Cover Flow** on the actual
+   Brick Pro: perspective, rack overlap, mirrored reflection, frame rate,
+   cursor motion and artwork loading. Keep original list via **X**.
+   Compare to the actual ClassiPod source rather than a flat 2D mock-up.
 3. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,

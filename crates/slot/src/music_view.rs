@@ -33,13 +33,17 @@ const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
 const FLOW_SLOTS: usize = 7;
-const FLOW_DURATION: Duration = Duration::from_millis(260);
-const FLOW_COVER_Y: f32 = 116.0;
-const FLOW_FRONT_SIDE: f32 = 212.0;
-const FLOW_REFLECT_H: f32 = 40.0;
+// ClassiPod Original: 400 ms ease-out-sine, a 0.95 radian Y rotation,
+// 22% side scale reduction, and perspective coefficient 0.35 / cover size.
+const FLOW_DURATION: Duration = Duration::from_millis(400);
+const FLOW_COVER_Y: f32 = 100.0;
+const FLOW_FRONT_SIDE: f32 = 218.0;
+const FLOW_REFLECT_H: f32 = FLOW_FRONT_SIDE * 0.25;
+const FLOW_YAW: f32 = 0.95;
+const FLOW_PERSPECTIVE: f32 = 0.35 / FLOW_FRONT_SIDE;
 
 /// Navigation state stays in Music; only transient visual interpolation lives
-/// here. The renderer requests frames only during the 260ms movement.
+/// here. The renderer requests frames only during the 400ms movement.
 #[derive(Default)]
 struct FlowMotion {
     position: Option<f32>,
@@ -54,7 +58,7 @@ impl FlowMotion {
         };
         let t = (now.saturating_duration_since(start).as_secs_f32()
             / FLOW_DURATION.as_secs_f32()).clamp(0.0, 1.0);
-        let eased = t * t * (3.0 - 2.0 * t);
+        let eased = (t * std::f32::consts::FRAC_PI_2).sin();
         Some(from + (to - from) * eased)
     }
 
@@ -102,7 +106,7 @@ pub(crate) struct MusicView {
     fade_texture: Option<TexId>,
     flow_covers: [MusicCover; FLOW_SLOTS],
     flow_motion: FlowMotion,
-    flow_reflection_fade: Option<TexId>,
+    flow_placeholder: Option<TexId>,
 }
 
 impl MusicView {
@@ -177,9 +181,9 @@ impl MusicView {
                 }
             }
         }
-        let reflection_fade = if flow.is_some() {
-            Some(*self.flow_reflection_fade.get_or_insert_with(|| {
-                compositor.create_texture(1, 64, &reflection_fade_rgba())
+        let flow_placeholder = if flow.is_some() {
+            Some(*self.flow_placeholder.get_or_insert_with(|| {
+                compositor.create_texture(1, 1, &[232, 230, 227, 255])
             }))
         } else {
             None
@@ -197,8 +201,8 @@ impl MusicView {
         }
         if let Some(track) = &music.track {
             p.playing(music, track, cover);
-        } else if let (Some(position), Some(reflection_fade)) = (flow, reflection_fade) {
-            p.cover_flow(music, &flow_art, flow_first, position, reflection_fade);
+        } else if let (Some(position), Some(placeholder)) = (flow, flow_placeholder) {
+            p.cover_flow(music, &flow_art, flow_first, position, placeholder);
         } else {
             p.browser(music, &album_art);
         }
@@ -295,27 +299,27 @@ impl Painter<'_> {
         }
     }
 
-    /// Cover Flow's depth is a cheap native 2D projection: nearby covers are
-    /// foreshortened and gently tilted, with vertically mirrored reflections.
-    /// Far items paint first so the focused album stays in front.
+    /// Native translation of ClassiPod's *Original* Cover Flow: the offset
+    /// function, scale and 0.95-radian Y rotation follow the Flutter reference,
+    /// but the GPU vertex shader performs perspective-correct texturing in Slot.
+    /// Far covers are submitted first so the selected art remains in front.
     fn cover_flow(
         &mut self,
         music: &Music,
         art: &[Option<(TexId, [u32; 2])>; FLOW_SLOTS],
         first: isize,
         position: f32,
-        reflection_fade: TexId,
+        placeholder: TexId,
     ) {
         let label = self.text_ink("albums", 24, [EDGE, TITLE_TOP], MUSIC_SELECTION_INK);
         self.text_ink("artists", 24, [EDGE + label as f32 + 22.0, TITLE_TOP], MUSIC_MUTED_INK);
         self.text_right("x list", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
 
-        // Sort by distance from the moving centre (far -> near).
         let mut order = [0usize, 1, 2, 3, 4, 5, 6];
         order.sort_by(|&a, &b| {
-            let distance_a = ((first + a as isize) as f32 - position).abs();
-            let distance_b = ((first + b as isize) as f32 - position).abs();
-            distance_b.total_cmp(&distance_a)
+            let da = (first as f32 + a as f32 - position).abs();
+            let db = (first as f32 + b as f32 - position).abs();
+            db.total_cmp(&da)
         });
         for slot in order {
             let index = first + slot as isize;
@@ -323,44 +327,47 @@ impl Painter<'_> {
                 continue;
             }
             let distance = index as f32 - position;
-            let Some((x, y, w, h, alpha, turn)) = flow_geometry(distance) else {
+            let Some((x, y, size, alpha, yaw)) = flow_geometry(distance) else {
                 continue;
             };
-            // An artwork-sized paper tile is deliberately shown while asynchronous
-            // embedded-art decoding runs (and for albums with no embedded art).
-            self.rect([x - 2.0, y - 2.0], [w + 4.0, h + 4.0],
-                [0.85, 0.84, 0.83, alpha * 0.65]);
-            self.rect([x, y], [w, h], MUSIC_COVER_PLACEHOLDER);
-            if let Some((tex, pixels)) = art[slot] {
-                let pw = w * pixels[0] as f32 / THUMBNAIL as f32;
-                let ph = h * pixels[1] as f32 / THUMBNAIL as f32;
-                let px = x + (w - pw) / 2.0;
-                let py = y + (h - ph) / 2.0;
-                self.draws.push(Draw::Turned {
-                    x: px, y: py, w: pw, h: ph, tex, alpha, turn,
-                });
-                // A negative-height sprite mirrors the cover vertically without
-                // a second decoded texture. The small gradient softens the end.
-                let reflect_y = py + ph + 4.0;
-                self.draws.push(Draw::Tex {
-                    x: px, y: reflect_y + FLOW_REFLECT_H, w: pw,
-                    h: -FLOW_REFLECT_H, tex, alpha: alpha * 0.19,
-                });
-                self.draws.push(Draw::Tex {
-                    x: px, y: reflect_y, w: pw, h: FLOW_REFLECT_H,
-                    tex: reflection_fade, alpha: 1.0,
+            // Keep the no-art tile in the same 3D plane as loaded artwork.
+            // Missing art never leaves a flat square floating behind the rack.
+            let (tex, pixels) = art[slot].unwrap_or((placeholder, [THUMBNAIL, THUMBNAIL]));
+            let ratio = pixels.map(|n| n as f32 / THUMBNAIL as f32);
+            let w = size * ratio[0];
+            let h = size * ratio[1];
+            let px = x + (size - w) * 0.5;
+            let py = y + (size - h) * 0.5;
+            self.draws.push(Draw::CoverFlow {
+                x: px, y: py, w, h, tex, alpha,
+                yaw, perspective: FLOW_PERSPECTIVE, reflected: false,
+            });
+            if art[slot].is_some() {
+                // The shader mirrors the *bottom quarter* of the same artwork
+                // and fades it into warm white. Unlike the old negative-height
+                // sprite, this reflection uses the identical 3D transform.
+                self.draws.push(Draw::CoverFlow {
+                    x: px,
+                    y: py + h + 3.0,
+                    w,
+                    h: h * FLOW_REFLECT_H / FLOW_FRONT_SIDE,
+                    tex,
+                    alpha,
+                    yaw,
+                    perspective: FLOW_PERSPECTIVE,
+                    reflected: true,
                 });
             }
         }
 
         let (album, artist) = music.row(music.cursor());
-        self.text_center(album, 26, 382.0, MUSIC_TEXT_INK, 544);
+        self.text_center(album, 26, 389.0, MUSIC_TEXT_INK, 544);
         if let Some(artist) = artist {
-            self.text_center(artist, 18, 421.0, MUSIC_MUTED_INK, 544);
+            self.text_center(artist, 18, 426.0, MUSIC_MUTED_INK, 544);
         }
         self.text_center(
             &format!("{} / {}", music.cursor() + 1, music.row_count()),
-            15, 450.0, MUSIC_MUTED_INK, 160,
+            15, 454.0, MUSIC_MUTED_INK, 160,
         );
     }
 
@@ -536,31 +543,21 @@ fn backdrop_fade_rgba() -> Vec<u8> {
     }).collect()
 }
 
-/// Returns the projected artwork rectangle and subtle side tilt for a moving
-/// album. Culling keeps GPU work bounded, even for large music libraries.
-fn flow_geometry(distance: f32) -> Option<(f32, f32, f32, f32, f32, f32)> {
+/// ClassiPod Original spacing, adapted to the 640x480 Brick screen:
+/// first neighbour 0.25 * viewport, subsequent covers +0.085 * viewport.
+fn flow_geometry(distance: f32) -> Option<(f32, f32, f32, f32, f32)> {
     let abs = distance.abs();
-    if abs > 2.7 {
+    if abs >= 4.0 {
         return None;
     }
-    let near = (1.0 - abs).clamp(0.0, 1.0);
-    let w = 96.0 + (FLOW_FRONT_SIDE - 96.0) * near;
-    let h = 158.0 + (FLOW_FRONT_SIDE - 158.0) * near;
-    let span = abs.min(1.0) * 178.0 + (abs - 1.0).max(0.0) * 71.0;
-    let x = OUT_W as f32 / 2.0 + distance.signum() * span - w / 2.0;
-    let y = FLOW_COVER_Y + (FLOW_FRONT_SIDE - h) / 2.0;
-    let alpha = (1.0 - abs * 0.30).clamp(0.18, 1.0);
-    let turn = if abs < 0.01 { 0.0 } else { distance.signum() * 0.025 };
-    Some((x, y, w, h, alpha, turn))
-}
-
-/// Warm-white gradient to dissolve mirrored artwork into the Music canvas.
-fn reflection_fade_rgba() -> Vec<u8> {
-    (0..64).flat_map(|y| {
-        let t = y as f32 / 63.0;
-        let eased = t * t * (3.0 - 2.0 * t);
-        [248, 247, 244, (255.0 * eased).round() as u8]
-    }).collect()
+    let size = FLOW_FRONT_SIDE * (1.0 - 0.22 * abs.min(1.0));
+    let offset = distance.signum() * OUT_W as f32
+        * (0.25 * abs.min(1.0) + 0.085 * (abs - 1.0).clamp(0.0, 3.0));
+    let x = (OUT_W as f32 - size) * 0.5 + offset;
+    let y = FLOW_COVER_Y + (FLOW_FRONT_SIDE - size) * 0.5;
+    let alpha = (4.0 - abs).clamp(0.0, 1.0);
+    let yaw = distance.clamp(-1.0, 1.0) * FLOW_YAW;
+    Some((x, y, size, alpha, yaw))
 }
 
 fn timestamp(seconds: f64) -> String {
@@ -585,12 +582,16 @@ mod album_thumbnail_layout_tests {
         let left = flow_geometry(-1.0).unwrap();
         let right = flow_geometry(1.0).unwrap();
         assert_eq!(focused.2, FLOW_FRONT_SIDE);
+        assert_eq!(focused.4, 0.0, "selected cover must face forward");
         assert!(left.2 < focused.2 && right.2 < focused.2);
-        assert!(left.0 + left.2 < focused.0);
-        assert!(right.0 > focused.0 + focused.2);
-        assert_eq!(flow_geometry(3.0), None);
-        assert!(focused.4 > left.4);
-        assert!(left.5 < 0.0 && right.5 > 0.0);
+        assert!(left.0 + left.2 / 2.0 < focused.0 + focused.2 / 2.0);
+        assert!(right.0 + right.2 / 2.0 > focused.0 + focused.2 / 2.0);
+        assert!((right.4 - 0.95).abs() < 0.0001);
+        assert!((left.4 + 0.95).abs() < 0.0001);
+        assert_eq!(left.3, 1.0, "ClassiPod keeps near neighbours opaque");
+        assert!(flow_geometry(3.0).is_some());
+        assert_eq!(flow_geometry(4.0), None);
+        assert!((right.0 - (320.0 + 160.0 - right.2 / 2.0)).abs() < 0.01);
     }
 
     #[test]
@@ -601,7 +602,8 @@ mod album_thumbnail_layout_tests {
         assert_eq!(motion.to(3, now), 2.0);
         assert!(motion.active(now + FLOW_DURATION / 2));
         let halfway = motion.at(now + FLOW_DURATION / 2).unwrap();
-        assert!(halfway > 2.0 && halfway < 3.0);
+        assert!((halfway - (2.0 + std::f32::consts::FRAC_1_SQRT_2)).abs() < 0.001,
+            "ClassiPod scroll uses easeOutSine");
         assert_eq!(motion.at(now + FLOW_DURATION), Some(3.0));
         assert!(!motion.active(now + FLOW_DURATION));
         motion.clear();
@@ -623,11 +625,13 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn reflection_dissolves_into_the_warm_white_canvas() {
-        let pixels = reflection_fade_rgba();
-        assert_eq!(pixels.len(), 64 * 4);
-        assert_eq!(&pixels[0..4], &[248, 247, 244, 0]);
-        assert_eq!(&pixels[63 * 4..63 * 4 + 4], &[248, 247, 244, 255]);
+    fn reflection_is_the_bottom_quarter_of_the_same_perspective_art() {
+        assert_eq!(FLOW_REFLECT_H, FLOW_FRONT_SIDE * 0.25);
+        assert!((FLOW_PERSPECTIVE * FLOW_FRONT_SIDE - 0.35).abs() < 0.0001);
+        let left = flow_geometry(-1.0).unwrap();
+        let right = flow_geometry(1.0).unwrap();
+        assert_eq!(left.4, -right.4);
+        assert_eq!(left.2, right.2);
     }
 
     #[test]

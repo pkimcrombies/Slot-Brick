@@ -52,11 +52,14 @@
   **Now Playing navigation and background browsing (2026-11-23, not yet
   ARM64-compiled or device-tested):** the real Music entry defaults to a
   standalone **Now Playing** section, with Albums and Artists alongside it.
-  An empty Now Playing screen offers B/R1 to Albums. Starting a song switches
-  to Now Playing, but B returns to the existing browser/album detail without
-  stopping or discarding queued music; from Albums root L1 returns to Now
-  Playing, and Albums R1 goes to Artists. On Now Playing, A still pauses/
-  resumes, Left/Right still seek, L1/R1 still skip, and X cycles repeat.
+  Music opens on Now Playing; B returns to the existing browser/album detail
+  without stopping or discarding queued music. L1/R1 now cycle all three
+  sections, from any Music page, including while a track is playing. On Now
+  Playing, A pauses/resumes, D-pad Left/Right skip previous/next track, and
+  X cycles repeat. D-pad Up/Down have no playback action. User-requested
+  seeking has been removed from the player controls; the low-level seek_by(0)
+  remains internally for suspend/resume accuracy. Button hints such as
+  "x repeat" and "x list" are intentionally absent on Music screens.
   Music::Track now owns its album ID and song index independently of the
   browser location: audio decoding, repeat, metadata, album cover and track
   count all use the playing album even when the user browses another album.
@@ -80,8 +83,8 @@
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
   1 minute/2 minutes; default 1 minute), and **Dim brightness**
   (physical backlight step 1-9, default 1). **X** on Now Playing cycles
-  repeat; a native double-arrow indicator with off/all/1 state appears at the
-  top-right. Off plays the current album once; All wraps at the last track
+  repeat; the native double-arrow indicator with off/all/1 state sits at the
+  bottom-right, below progress and time. Off plays the current album once; All wraps at the last track
   of the current album; One repeats the current song. These preferences
   persist independently at `Slot/Config/music.settings` with a temp-file
   rename. The volume cap is applied to decoded PCM, including when the
@@ -93,7 +96,9 @@
   MP3 ID3v2 (TYER/TDRC/TDRL/TDOR), ID3v1 and M4A (standard Date/ReleaseDate)
   are used (full YYYY-MM-DD where available; year-only tags remain supported);
   missing dates sort last and never use filesystem timestamps.
-  Existing physical play/pause, skip and seek controls are preserved.
+  Playback controls: A pause/resume, Left/Right previous/next song,
+  L1/R1 switch the three Music sections, X changes repeat mode.
+  No seek gestures; B leaves Now Playing without stopping playback.
   **Music sleep/resume + dim (2026-11-23, pending device validation):**
   Physical backlight dimming is optional, applies only while Music is actively
   playing and the settings screen is closed. Previously it halved the
@@ -184,9 +189,10 @@
   Both Albums and Artists use dark charcoal for their selected tab label
   (muted text for the inactive tab); the earlier pink Albums label in
   Cover Flow was inconsistent and is removed. Dusty rose remains for
-  song/list selections. `X` toggles original list, `L1/R1`
-  Albums/Artists, `A` opens,
-  `Y` plays, `B` leaves root. Artists/tracks unchanged.
+  song/list selections. In the three-section Music navigation,
+  `L1/R1` switch Now Playing/Albums/Artists. In Albums, `X` toggles
+  Cover Flow/list, `A` opens, `Y` plays, and `B` backs out.
+  The former `x list`/`x covers` hints have been removed.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
   `music_view.rs`. The `frontend.rs` animation redraw gate must stay
   bounded. First device installer stopped safely during Rust compilation:
@@ -281,9 +287,12 @@
 
 1. Verify new **Now Playing / Albums / Artists** navigation and shared top
    HUD first: Music defaults to Now Playing, B returns to the browser without
-   stopping music, Albums root L1 returns to Now Playing, A pauses/resumes,
-   background track keeps playing when browsing a different album, and the
-   clock/battery/Wi-Fi/update layout matches Shelf. Test track auto-advance
+   stopping music, L1/R1 cycle all three sections, A pauses/resumes,
+   D-pad Left/Right change songs without seeking, and the repeat badge sits
+   at bottom-right without overlapping time/progress. There should be no
+   button tooltips such as "x repeat" or "x list". Confirm background music
+   keeps playing while browsing another album, and the clock/battery/Wi-Fi/
+   update layout matches Shelf. Test track auto-advance
    and repeat while browsing (including album identity and selection), menu
    entry/exit, and empty libraries.
    Confirm latest **warm-ivory Music theme**, first-frame boot fade,

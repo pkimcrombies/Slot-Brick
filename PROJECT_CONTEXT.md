@@ -92,7 +92,7 @@
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
   1 minute/2 minutes; default 1 minute), and **Dim brightness**
   (physical backlight step 1-9, default 1). **X** on Now Playing cycles
-  repeat; the indicator at bottom-right (28×28, below progress and time)
+  repeat; the indicator at bottom-right (20×20, matching HUD scale, below progress and time)
   now loads the exact UXWing Repeat Off/All/One transparent PNG icons from
   `Slot/System/music-icons/repeat-{off,all,one}.png`, cached as three GPU
   textures and tinted neutral grey for Off (#888888), black for All/One (#000000). The installer downloads and verifies
@@ -258,6 +258,15 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 UI refinement:** UXWing repeat symbol reduced from 28x28
+  to 20x20, matching the visual scale of battery/Wi-Fi HUD indicators.
+  The icon remains at the lower-right, at x=596, y=440 on 640x480,
+  with a 20px bottom clearance. Grey Off/black All+One preserved.
+  All shuffle feature changes from the interrupted request were
+  intentionally removed; no shuffle logic, settings, button handler,
+  icon or dependency should ship. Repeat icon remains the only change.
+
 
 - **2026-11-23 repeat colour refinement:** repeat Off is neutral grey
   `#888888`, All and One are solid black `#000000`, matching the HUD.

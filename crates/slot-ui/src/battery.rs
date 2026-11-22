@@ -1,7 +1,7 @@
 use slot_gfx::{Draw, TexId};
 use slot_power::{Battery, Charge};
 
-use crate::footer::{draw_status_text, Printed};
+use crate::footer::{draw_status_text, status_sprite, Printed};
 use crate::hud::HUD_INK;
 use crate::plate::HINT_H;
 
@@ -15,8 +15,8 @@ const NUB_H: f32 = 4.0;
 pub const WALL: f32 = 1.5;
 const GAP: f32 = 7.0;
 
-const BOLT_W: f32 = 14.0;
-const BOLT_H: f32 = 14.0;
+const BOLT_W: f32 = crate::StatusIcon::Charging.size()[0] as f32;
+const BOLT_H: f32 = crate::StatusIcon::Charging.size()[1] as f32;
 const BOLT_GAP: f32 = 5.0;
 const _: () = assert!(BOLT_GAP > 0.0);
 
@@ -131,7 +131,7 @@ pub fn draw_status_gauge(
     percent: Printed,
     bolt: Option<TexId>,
     ink: [f32; 4],
-    text_scale: [f32; 2],
+    scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
     let Some(b) = battery else { return };
@@ -154,14 +154,12 @@ pub fn draw_status_gauge(
     if b.charge == Charge::Charging {
         let bx = x + GAUGE_W + NUB_W + BOLT_GAP;
         if let Some(tex) = bolt {
-            out.push(Draw::Tex {
-                x: bx,
-                y: y + (GAUGE_H - BOLT_H) / 2.0,
-                w: BOLT_W,
-                h: BOLT_H,
+            out.push(status_sprite(
                 tex,
-                alpha: 1.0,
-            });
+                [bx, y + (GAUGE_H - BOLT_H) / 2.0],
+                [BOLT_W, BOLT_H],
+                scale,
+            ));
         }
     }
 
@@ -170,7 +168,7 @@ pub fn draw_status_gauge(
             right - percent.w as f32,
             y + (GAUGE_H - HINT_H as f32) / 2.0,
             percent,
-            text_scale,
+            scale,
             out,
         );
     }

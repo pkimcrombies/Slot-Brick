@@ -93,19 +93,29 @@ fn printed(x: f32, p: Printed, out: &mut Vec<Draw>) {
     draw_printed(x, FOOTER_Y, p, out);
 }
 
-pub(crate) fn draw_status_text(x: f32, y: f32, p: Printed, [sx, sy]: [f32; 2], out: &mut Vec<Draw>) {
+pub(crate) fn draw_status_text(x: f32, y: f32, p: Printed, scale: [f32; 2], out: &mut Vec<Draw>) {
     let Some(tex) = p.face.filter(|_| p.w > 0) else {
         draw_printed(x, y, p, out);
         return;
     };
-    out.push(Draw::Tex {
+    out.push(status_sprite(tex, [x, y], [p.w as f32, HINT_H as f32], scale));
+}
+
+/// Align a texture rasterized at display resolution to the same physical pixel grid.
+pub(crate) fn status_sprite(
+    tex: TexId,
+    [x, y]: [f32; 2],
+    [w, h]: [f32; 2],
+    [sx, sy]: [f32; 2],
+) -> Draw {
+    Draw::Tex {
         x: (x * sx).round() / sx,
         y: (y * sy).round() / sy,
-        w: (p.w as f32 * sx).round() / sx,
-        h: (HINT_H as f32 * sy).round() / sy,
+        w: (w * sx).round().max(1.0) / sx,
+        h: (h * sy).round().max(1.0) / sy,
         tex,
         alpha: 1.0,
-    });
+    }
 }
 
 /// Android-style shelf status line, 12px from the top and 24px from both edges.
@@ -121,11 +131,11 @@ pub fn draw_status_bar(
     wifi: Option<(TexId, u32, u32)>,
     update: Option<(TexId, u32, u32)>,
     clock: Printed,
-    text_scale: [f32; 2],
+    scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
     // Clock uses a dedicated black word texture; don't recolour global HUD text.
-    draw_status_text(STATUS_MARGIN, STATUS_TOP_Y, clock, text_scale, out);
+    draw_status_text(STATUS_MARGIN, STATUS_TOP_Y, clock, scale, out);
 
     let battery_right = OUT_W as f32 - STATUS_MARGIN;
     let battery_top = STATUS_TOP_Y + (HINT_H as f32 - GAUGE_H) / 2.0;
@@ -136,12 +146,18 @@ pub fn draw_status_bar(
         percent,
         bolt,
         [0.0, 0.0, 0.0, 1.0],
-        text_scale,
+        scale,
         out,
     );
 
     let mut icon_right = battery_right - status_gauge_width(battery, percent);
-    for (tex, w, h) in [wifi, update].into_iter().flatten() {
+    if let Some((tex, w, h)) = wifi {
+        let (w, h) = (w as f32, h as f32);
+        icon_right -= WIFI_GAP + w;
+        let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
+        out.push(status_sprite(tex, [icon_right, y], [w, h], scale));
+    }
+    if let Some((tex, w, h)) = update {
         icon_right -= WIFI_GAP + w as f32;
         out.push(Draw::Tex {
             x: icon_right.round(),
@@ -173,6 +189,31 @@ mod status_position_tests {
         let mut out = Vec::new();
         draw_status_bar(None, Printed::default(), None, None, None, Printed::default(), [1.0, 1.0], &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn status_icons_align_to_the_display_pixel_grid() {
+        let scale = [1.6, 1.6];
+        let wifi = TexId::from_raw(12);
+        let bolt = TexId::from_raw(13);
+        let battery = Battery { percent: 70, charge: slot_power::Charge::Charging };
+        let mut out = Vec::new();
+        draw_status_bar(
+            Some(battery), Printed { face: None, w: 35 }, Some(bolt), Some((wifi, 20, 16)),
+            None, Printed::default(), scale, &mut out,
+        );
+        for (id, icon) in [(wifi, crate::StatusIcon::Wifi), (bolt, crate::StatusIcon::Charging)] {
+            let (x, y, w, h) = out.iter().find_map(|&draw| match draw {
+                Draw::Tex { x, y, w, h, tex, .. } if tex == id => Some((x, y, w, h)),
+                _ => None,
+            }).unwrap();
+            for value in [x * scale[0], y * scale[1]] {
+                assert!((value - value.round()).abs() < 0.001, "icon {id:?} at {value}");
+            }
+            let face = icon.face(scale);
+            assert!((w * scale[0] - face.w as f32).abs() < 0.001);
+            assert!((h * scale[1] - face.h as f32).abs() < 0.001);
+        }
     }
 
     #[test]

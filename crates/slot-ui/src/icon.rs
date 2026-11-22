@@ -147,6 +147,39 @@ pub fn icon_face(icon: Icon, px: f32, colour: [u8; 3]) -> CartFace {
     haloed(&r.cov, r.w, r.h, colour)
 }
 
+/// The shelf uses dark icons on a light background, so these need no outline.
+pub enum StatusIcon {
+    Wifi,
+    Charging,
+}
+
+impl StatusIcon {
+    pub const fn size(&self) -> [u32; 2] {
+        match self {
+            Self::Wifi => [20, 16],
+            Self::Charging => [14, 14],
+        }
+    }
+
+    pub fn face(&self, [sx, sy]: [f32; 2]) -> CartFace {
+        let svg = match self {
+            Self::Wifi => r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="16">
+                <path d="M2 5.8Q10 -0.7 18 5.8 M4.8 8.6Q10 4.4 15.2 8.6 M7.3 11.2Q10 9 12.7 11.2"
+                    fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round"/>
+                <circle cx="10" cy="13.7" r="1.05"/>
+            </svg>"#,
+            Self::Charging => r#"<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14">
+                <path d="M8.2 0.8 2.5 8h3.8l-.6 5.2 5.8-7.5H7.7z"/>
+            </svg>"#,
+        };
+        let [w, h] = self.size();
+        let w = ((w as f32 * sx).round() as u32).max(1);
+        let h = ((h as f32 * sy).round() as u32).max(1);
+        let rgba = crate::art::render_svg(svg, w, h).expect("valid status icon");
+        CartFace { rgba, w, h }
+    }
+}
+
 /// A favorite's star, cut like a gem in three golds: each arm is split along its ridge, the
 /// half facing the light (from the top left) lit, the half facing away shaded, and the rest
 /// `base`. Outlined like the other icons.

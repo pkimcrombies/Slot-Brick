@@ -284,8 +284,8 @@ pub struct App {
     net_up: bool,
     /// Wi-Fi is switched on, whether or not it has reached anything.
     net_on: bool,
-    /// The three Wi-Fi symbols: on the network, on but not reaching it, off.
-    wifi_faces: Option<[(TexId, u32, u32); 3]>,
+    /// Shown when Wi-Fi is connected.
+    wifi_face: Option<(TexId, u32, u32)>,
     /// Asks GitHub, now and then, whether a newer Slot is out; the footer then shows `update_face`.
     #[cfg(feature = "brick")]
     auto_check: crate::brick_update::AutoCheck,
@@ -405,6 +405,7 @@ pub struct App {
     wallpaper: Option<TexId>,
     battery_percent: slot_ui::Printed,
     bolt: Option<TexId>,
+    status_bolt: Option<TexId>,
     shelf_platform: slot_ui::Printed,
     name_pending: bool,
     slot_letter: Option<char>,
@@ -412,7 +413,7 @@ pub struct App {
     slot_word: Option<&'static str>,
     shelf_named: Option<Millis>,
     shelf_clock: slot_ui::Printed,
-    status_text_scale: [f32; 2],
+    status_scale: [f32; 2],
     hud: Hud,
     screen: f32,
     lift: f32,
@@ -572,7 +573,7 @@ impl App {
             #[cfg(feature = "brick")]
             net_up: false,
             net_on: false,
-            wifi_faces: None,
+            wifi_face: None,
             #[cfg(feature = "brick")]
             auto_check: Default::default(),
             update_face: None,
@@ -671,13 +672,14 @@ impl App {
             wallpaper: None,
             battery_percent: slot_ui::Printed::default(),
             bolt: None,
+            status_bolt: None,
             shelf_platform: slot_ui::Printed::default(),
             name_pending: false,
             slot_letter: None,
             slot_word: None,
             shelf_named: None,
             shelf_clock: slot_ui::Printed::default(),
-            status_text_scale: [1.0, 1.0],
+            status_scale: [1.0, 1.0],
             hud: Hud::new(),
             screen: 0.0,
             lift: 1.0,
@@ -1290,8 +1292,8 @@ impl App {
         self.wallpaper = Some(face);
     }
 
-    pub fn set_wifi_faces(&mut self, faces: [(TexId, u32, u32); 3]) {
-        self.wifi_faces = Some(faces);
+    pub fn set_wifi_face(&mut self, face: (TexId, u32, u32)) {
+        self.wifi_face = Some(face);
     }
 
     pub fn set_update_face(&mut self, face: (TexId, u32, u32)) {
@@ -1314,13 +1316,16 @@ impl App {
         return None;
         #[cfg(feature = "brick")]
         {
-            if !self.net_up { return None; }
-            self.wifi_faces.map(|faces| faces[0])
+            self.wifi_face.filter(|_| self.net_up)
         }
     }
 
     pub fn set_bolt_face(&mut self, bolt: TexId) {
         self.bolt = Some(bolt);
+    }
+
+    pub fn set_status_bolt_face(&mut self, bolt: TexId) {
+        self.status_bolt = Some(bolt);
     }
 
     pub fn set_shelf_platform_face(&mut self, face: TexId, w: u32) {
@@ -1346,8 +1351,8 @@ impl App {
         self.shelf_clock = slot_ui::Printed::new(face, w);
     }
 
-    pub fn set_status_text_scale(&mut self, scale: [f32; 2]) {
-        self.status_text_scale = scale;
+    pub fn set_status_scale(&mut self, scale: [f32; 2]) {
+        self.status_scale = scale;
     }
 
     pub fn phase(&self) -> &Phase {
@@ -3392,11 +3397,11 @@ impl App {
                 draw_status_bar(
                     self.battery,
                     self.battery_percent,
-                    self.bolt,
+                    self.status_bolt,
                     self.wifi_face(),
                     self.update_face(),
                     self.shelf_clock,
-                    self.status_text_scale,
+                    self.status_scale,
                     out,
                 );
             }

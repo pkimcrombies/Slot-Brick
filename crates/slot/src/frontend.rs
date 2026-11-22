@@ -12,7 +12,7 @@ use slot_ui::{
     quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
     wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
-    QuickRow, QuickValue, RebuildScreen, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
+    QuickRow, QuickValue, RebuildScreen, StatusIcon, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
     HUD_ICON_PX, HUD_INK, LEGEND,
 };
 
@@ -327,6 +327,8 @@ struct Clocks {
     picked: Option<String>,
     shown: String,
     status_scale: [f32; 2],
+    wifi_tex: Option<TexId>,
+    status_bolt_tex: Option<TexId>,
     battery: String,
     battery_tex: Option<TexId>,
     platform: String,
@@ -483,12 +485,6 @@ impl Frontend {
         let bolt = icon_face(Icon::Charging, BOLT_PX, SHELF_STATUS_INK);
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
-        // The shelf's Wi-Fi symbol, in its three states; which one shows is the app's to say.
-        let wifi = [Icon::Wifi, Icon::WifiNoRoute, Icon::WifiOff].map(|icon| {
-            let face = icon_face(icon, slot_ui::WIFI_PX, SHELF_STATUS_INK);
-            (compositor.create_texture(face.w, face.h, &face.rgba), face.w, face.h)
-        });
-        self.session.app_mut().set_wifi_faces(wifi);
         // Beside it, while a newer Slot is out.
         let update = icon_face(Icon::Update, slot_ui::WIFI_PX, SHELF_STATUS_INK);
         let update = (compositor.create_texture(update.w, update.h, &update.rgba), update.w, update.h);
@@ -1106,7 +1102,15 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     let scale_changed = scale != clocks.status_scale;
     if scale_changed {
         clocks.status_scale = scale;
-        app.set_status_text_scale(scale);
+        app.set_status_scale(scale);
+        let wifi = StatusIcon::Wifi.face(scale);
+        let wifi_id = upload_rgba(compositor, &mut clocks.wifi_tex, wifi.w, wifi.h, &wifi.rgba);
+        let [w, h] = StatusIcon::Wifi.size();
+        app.set_wifi_face((wifi_id, w, h));
+        let bolt = StatusIcon::Charging.face(scale);
+        let bolt_id =
+            upload_rgba(compositor, &mut clocks.status_bolt_tex, bolt.w, bolt.h, &bolt.rgba);
+        app.set_status_bolt_face(bolt_id);
     }
     let picked = app.picker().map(|p| p.text());
     if picked != clocks.picked {

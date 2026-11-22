@@ -85,11 +85,21 @@ impl NavFade {
         if self.scene == next {
             return;
         }
+        let previous = self.scene;
         self.scene = next;
-        self.started = next.map(|scene| {
+        self.started = next.and_then(|scene| {
             let first_launcher = !self.presented && scene == NavScene::Shelf;
+            // The game already has its own eject animation. Coming back to the
+            // shelf from a non-menu phase must not overlay an opaque black frame.
+            // Menu -> Shelf still fades as before, and first boot still fades in.
+            let from_game = self.presented
+                && previous.is_none()
+                && scene == NavScene::Shelf;
             self.presented = true;
-            (now, if first_launcher { BOOT_FADE } else { MENU_FADE })
+            (!from_game).then_some((
+                now,
+                if first_launcher { BOOT_FADE } else { MENU_FADE },
+            ))
         });
     }
 
@@ -1641,6 +1651,26 @@ mod navigation_fade_tests {
         fade.update(Some(NavScene::Shelf), subpage + MENU_FADE);
         assert_eq!(fade.opacity(subpage + MENU_FADE), 1.0);
         assert_eq!(fade.opacity(subpage + MENU_FADE + MENU_FADE), 0.0);
+    }
+
+    #[test]
+    fn ejecting_a_game_returns_to_the_shelf_without_a_black_flash() {
+        let now = Instant::now();
+        let mut fade = NavFade::default();
+        fade.update(Some(NavScene::Shelf), now);
+        // Playing / Ejecting are not navigation scenes.
+        fade.update(None, now + BOOT_FADE);
+        let back = now + BOOT_FADE + Duration::from_secs(2);
+        fade.update(Some(NavScene::Shelf), back);
+        assert_eq!(fade.opacity(back), 0.0);
+        assert!(!fade.active(back));
+
+        // Normal menu -> shelf navigation still fades.
+        let menu = back + Duration::from_secs(1);
+        fade.update(Some(NavScene::QuickMenu(None)), menu);
+        assert_eq!(fade.opacity(menu), 1.0);
+        fade.update(Some(NavScene::Shelf), menu + MENU_FADE);
+        assert_eq!(fade.opacity(menu + MENU_FADE), 1.0);
     }
 
     #[test]

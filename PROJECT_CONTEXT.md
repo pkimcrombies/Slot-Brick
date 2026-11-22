@@ -54,6 +54,15 @@
   `music_library::Song` does not have a duration field: never fabricate
   times. Existing Cover Flow, Now Playing, physical input, sleep and menu
   fades must remain unchanged. Brick Pro visual QA and Rust build are pending.
+  **Now Playing artwork reuse (2026-11-22):** `MusicView::render` previously
+  requested a fresh `MusicCover` whenever a track started, even if a decoded
+  and uploaded 256px album cover was already visible in Cover Flow or Albums.
+  Now it checks the existing per-slot GPU texture by the album's first-track
+  path, reuses the existing `TexId` immediately, or polls an in-flight
+  browser decoder rather than duplicating work. Only uncached albums use
+  Now Playing's own asynchronous decoder. The existing seven Cover Flow +
+  six list slots remain bounded; no unbounded texture map. Texture-key
+  regression tests cover both browsing modes and stale/different albums.
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.

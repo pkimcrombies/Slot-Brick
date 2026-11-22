@@ -37,6 +37,34 @@ struct Load {
 }
 
 impl MusicCover {
+    /// Borrow a fully decoded cover already uploaded to the GPU, without
+    /// reading tags or starting another decoder. The path is the cache key:
+    /// album browsers request the first song, and may find the embedded
+    /// artwork in another song of that same album.
+    pub(crate) fn ready_for(&self, track: &Path) -> Option<(TexId, [u32; 2])> {
+        if self.track.as_deref() == Some(track) {
+            self.texture.zip(self.size)
+        } else {
+            None
+        }
+    }
+
+    /// Recognize an already requested album cover even when its decoder is
+    /// still working. Now Playing can poll that worker without decoding twice.
+    pub(crate) fn requested_for(&self, track: &Path) -> bool {
+        self.track.as_deref() == Some(track)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loaded_for_test(track: &Path, tex: TexId, size: [u32; 2]) -> Self {
+        Self {
+            track: Some(track.to_path_buf()),
+            size: Some(size),
+            texture: Some(tex),
+            loading: None,
+        }
+    }
+
     /// Upload on the render thread, with at most one reader active. A late cover
     /// belongs to the track that requested it and is ignored after a skip.
     pub(crate) fn texture(
@@ -174,6 +202,30 @@ mod tests {
     use crate::music_library::Library;
     use std::fs;
     use std::time::Duration;
+
+    #[test]
+    fn ready_cover_can_be_borrowed_without_redecoding_or_matching_wrong_album() {
+        let path = PathBuf::from("Music/Album/01.mp3");
+        let mut cover = MusicCover::default();
+        assert_eq!(cover.ready_for(&path), None, "not yet decoded");
+        assert!(!cover.requested_for(&path));
+
+        // GPU TexId is a handle, not a copy of the image bytes.
+        cover.track = Some(path.clone());
+        assert!(cover.requested_for(&path));
+        assert_eq!(cover.ready_for(&path), None,
+            "an in-flight request cannot yet supply a GPU texture");
+        cover.texture = Some(TexId::from_raw(12));
+        cover.size = Some([256, 128]);
+        assert_eq!(cover.ready_for(&path), Some((TexId::from_raw(12), [256, 128])));
+        assert_eq!(cover.ready_for(Path::new("Music/Other/01.mp3")), None);
+
+        // A slot that has switched albums must not return its previous texture.
+        cover.track = Some(PathBuf::from("Music/New/01.mp3"));
+        cover.size = None;
+        assert_eq!(cover.ready_for(&path), None);
+        assert!(!cover.requested_for(&path));
+    }
 
     #[test]
     fn embedded_jpeg_and_png_covers_fit_the_same_square_without_stretching() {

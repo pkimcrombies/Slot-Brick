@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
@@ -124,6 +125,14 @@ impl MusicView {
         self.flow_motion.active(Instant::now())
     }
 
+    /// Both browsing modes retain their own small GPU caches. Returning the
+    /// original texture ID avoids decoding/uploading an image that is already
+    /// on screen. The caches themselves own and reuse those texture slots.
+    fn ready_album_art(&self, first_track: &Path) -> Option<(TexId, [u32; 2])> {
+        self.flow_covers.iter().chain(self.album_covers.iter())
+            .find_map(|cached| cached.ready_for(first_track))
+    }
+
     pub(crate) fn render(
         &mut self,
         music: &Music,
@@ -131,7 +140,29 @@ impl MusicView {
         scale: [f32; 2],
     ) -> Vec<Draw> {
         let cover = music.track.as_ref().and_then(|track| {
-            self.cover.texture(&music.song(track).path, music.playing_album(), compositor)
+            let album = music.playing_album();
+            // Browser and Cover Flow already decoded this album's art into GPU
+            // textures. Reuse the handle directly: no second ID3 parse, JPEG
+            // decode, GPU upload or even a frame of placeholder artwork.
+            let first_path = album.songs.first().map(|song| song.path.as_path());
+            let ready = first_path.and_then(|path| self.ready_album_art(path));
+            if let Some(art) = ready {
+                return Some(art);
+            }
+
+            // If the user pressed Play before the thumbnail finished, poll
+            // that in-flight decoder rather than launching another worker.
+            // Some(None) means the existing decoder is still pending (or has
+            // no album artwork); None means no matching request was started.
+            let pending = first_path.and_then(|path| {
+                self.flow_covers.iter_mut().chain(self.album_covers.iter_mut())
+                    .find(|cached| cached.requested_for(path))
+                    .map(|cached| cached.texture(path, album, compositor))
+            });
+            match pending {
+                Some(art) => art,
+                None => self.cover.texture(&music.song(track).path, album, compositor),
+            }
         });
         // Reuse a fixed number of cover decoders and GPU textures as the list scrolls.
         // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
@@ -680,6 +711,29 @@ mod album_thumbnail_layout_tests {
         let right = flow_geometry(1.0).unwrap();
         assert_eq!(left.4, -right.4);
         assert_eq!(left.2, right.2);
+    }
+
+    #[test]
+    fn now_playing_reuses_cover_flow_or_list_gpu_texture_for_the_same_album() {
+        let mut view = MusicView::default();
+        let first = Path::new("Music/Album/01.mp3");
+        let other = Path::new("Music/Other/01.mp3");
+        assert_eq!(view.ready_album_art(first), None);
+
+        // The last displayed Cover Flow image is already decoded and
+        // uploaded; Now Playing must use exactly that GPU texture handle.
+        let tex = TexId::from_raw(21);
+        view.flow_covers[2] = MusicCover::loaded_for_test(first, tex, [256, 192]);
+        assert_eq!(view.ready_album_art(first), Some((tex, [256, 192])));
+        assert_eq!(view.ready_album_art(other), None);
+
+        // When the album was reached through the regular Albums/Artists list,
+        // its independent thumbnail cache is equally reusable.
+        view.flow_covers[2] = MusicCover::default();
+        let tex = TexId::from_raw(42);
+        view.album_covers[0] = MusicCover::loaded_for_test(first, tex, [256, 128]);
+        assert_eq!(view.ready_album_art(first), Some((tex, [256, 128])));
+        assert_eq!(view.ready_album_art(other), None);
     }
 
     #[test]

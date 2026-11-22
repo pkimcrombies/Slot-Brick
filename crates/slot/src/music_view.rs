@@ -62,15 +62,20 @@ const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
 // Bottom-right repeat mode stays clear of elapsed/total time and progress.
-const REPEAT_ICON_SIDE: u32 = 28;
+const REPEAT_ICON_SIDE: u32 = 20;
+// The Battery HUD is 22px wide and the Wi-Fi glyph is 18px: 20px sits
+// comfortably alongside them and leaves space for both player controls.
+const PLAYER_ICON_GAP: f32 = 12.0;
 const REPEAT_ICON_BOTTOM_MARGIN: f32 = 20.0;
 const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
+const SHUFFLE_BADGE_X: f32 = REPEAT_BADGE_X - PLAYER_ICON_GAP - REPEAT_ICON_SIDE as f32;
 // The progress bar is at y=372 and time labels begin at y=392. The
 // smaller icon stays below the timestamps with a 20px bottom margin.
 const REPEAT_BADGE_Y: f32 = OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN - REPEAT_ICON_SIDE as f32;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
+const SHUFFLE_ICON_FILE: &str = "shuffle.png";
 const FLOW_SLOTS: usize = 7;
 // ClassiPod Original: 400 ms ease-out-sine, a 0.95 radian Y rotation,
 // 22% side scale reduction, and perspective coefficient 0.35 / cover size.
@@ -154,6 +159,7 @@ pub(crate) struct MusicView {
     playing_backdrop: Option<PlayingBackdrop>,
     repeat_icons_loaded: bool,
     repeat_icons: [Option<TexId>; 3],
+    shuffle_icons: [Option<TexId>; 2],
 }
 
 impl MusicView {
@@ -176,16 +182,26 @@ impl MusicView {
                         _ => RepeatMode::One,
                     };
                     let ink = repeat_icon_ink(mode);
-                    // UXWing's black symbols become neutral grey or HUD black while
-                    // retaining antialiased edges. White pixels are transparent.
-                    for pixel in pixels.chunks_exact_mut(4) {
-                        let darkness = 255 - ((u16::from(pixel[0]) + u16::from(pixel[1])
-                            + u16::from(pixel[2])) / 3) as u8;
-                        pixel[3] = ((u16::from(pixel[3]) * u16::from(darkness)) / 255) as u8;
-                        pixel[..3].copy_from_slice(&ink);
-                    }
+                    // UXWing's black symbols become grey/black HUD ink,
+                    // preserving transparency and antialiased edges.
+                    tint_player_icon(&mut pixels, ink);
                     self.repeat_icons[index] = Some(compositor.create_texture(
                         REPEAT_ICON_SIDE, REPEAT_ICON_SIDE, &pixels,
+                    ));
+                }
+                if let Some(mut source) = std::fs::read(folder.join(SHUFFLE_ICON_FILE))
+                    .ok().filter(|b| b.len() <= 4 << 20)
+                    .and_then(|bytes| decode_repeat_icon(&bytes))
+                {
+                    // One icon, two textures: grey when off and black when on.
+                    let mut active = source.clone();
+                    tint_player_icon(&mut source, REPEAT_DISABLED_INK);
+                    tint_player_icon(&mut active, REPEAT_ACTIVE_INK);
+                    self.shuffle_icons[0] = Some(compositor.create_texture(
+                        REPEAT_ICON_SIDE, REPEAT_ICON_SIDE, &source,
+                    ));
+                    self.shuffle_icons[1] = Some(compositor.create_texture(
+                        REPEAT_ICON_SIDE, REPEAT_ICON_SIDE, &active,
                     ));
                 }
             }
@@ -196,6 +212,10 @@ impl MusicView {
             RepeatMode::One => 2,
         };
         self.repeat_icons[index]
+    }
+
+    fn shuffle_icon(&self, enabled: bool) -> Option<TexId> {
+        self.shuffle_icons[usize::from(enabled)]
     }
 
     pub(crate) fn cover_flow_animating(&self) -> bool {
@@ -335,11 +355,12 @@ impl MusicView {
         } else {
             None
         };
-        let repeat_icon = if music.showing_now_playing()
+        let (repeat_icon, shuffle_icon) = if music.showing_now_playing()
             && music.track.is_some() && !music.music_settings_open() {
-            self.repeat_icon(music, compositor)
+            let repeat = self.repeat_icon(music, compositor);
+            (repeat, self.shuffle_icon(music.shuffle_enabled()))
         } else {
-            None
+            (None, None)
         };
         let mut p = Painter {
             cache: &mut self.cache,
@@ -361,7 +382,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon);
+                p.playing(music, track, cover, repeat_icon, shuffle_icon);
             } else {
                 p.empty_now_playing();
             }
@@ -376,12 +397,21 @@ impl MusicView {
     }
 }
 
-/// UXWing PNG assets are downsized to a single 32px texture per mode.
+/// UXWing PNG assets are downsized to a single HUD-scale texture per mode.
 fn decode_repeat_icon(png: &[u8]) -> Option<Vec<u8>> {
     let (w, h) = crate::cart_art::png_size(png)?;
     if w > 1024 || h > 1024 || w == 0 || h == 0 { return None; }
     let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
     slot_ui::cover_rgba(&rgba, w, h, REPEAT_ICON_SIDE, REPEAT_ICON_SIDE)
+}
+
+fn tint_player_icon(pixels: &mut [u8], ink: [u8; 3]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        let darkness = 255 - ((u16::from(pixel[0]) + u16::from(pixel[1])
+            + u16::from(pixel[2])) / 3) as u8;
+        pixel[3] = ((u16::from(pixel[3]) * u16::from(darkness)) / 255) as u8;
+        pixel[..3].copy_from_slice(&ink);
+    }
 }
 
 struct Painter<'a> {
@@ -621,9 +651,32 @@ impl Painter<'_> {
         }
     }
 
+    fn shuffle_badge(&mut self, enabled: bool, icon: Option<TexId>) {
+        let (x, y) = (SHUFFLE_BADGE_X, REPEAT_BADGE_Y);
+        if let Some(tex) = icon {
+            self.draws.push(Draw::Tex {
+                x, y, w: REPEAT_ICON_SIDE as f32, h: REPEAT_ICON_SIDE as f32,
+                tex, alpha: 1.0,
+            });
+            return;
+        }
+        // Two crossing paths for a missing icon file, using the same active
+        // and disabled tint as the UXWing texture.
+        let ink = if enabled { REPEAT_ACTIVE_INK } else { REPEAT_DISABLED_INK };
+        let color = ink.map(|channel| channel as f32 / 255.0);
+        for i in 0..8 {
+            let dx = 2.0 + i as f32 * 1.8;
+            self.rect([x + dx, y + 3.0 + i as f32 * 1.6],
+                [2.0, 2.0], [color[0], color[1], color[2], 1.0]);
+            self.rect([x + dx, y + 15.0 - i as f32 * 1.6],
+                [2.0, 2.0], [color[0], color[1], color[2], 1.0]);
+        }
+    }
+
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
-               repeat_icon: Option<TexId>) {
+               repeat_icon: Option<TexId>, shuffle_icon: Option<TexId>) {
         self.music_tabs(0);
+        self.shuffle_badge(music.shuffle_enabled(), shuffle_icon);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
         let album = music.playing_album();
@@ -1095,13 +1148,18 @@ mod album_thumbnail_layout_tests {
     fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
         assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
             "repeat must sit below the progress bar and timestamps");
-        assert_eq!(REPEAT_ICON_SIDE, 28);
+        assert_eq!(REPEAT_ICON_SIDE, 20);
+        assert_eq!(SHUFFLE_BADGE_X, 564.0);
+        assert_eq!(REPEAT_BADGE_X, 596.0);
+        assert_eq!(REPEAT_BADGE_X - (SHUFFLE_BADGE_X + REPEAT_ICON_SIDE as f32),
+            PLAYER_ICON_GAP, "visible spacing between shuffle and repeat");
         assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE,
             "repeat icon must stay inside right margin");
-        assert_eq!(REPEAT_BADGE_Y, 432.0, "repeat icon sits below the time labels");
+        assert_eq!(REPEAT_BADGE_Y, 440.0, "repeat icon sits below the time labels");
         assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN,
             "repeat icon must stay inside bottom margin");
         assert_eq!(REPEAT_ICON_FILES, ["repeat-off.png", "repeat-all.png", "repeat-one.png"]);
+        assert_eq!(SHUFFLE_ICON_FILE, "shuffle.png");
     }
 
     #[test]
@@ -1110,10 +1168,11 @@ mod album_thumbnail_layout_tests {
         assert_eq!(EDGE, STATUS_MARGIN);
         assert_eq!(PLAYING_COVER_X, EDGE);
         assert_eq!(ALBUM_TRACK_TITLE_X, EDGE + 44.0);
-        assert_eq!(REPEAT_BADGE_X, 588.0,
+        assert_eq!(REPEAT_BADGE_X, 596.0,
             "repeat icon aligns with the opposite HUD edge");
-        assert_eq!(REPEAT_BADGE_Y, 432.0,
-            "28px icon retains a 20px bottom margin");
+        assert_eq!(SHUFFLE_BADGE_X, 564.0);
+        assert_eq!(REPEAT_BADGE_Y, 440.0,
+            "20px icon retains a 20px bottom margin");
     }
 
     #[test]

@@ -11,6 +11,14 @@ pub struct Layout {
     pub tracking: f32,
 }
 
+impl Layout {
+    pub(crate) fn scaled(mut self, scale: f32) -> Self {
+        self.px *= scale;
+        self.tracking *= scale;
+        self
+    }
+}
+
 /// The font picked under HOME → System → Font, set once at startup before anything is drawn.
 static CHOSEN: OnceLock<Font> = OnceLock::new();
 

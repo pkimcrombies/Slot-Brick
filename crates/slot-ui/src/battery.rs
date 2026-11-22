@@ -1,7 +1,8 @@
 use slot_gfx::{Draw, TexId};
 use slot_power::{Battery, Charge};
 
-use crate::footer::{draw_status_text, status_sprite, Printed};
+use crate::draw::pixel_aligned_texture;
+use crate::footer::{draw_status_text, Printed};
 use crate::hud::HUD_INK;
 use crate::plate::HINT_H;
 
@@ -154,11 +155,12 @@ pub fn draw_status_gauge(
     if b.charge == Charge::Charging {
         let bx = x + GAUGE_W + NUB_W + BOLT_GAP;
         if let Some(tex) = bolt {
-            out.push(status_sprite(
+            out.push(pixel_aligned_texture(
                 tex,
                 [bx, y + (GAUGE_H - BOLT_H) / 2.0],
                 [BOLT_W, BOLT_H],
                 scale,
+                1.0,
             ));
         }
     }

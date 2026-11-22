@@ -72,29 +72,30 @@ pub fn hint_width(key: &str, label: &str) -> u32 {
 }
 
 pub fn hint_face(key: &str, label: &str) -> UndoFace {
-    let w = hint_width(key, label);
-    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    hint_face_scaled(key, label, [1.0, 1.0]).0
+}
 
+pub(crate) fn hint_face_scaled(key: &str, label: &str, [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
+    let width = hint_width(key, label);
+    let w = (width as f32 * sx).round() as u32;
+    let h = (HINT_H as f32 * sy).round() as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
     let cap_w = cap_width(key);
-    let mut cap = Vec::with_capacity((cap_w * CAP * 4) as usize);
-    for _ in 0..cap_w * CAP {
+    let cap_px = (cap_w as f32 * sx).round() as u32;
+    let cap_h = (CAP as f32 * sy).round() as u32;
+    let mut cap = Vec::with_capacity((cap_px * cap_h * 4) as usize);
+    for _ in 0..cap_px * cap_h {
         cap.extend_from_slice(&[INK[0], INK[1], INK[2], 255]);
     }
     if let Some(font) = text::label_font() {
-        let layout = text::fit(font, key, cap_w as f32, 1, KEY_PX, KEY_PX);
-        text::draw_centred(&mut cap, cap_w, CAP, &layout, CAP_INK);
+        let layout = text::fit(font, key, cap_w as f32, 1, KEY_PX, KEY_PX).scaled(sy);
+        text::draw_centred(&mut cap, cap_px, cap_h, &layout, CAP_INK);
     }
-    blit(&mut rgba, w, &cap, cap_w, CAP, 0, (HINT_H - CAP) / 2);
+    blit(&mut rgba, w, &cap, cap_px, cap_h, 0, (h - cap_h) / 2);
+    let mut face = UndoFace { rgba, w, h };
+    draw_hint_label(&mut face, label, cap_w + CAP_GAP, [sx, sy]);
 
-    let text_w = band_width(label);
-    let mut band = vec![0u8; (text_w * HINT_H * 4) as usize];
-    if let Some(font) = text::label_font() {
-        let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut band, text_w, HINT_H, &layout, INK);
-    }
-    blit(&mut rgba, w, &band, text_w, HINT_H, cap_w + CAP_GAP, 0);
-
-    UndoFace { rgba, w, h: HINT_H }
+    (face, width)
 }
 
 pub fn word_width(text: &str) -> u32 {
@@ -117,9 +118,7 @@ pub fn word_face_ink_scaled(text: &str, ink: [u8; 3], [sx, sy]: [f32; 2]) -> (Un
     let h = (HINT_H as f32 * sy).round() as u32;
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     if let Some(font) = text::label_font() {
-        let mut layout = text::fit(font, text, width as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        layout.px *= sy;
-        layout.tracking *= sy;
+        let layout = text::fit(font, text, width as f32, 1, LABEL_PX, LABEL_MIN_PX).scaled(sy);
         text::draw_centred(&mut rgba, w, h, &layout, ink);
     }
     (UndoFace { rgba, w, h }, width)
@@ -266,56 +265,68 @@ pub fn arrows_hint_width(label: &str) -> u32 {
 }
 
 pub fn arrows_hint_face(label: &str) -> UndoFace {
-    let w = arrows_hint_width(label);
-    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    arrows_hint_face_scaled(label, [1.0, 1.0]).0
+}
+
+pub(crate) fn arrows_hint_face_scaled(label: &str, [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
+    let width = arrows_hint_width(label);
+    let w = (width as f32 * sx).round() as u32;
+    let h = (HINT_H as f32 * sy).round() as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let cap_w = (CAP as f32 * sx).round() as u32;
+    let cap_h = (CAP as f32 * sy).round() as u32;
     for (i, glyph) in [LEFT_CARET, RIGHT_CARET].into_iter().enumerate() {
         blit(
             &mut rgba,
             w,
-            &glyph_cap(glyph),
-            CAP,
-            CAP,
-            i as u32 * (CAP + ARROW_GAP),
-            (HINT_H - CAP) / 2,
+            &glyph_cap_scaled(glyph, cap_w, cap_h, sy),
+            cap_w,
+            cap_h,
+            (i as f32 * (CAP + ARROW_GAP) as f32 * sx).round() as u32,
+            (h - cap_h) / 2,
         );
     }
+    let mut face = UndoFace { rgba, w, h };
+    draw_hint_label(&mut face, label, 2 * CAP + ARROW_GAP + CAP_GAP, [sx, sy]);
+    (face, width)
+}
+
+fn draw_hint_label(face: &mut UndoFace, label: &str, x: u32, [sx, sy]: [f32; 2]) {
     let text_w = band_width(label);
-    let mut band = vec![0u8; (text_w * HINT_H * 4) as usize];
+    let left = (x as f32 * sx).round() as u32;
+    let right = ((x + text_w) as f32 * sx).round() as u32;
+    let width = right - left;
+    let mut band = vec![0u8; (width * face.h * 4) as usize];
     if let Some(font) = text::label_font() {
-        let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut band, text_w, HINT_H, &layout, INK);
+        let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX).scaled(sy);
+        text::draw_centred(&mut band, width, face.h, &layout, INK);
     }
-    blit(
-        &mut rgba,
-        w,
-        &band,
-        text_w,
-        HINT_H,
-        2 * CAP + ARROW_GAP + CAP_GAP,
-        0,
-    );
-    UndoFace { rgba, w, h: HINT_H }
+    blit(&mut face.rgba, face.w, &band, width, face.h, left, 0);
 }
 
 fn glyph_cap(glyph: char) -> Vec<u8> {
-    let mut cap = Vec::with_capacity((CAP * CAP * 4) as usize);
-    for _ in 0..CAP * CAP {
+    glyph_cap_scaled(glyph, CAP, CAP, 1.0)
+}
+
+fn glyph_cap_scaled(glyph: char, w: u32, h: u32, scale: f32) -> Vec<u8> {
+    let mut cap = Vec::with_capacity((w * h * 4) as usize);
+    for _ in 0..w * h {
         cap.extend_from_slice(&[INK[0], INK[1], INK[2], 255]);
     }
     let Some(font) = crate::icon::symbols_font() else {
         return cap;
     };
-    let (m, cov) = font.rasterize(glyph, KEY_PX);
-    let x0 = (CAP as i32 - m.width as i32) / 2;
-    let y0 = (CAP as i32 - m.height as i32) / 2;
+    let (m, cov) = font.rasterize(glyph, KEY_PX * scale);
+    let x0 = (w as i32 - m.width as i32) / 2;
+    let y0 = (h as i32 - m.height as i32) / 2;
     for gy in 0..m.height {
         for gx in 0..m.width {
             let (dx, dy) = (x0 + gx as i32, y0 + gy as i32);
-            if dx < 0 || dy < 0 || dx >= CAP as i32 || dy >= CAP as i32 {
+            if dx < 0 || dy < 0 || dx >= w as i32 || dy >= h as i32 {
                 continue;
             }
             let a = cov[gy * m.width + gx] as u32;
-            let at = ((dy as u32 * CAP + dx as u32) * 4) as usize;
+            let at = ((dy as u32 * w + dx as u32) * 4) as usize;
             for k in 0..3 {
                 cap[at + k] =
                     ((CAP_INK[k] as u32 * a + cap[at + k] as u32 * (255 - a)) / 255) as u8;

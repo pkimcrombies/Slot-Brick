@@ -549,8 +549,13 @@ fn brightness_and_volume_still_answer_over_the_quick_menu() {
 }
 
 fn fake_faces(a: &mut App) {
+    fake_faces_at(a, [1.0, 1.0]);
+}
+
+fn fake_faces_at(a: &mut App, scale: [f32; 2]) {
     let id = TexId::from_raw;
     a.set_quick_menu_faces(QuickMenuFaces {
+        scale,
         labels: (0..QuickRow::ALL.len())
             .map(|i| (id(100 + i), 200, 40))
             .collect(),
@@ -588,6 +593,21 @@ fn placed(out: &[Draw], id: usize) -> Option<[f32; 4]> {
 
 fn drawn(out: &[Draw], id: usize) -> bool {
     placed(out, id).is_some()
+}
+
+#[test]
+fn menu_labels_and_hints_land_on_display_pixels() {
+    let (_d, mut a, _) = on_carousel();
+    let scale = [1.6, 1.6];
+    fake_faces_at(&mut a, scale);
+    a.apply(Action::QuickMenu);
+    let out = frame(&a);
+    for id in [100 + QuickRow::MAIN[0].index(), 400] {
+        let [x, y, w, h] = placed(&out, id).unwrap();
+        for pixels in [x * scale[0], y * scale[1], w * scale[0], h * scale[1]] {
+            assert!((pixels - pixels.round()).abs() < 0.001, "{id}: {pixels}");
+        }
+    }
 }
 
 #[test]

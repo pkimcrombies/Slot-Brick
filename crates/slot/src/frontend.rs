@@ -9,11 +9,12 @@ use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, bezel_face, cart_shadow, chip_face, chip_shadow_face,
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
-    quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, rebuild_count_face,
+    quick_caret_face, quick_caret_face_scaled, quick_label_face, quick_label_face_scaled,
+    quick_legend_faces_scaled, quick_value_face_scaled, rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
     wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
     QuickRow, QuickValue, RebuildScreen, StatusIcon, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
-    HUD_ICON_PX, HUD_INK, LEGEND,
+    HUD_ICON_PX, HUD_INK, LEGEND, QUICK_TEXT_H,
 };
 
 use crate::app::{App, LinkRow, Phase};
@@ -74,6 +75,7 @@ pub struct Frontend {
     clocks: Clocks,
     about: AboutFace,
     quick_clock: QuickClock,
+    quick_menu_scale: [f32; 2],
     overlay_tex: OverlayTex,
     #[cfg(feature = "brick")]
     wifi_tex: Option<TexId>,
@@ -112,6 +114,7 @@ struct OverlayTex {
 struct Scroll {
     whole: slot_ui::UndoFace,
     room: u32,
+    scale_x: f32,
     since: std::time::Instant,
     at: Option<u32>,
 }
@@ -125,16 +128,17 @@ impl Scroll {
     /// along to the end, resting, and back.
     fn offset(&self, secs: f32) -> u32 {
         let span = self.whole.w.saturating_sub(self.room) as f32;
-        let travel = span / SCROLL_PX_PER_S;
+        let speed = SCROLL_PX_PER_S * self.scale_x;
+        let travel = span / speed;
         let t = secs % (2.0 * (SCROLL_REST_S + travel));
         let x = if t < SCROLL_REST_S {
             0.0
         } else if t < SCROLL_REST_S + travel {
-            (t - SCROLL_REST_S) * SCROLL_PX_PER_S
+            (t - SCROLL_REST_S) * speed
         } else if t < 2.0 * SCROLL_REST_S + travel {
             span
         } else {
-            span - (t - 2.0 * SCROLL_REST_S - travel) * SCROLL_PX_PER_S
+            span - (t - 2.0 * SCROLL_REST_S - travel) * speed
         };
         x.clamp(0.0, span) as u32
     }
@@ -142,7 +146,8 @@ impl Scroll {
     /// The piece `at` along, inside the clear margin every value face has at its sides (so it
     /// sits by the carets as a whole one would), faded in at an edge where more carries on.
     fn piece(&self, at: u32) -> Vec<u8> {
-        let (w, h, room, pad) = (self.whole.w, self.whole.h, self.room, slot_ui::MENU_PAD);
+        let (w, h, room) = (self.whole.w, self.whole.h, self.room);
+        let pad = (slot_ui::MENU_PAD as f32 * self.scale_x).round() as u32;
         let ink = room.saturating_sub(2 * pad);
         let mut out = vec![0u8; (room * h * 4) as usize];
         for y in 0..h {
@@ -150,9 +155,9 @@ impl Scroll {
             let to = ((y * room + pad) * 4) as usize;
             out[to..to + (ink * 4) as usize].copy_from_slice(&self.whole.rgba[from..from + (ink * 4) as usize]);
         }
-        const FADE: u32 = 14;
-        for x in 0..FADE.min(ink) {
-            let k = x as f32 / FADE as f32;
+        let fade = (14.0 * self.scale_x).round() as u32;
+        for x in 0..fade.min(ink) {
+            let k = x as f32 / fade as f32;
             for y in 0..h {
                 if at > 0 {
                     let i = ((y * room + pad + x) * 4 + 3) as usize;
@@ -169,10 +174,10 @@ impl Scroll {
 }
 
 /// `text` as a value face no wider than `room`: whole when it fits, else cut short with "...".
-fn shortened_value_face(text: &str, lit: bool, room: u32) -> slot_ui::UndoFace {
-    let whole = quick_value_face(text, lit);
-    if whole.w <= room {
-        return whole;
+fn shortened_value_face(text: &str, room: u32, scale: [f32; 2]) -> (UndoFace, u32) {
+    let (whole, width) = quick_value_face_scaled(text, false, scale);
+    if width <= room {
+        return (whole, width);
     }
     let chars: Vec<char> = text.chars().collect();
     // The most of it that fits with the dots after it.
@@ -180,14 +185,14 @@ fn shortened_value_face(text: &str, lit: bool, room: u32) -> slot_ui::UndoFace {
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
         let cut: String = chars[..mid].iter().collect::<String>() + "...";
-        if quick_value_face(&cut, lit).w <= room { lo = mid } else { hi = mid - 1 }
+        if quick_value_face_scaled(&cut, false, scale).1 <= room { lo = mid } else { hi = mid - 1 }
     }
-    quick_value_face(&(chars[..lo].iter().collect::<String>() + "..."), lit)
+    quick_value_face_scaled(&(chars[..lo].iter().collect::<String>() + "..."), false, scale)
 }
 
 /// The rows that read a name (each system's Overlay row: the overlay's, or Off; Font: the
 /// font's) are made again when it changes.
-fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut OverlayTex) {
+fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut OverlayTex, scale: [f32; 2]) {
     if app.quick_menu().is_none() {
         return;
     }
@@ -205,27 +210,31 @@ fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut Overla
                 (QuickRow::Font, Some(root)) => crate::fonts::preview(root, &text),
                 _ => None,
             };
-            let in_own = |draw: &mut dyn FnMut() -> slot_ui::UndoFace| match own {
+            let in_own = |draw: &mut dyn FnMut() -> (UndoFace, u32)| match own {
                 Some(font) => slot_ui::text::in_font(font, draw),
                 None => draw(),
             };
             let label_w = quick_label_face(row).w;
-            let dim = in_own(&mut || shortened_value_face(&text, false, slot_ui::quick_value_room(label_w, None)));
+            let (dim, dim_w) = in_own(&mut || shortened_value_face(&text, slot_ui::quick_value_room(label_w, None), scale));
             let room = slot_ui::quick_value_room(label_w, Some(carets));
-            let whole = in_own(&mut || quick_value_face(&text, true));
-            let (lit, scroll) = match whole.w > room {
-                true => {
-                    let scroll = Scroll { whole, room, since: std::time::Instant::now(), at: Some(0) };
-                    let piece = slot_ui::UndoFace { rgba: scroll.piece(0), w: room, h: scroll.whole.h };
-                    (piece, Some(scroll))
-                }
-                false => (whole, None),
+            let (whole, whole_w) = in_own(&mut || quick_value_face_scaled(&text, true, scale));
+            let (lit, lit_w, scroll) = if whole_w > room {
+                let scroll = Scroll {
+                    whole,
+                    room: (room as f32 * scale[0]).round() as u32,
+                    scale_x: scale[0],
+                    since: std::time::Instant::now(),
+                    at: Some(0),
+                };
+                let piece = UndoFace { rgba: scroll.piece(0), w: scroll.room, h: scroll.whole.h };
+                (piece, room, Some(scroll))
+            } else {
+                (whole, whole_w, None)
             };
             tex.scrolls[i] = scroll;
-            let (dim_size, lit_size) = ((dim.w, dim.h), (lit.w, lit.h));
             let dim = upload(compositor, &mut tex.texts[i][0], dim);
             let lit = upload(compositor, &mut tex.texts[i][1], lit);
-            app.set_named_text_faces(i, text, [(dim, dim_size.0, dim_size.1), (lit, lit_size.0, lit_size.1)]);
+            app.set_named_text_faces(i, text, [(dim, dim_w, QUICK_TEXT_H), (lit, lit_w, QUICK_TEXT_H)]);
         }
         // A long name moves along only while its row is the lit one, starting from its start.
         let (Some(scroll), Some(id)) = (&mut tex.scrolls[i], tex.texts[i][1]) else {
@@ -394,6 +403,7 @@ impl Frontend {
             clocks: Clocks::default(),
             about: AboutFace::default(),
             quick_clock: QuickClock::default(),
+            quick_menu_scale: [1.0, 1.0],
             overlay_tex: OverlayTex::default(),
             #[cfg(feature = "brick")]
             wifi_tex: None,
@@ -573,21 +583,26 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_pause_buttons_faces(buttons);
-        let mut up = |f: UndoFace| (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h);
+        let scale = if cfg!(feature = "brick") { compositor.ui_scale() } else { [1.0, 1.0] };
+        self.quick_menu_scale = scale;
+        let mut up = |(face, width): (UndoFace, u32)| {
+            (compositor.create_texture(face.w, face.h, &face.rgba), width, QUICK_TEXT_H)
+        };
         let labels = QuickRow::ALL
             .iter()
-            .map(|r| up(quick_label_face(*r)))
+            .map(|r| up(quick_label_face_scaled(*r, scale)))
             .collect();
         let values = QuickValue::ALL
             .iter()
-            .map(|v| [false, true].map(|lit| up(quick_value_face(v.text(), lit))))
+            .map(|v| [false, true].map(|lit| up(quick_value_face_scaled(v.text(), lit, scale))))
             .collect();
-        let carets = [false, true].map(|right| up(quick_caret_face(right)));
-        let legend = quick_legend_faces().map(|f| {
+        let carets = [false, true].map(|right| up(quick_caret_face_scaled(right, scale)));
+        let legend = quick_legend_faces_scaled(scale).map(|f| {
             let (tex, w, _) = up(f);
             (tex, w)
         });
         self.session.app_mut().set_quick_menu_faces(QuickMenuFaces {
+            scale,
             labels,
             values,
             carets,
@@ -811,8 +826,8 @@ impl Frontend {
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_disc_faces(self.session.app_mut(), compositor, &mut self.clocks);
         sync_about(self.session.app_mut(), compositor, &mut self.about);
-        sync_quick_clock(self.session.app_mut(), compositor, &mut self.quick_clock);
-        sync_named_texts(self.session.app_mut(), compositor, &mut self.overlay_tex);
+        sync_quick_clock(self.session.app_mut(), compositor, &mut self.quick_clock, self.quick_menu_scale);
+        sync_named_texts(self.session.app_mut(), compositor, &mut self.overlay_tex, self.quick_menu_scale);
         sync_overlay(self.session.app_mut(), compositor, &mut self.overlay_tex);
         sync_label_grid(self.session.app_mut(), compositor, &mut self.label_grid_tex);
         sync_label_adjust(self.session.app_mut(), compositor, &mut self.label_adjust_tex);
@@ -1193,7 +1208,7 @@ fn sync_disc_faces(app: &mut App, compositor: &mut Compositor, clocks: &mut Cloc
     app.set_disc_faces(ids);
 }
 
-fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut QuickClock) {
+fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut QuickClock, scale: [f32; 2]) {
     if app.quick_menu().is_none() {
         return;
     }
@@ -1201,14 +1216,11 @@ fn sync_quick_clock(app: &mut App, compositor: &mut Compositor, state: &mut Quic
     if text == state.shown {
         return;
     }
-    let (dim, lit) = (
-        quick_value_face(&text, false),
-        quick_value_face(&text, true),
-    );
-    let (dim_size, lit_size) = ((dim.w, dim.h), (lit.w, lit.h));
+    let (dim, dim_w) = quick_value_face_scaled(&text, false, scale);
+    let (lit, lit_w) = quick_value_face_scaled(&text, true, scale);
     let dim = upload(compositor, &mut state.dim, dim);
     let lit = upload(compositor, &mut state.lit, lit);
-    app.set_quick_clock_faces((dim, dim_size.0, dim_size.1), (lit, lit_size.0, lit_size.1));
+    app.set_quick_clock_faces((dim, dim_w, QUICK_TEXT_H), (lit, lit_w, QUICK_TEXT_H));
     state.shown = text;
 }
 

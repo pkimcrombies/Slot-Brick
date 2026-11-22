@@ -2,6 +2,7 @@ use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_power::Battery;
 
 use crate::battery::{draw_gauge, draw_status_gauge, status_gauge_width, GAUGE_H};
+use crate::draw::pixel_aligned_texture;
 use crate::plate::HINT_H;
 use crate::slot_chrome::MOUTH_H;
 
@@ -98,24 +99,7 @@ pub(crate) fn draw_status_text(x: f32, y: f32, p: Printed, scale: [f32; 2], out:
         draw_printed(x, y, p, out);
         return;
     };
-    out.push(status_sprite(tex, [x, y], [p.w as f32, HINT_H as f32], scale));
-}
-
-/// Align a texture rasterized at display resolution to the same physical pixel grid.
-pub(crate) fn status_sprite(
-    tex: TexId,
-    [x, y]: [f32; 2],
-    [w, h]: [f32; 2],
-    [sx, sy]: [f32; 2],
-) -> Draw {
-    Draw::Tex {
-        x: (x * sx).round() / sx,
-        y: (y * sy).round() / sy,
-        w: (w * sx).round().max(1.0) / sx,
-        h: (h * sy).round().max(1.0) / sy,
-        tex,
-        alpha: 1.0,
-    }
+    out.push(pixel_aligned_texture(tex, [x, y], [p.w as f32, HINT_H as f32], scale, 1.0));
 }
 
 /// Android-style shelf status line, 12px from the top and 24px from both edges.
@@ -155,7 +139,7 @@ pub fn draw_status_bar(
         let (w, h) = (w as f32, h as f32);
         icon_right -= WIFI_GAP + w;
         let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
-        out.push(status_sprite(tex, [icon_right, y], [w, h], scale));
+        out.push(pixel_aligned_texture(tex, [icon_right, y], [w, h], scale, 1.0));
     }
     if let Some((tex, w, h)) = update {
         icon_right -= WIFI_GAP + w as f32;

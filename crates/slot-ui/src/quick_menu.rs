@@ -1,5 +1,5 @@
-use crate::draw::{Draw, TexId, OUT_H, OUT_W};
-use crate::plate::{arrows_hint_face, centred_hints, hint_face, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
+use crate::draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
+use crate::plate::{arrows_hint_face_scaled, centred_hints, hint_face_scaled, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
 use crate::power_menu::{MENU_H, MENU_INK, MENU_PAD, MENU_PX};
 use crate::slot_chrome::{edge, opening};
 use crate::text;
@@ -694,23 +694,32 @@ const TYPE_DROP: f32 = 4.0;
 const CARET_GAP: f32 = 14.0;
 const CARET_PX: f32 = 24.0;
 pub const QUICK_SPLIT: f32 = LEGEND_Y - 2.0;
+pub const QUICK_TEXT_H: u32 = MENU_H;
 const DIM_INK: [u8; 3] = [0x9a, 0x9a, 0xa4];
 
 pub fn quick_label_face(row: QuickRow) -> UndoFace {
-    quick_text_face(row.label(), MENU_INK)
+    quick_label_face_scaled(row, [1.0, 1.0]).0
 }
 
 pub fn quick_value_face(text: &str, lit: bool) -> UndoFace {
-    quick_text_face(text, if lit { MENU_INK } else { DIM_INK })
+    quick_value_face_scaled(text, lit, [1.0, 1.0]).0
 }
 
-fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
+pub fn quick_label_face_scaled(row: QuickRow, scale: [f32; 2]) -> (UndoFace, u32) {
+    quick_text_face(row.label(), MENU_INK, scale)
+}
+
+pub fn quick_value_face_scaled(text: &str, lit: bool, scale: [f32; 2]) -> (UndoFace, u32) {
+    quick_text_face(text, if lit { MENU_INK } else { DIM_INK }, scale)
+}
+
+fn quick_text_face(label: &str, colour: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
     let Some(font) = text::label_font() else {
-        return UndoFace {
+        return (UndoFace {
             rgba: Vec::new(),
             w: 0,
             h: 0,
-        };
+        }, 0);
     };
     let layout = text::fit(font, label, OUT_W as f32, 1, MENU_PX, MENU_PX);
     let set = layout
@@ -718,10 +727,12 @@ fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
         .iter()
         .map(|l| text::line_width(font, l, layout.px, layout.tracking))
         .fold(0.0, f32::max);
-    let w = set.ceil() as u32 + 2 * MENU_PAD;
-    let mut rgba = vec![0u8; (w * MENU_H * 4) as usize];
-    text::draw_centred(&mut rgba, w, MENU_H, &layout, colour);
-    UndoFace { rgba, w, h: MENU_H }
+    let width = set.ceil() as u32 + 2 * MENU_PAD;
+    let w = (width as f32 * sx).round() as u32;
+    let h = (MENU_H as f32 * sy).round() as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    text::draw_centred(&mut rgba, w, h, &layout.scaled(sy), colour);
+    (UndoFace { rgba, w, h }, width)
 }
 
 /// The least space kept between a row's label and its value.
@@ -744,20 +755,27 @@ pub fn quick_value_room(label_w: u32, carets: Option<(u32, u32)>) -> u32 {
 }
 
 pub fn quick_caret_face(right: bool) -> UndoFace {
+    quick_caret_face_scaled(right, [1.0, 1.0]).0
+}
+
+pub fn quick_caret_face_scaled(right: bool, [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
     let glyph = if right { '\u{f0da}' } else { '\u{f0d9}' };
     let (Some(symbols), Some(label)) = (crate::icon::symbols_font(), text::label_font()) else {
-        return UndoFace {
+        return (UndoFace {
             rgba: Vec::new(),
             w: 0,
             h: 0,
-        };
+        }, 0);
     };
-    let (m, cov) = symbols.rasterize(glyph, CARET_PX);
-    let (w, h) = (m.width as u32, MENU_H);
-    let centre = match label.horizontal_line_metrics(MENU_PX) {
+    let width = symbols.metrics(glyph, CARET_PX).width as u32;
+    let (m, cov) = symbols.rasterize(glyph, CARET_PX * sy);
+    let w = (width as f32 * sx).round() as u32;
+    let h = (MENU_H as f32 * sy).round() as u32;
+    let px = MENU_PX * sy;
+    let centre = match label.horizontal_line_metrics(px) {
         Some(v) => {
             (h as f32 - v.new_line_size) / 2.0 + v.ascent
-                - label.metrics('H', MENU_PX).height as f32 / 2.0
+                - label.metrics('H', px).height as f32 / 2.0
         }
         None => h as f32 / 2.0,
     };
@@ -768,25 +786,30 @@ pub fn quick_caret_face(right: bool) -> UndoFace {
         if y < 0 || y >= h as i32 {
             continue;
         }
-        for gx in 0..m.width {
+        for gx in 0..m.width.min(w as usize) {
             let at = ((y as u32 * w + gx as u32) * 4) as usize;
             let a = cov[gy * m.width + gx];
             rgba[at..at + 4].copy_from_slice(&[MENU_INK[0], MENU_INK[1], MENU_INK[2], a]);
         }
     }
-    UndoFace { rgba, w, h }
+    (UndoFace { rgba, w, h }, width)
 }
 
 pub fn quick_legend_faces() -> [UndoFace; 4] {
+    quick_legend_faces_scaled([1.0, 1.0]).map(|(face, _)| face)
+}
+
+pub fn quick_legend_faces_scaled(scale: [f32; 2]) -> [(UndoFace, u32); 4] {
     [
-        hint_face("B", "Back"),
-        arrows_hint_face("Change"),
-        hint_face("A", "Open"),
-        hint_face("A", "Reset"),
+        hint_face_scaled("B", "Back", scale),
+        arrows_hint_face_scaled("Change", scale),
+        hint_face_scaled("A", "Open", scale),
+        hint_face_scaled("A", "Reset", scale),
     ]
 }
 
 pub struct QuickMenuFaces {
+    pub scale: [f32; 2],
     pub labels: Vec<(TexId, u32, u32)>,
     pub values: Vec<[(TexId, u32, u32); 2]>,
     pub carets: [(TexId, u32, u32); 2],
@@ -825,13 +848,18 @@ impl QuickMenu<'_> {
         let Some(faces) = self.faces else {
             return;
         };
+        let mut draw = |(tex, w, h), x, y, alpha| {
+            if w > 0 && h > 0 {
+                out.push(pixel_aligned_texture(tex, [x, y], [w as f32, h as f32], faces.scale, alpha));
+            }
+        };
         let (right, pad) = (OUT_W as f32 - QUICK_EDGE, MENU_PAD as f32);
         for &row in self.row.page() {
             let y = row_top(row) + TYPE_DROP;
             let lit = row == self.row;
             if let Some(&(tex, w, h)) = faces.labels.get(row.index()) {
                 let alpha = if self.disabled[row.index()] { DISABLED_ALPHA } else { 1.0 };
-                push_alpha(out, tex, QUICK_EDGE - pad, y, w, h, alpha);
+                draw((tex, w, h), QUICK_EDGE - pad, y, alpha);
             }
             let value = match row {
                 QuickRow::DateTime => self.clock.map(|c| c[lit as usize]),
@@ -844,15 +872,15 @@ impl QuickMenu<'_> {
                 continue;
             };
             if !lit || row.opens() || row.info() {
-                push(out, tex, right + pad - w as f32, y, w, h);
+                draw((tex, w, h), right + pad - w as f32, y, 1.0);
                 continue;
             }
             let [(left_tex, lw, lh), (right_tex, rw, rh)] = faces.carets;
             let rx = right - rw as f32;
-            push(out, right_tex, rx, y, rw, rh);
+            draw((right_tex, rw, rh), rx, y, 1.0);
             let vx = rx - CARET_GAP + pad - w as f32;
-            push(out, tex, vx, y, w, h);
-            push(out, left_tex, vx + pad - CARET_GAP - lw as f32, y, lw, lh);
+            draw((tex, w, h), vx, y, 1.0);
+            draw((left_tex, lw, lh), vx + pad - CARET_GAP - lw as f32, y, 1.0);
         }
         let [back, change, open, reset] = faces.legend;
         let other = match self.row {
@@ -864,7 +892,7 @@ impl QuickMenu<'_> {
         let only_back = self.disabled[self.row.index()] || done || self.row.info();
         let hints: &[(TexId, u32)] = if only_back { &[back] } else { &[back, other] };
         for (tex, w, x) in centred_hints(hints, LEGEND_GAP) {
-            push(out, tex, x, LEGEND_Y, w, HINT_H);
+            draw((tex, w, HINT_H), x, LEGEND_Y, 1.0);
         }
     }
 }
@@ -876,18 +904,3 @@ fn row_top(row: QuickRow) -> f32 {
 }
 
 const DISABLED_ALPHA: f32 = 0.35;
-
-fn push(out: &mut Vec<Draw>, tex: TexId, x: f32, y: f32, w: u32, h: u32) {
-    push_alpha(out, tex, x, y, w, h, 1.0);
-}
-
-fn push_alpha(out: &mut Vec<Draw>, tex: TexId, x: f32, y: f32, w: u32, h: u32, alpha: f32) {
-    out.push(Draw::Tex {
-        x: x.round(),
-        y: y.round(),
-        w: w as f32,
-        h: h as f32,
-        tex,
-        alpha,
-    });
-}

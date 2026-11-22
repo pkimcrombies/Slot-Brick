@@ -41,18 +41,19 @@
 - Native Music: `crates/slot/src/music.rs`, `music_view.rs`,
   `music_cover.rs`, `music_library.rs` and `music_m4a.rs`.
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
-  **Album detail redesigned** after user reported the full-height artwork
-  backdrop was messy. Inspired by ClassiPod's
-  `cover_flow_album_selection_screen.dart` and
-  `cover_flow_album_song_list_tile.dart`: warm-white canvas, centered
-  556x354 bordered panel, 62px shared dusty-rose gradient header with
-  album/artist, 34px compact song rows (eight at a time), white-on-rose
-  selected row, small scrollbar and range caption. Actual ID3 track numbers
-  replace durations on the right because `music_library::Song` contains
-  no duration; never fabricate times. The album screen no longer decodes
-  backdrop art. Existing Cover Flow, Artists, Now Playing and physical input
-  paths remain unchanged; no Flutter/Hero transition was ported. Compile
-  and Brick Pro visual QA still required.
+  **Album song list: original iPod Classic music-menu style (2026-11-22).**
+  The earlier ClassiPod *Cover Flow selection panel* interpretation was
+  rejected: no floating bordered panel, coloured gradient header, large
+  artwork backdrop or Cover Flow flip animation. Native
+  `music_view.rs::album_tracks` now draws a full-width warm-white list with
+  a quiet album/artist title bar, seven 44px rows, track numbers **before**
+  titles, subtle separators, one full-width dusty-rose selected row, a slim
+  scroll indicator for long albums, and a small position count. The old
+  `album_gradient` texture/panel logic are removed. It is the same detail
+  screen reached from Cover Flow, regular Albums or Artists.
+  `music_library::Song` does not have a duration field: never fabricate
+  times. Existing Cover Flow, Now Playing, physical input, sleep and menu
+  fades must remain unchanged. Brick Pro visual QA and Rust build are pending.
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
@@ -137,11 +138,11 @@
 
 1. Confirm latest **warm-white Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
-2. Verify the redesigned **ClassiPod-inspired album detail panel** on the
-   640x480 Brick Pro (gradient, compact rows, long title truncation,
-   scrollbar, Back/Play buttons), plus the Original-style GPU Cover Flow
-   perspective, rack overlap, frame rate and artwork; no reflections.
-   Keep original album list via **X**.
+2. Verify the redesigned **original iPod Classic-style song list**
+   on the 640x480 Brick Pro: full-width rows, quiet top header, seven-row
+   scrolling, long title truncation, rose selection and slim scrollbar.
+   Also check the existing GPU Cover Flow perspective, rack overlap,
+   frame rate and artwork (without reflections). Keep album list via **X**.
 3. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,

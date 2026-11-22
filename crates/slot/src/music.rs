@@ -252,6 +252,7 @@ struct MusicSettings {
     cover_flow: bool,
     album_sort: AlbumSort,
     repeat: RepeatMode,
+    shuffle: bool,
     dim_timeout_secs: u16,
     dim_brightness: u8,
 }
@@ -264,6 +265,7 @@ impl Default for MusicSettings {
             cover_flow: true,
             album_sort: AlbumSort::Az,
             repeat: RepeatMode::Off,
+            shuffle: false,
             // Keep the screen illuminated; gently dim after a minute.
             dim_timeout_secs: 60,
             // Lowest nonzero hardware step; independent of normal brightness.
@@ -295,6 +297,8 @@ impl MusicSettings {
                     ("repeat", "all") => settings.repeat = RepeatMode::All,
                     ("repeat", "one") => settings.repeat = RepeatMode::One,
                     ("repeat", "off") => settings.repeat = RepeatMode::Off,
+                    ("shuffle", "true") => settings.shuffle = true,
+                    ("shuffle", "false") => settings.shuffle = false,
                     ("dim_timeout", seconds) => {
                         if let Ok(seconds) = seconds.parse::<u16>() {
                             if [0, 30, 60, 120].contains(&seconds) {
@@ -325,11 +329,12 @@ impl MusicSettings {
             }
         }
         let text = format!(
-            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\ndim_timeout={}\ndim_brightness={}\n",
+            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\nshuffle={}\ndim_timeout={}\ndim_brightness={}\n",
             self.max_volume,
             if self.cover_flow { "covers" } else { "list" },
             if self.album_sort == AlbumSort::Az { "az" } else { "release" },
             self.repeat.label(),
+            self.shuffle,
             self.dim_timeout_secs,
             self.dim_brightness,
         );
@@ -358,6 +363,9 @@ pub(crate) struct Music {
     /// Stable album identities: sorting never mutates the library itself.
     album_order: Vec<usize>,
     artist_album_order: Vec<Vec<usize>>,
+    /// Shuffled track positions for the current album; never reshuffle mid-cycle.
+    shuffle_album: Option<usize>,
+    shuffle_order: Vec<usize>,
 }
 
 impl Music {
@@ -390,6 +398,8 @@ impl Music {
             settings_root: None,
             album_order: Vec::new(),
             artist_album_order: Vec::new(),
+            shuffle_album: None,
+            shuffle_order: Vec::new(),
         };
         music.sort_albums();
         music
@@ -433,6 +443,7 @@ impl Music {
     }
 
     pub(crate) fn repeat_mode(&self) -> RepeatMode { self.settings.repeat }
+    pub(crate) fn shuffle_enabled(&self) -> bool { self.settings.shuffle }
     /// Optional SD card root (the Slot directory), used for offline Music UI assets.
     pub(crate) fn icon_root(&self) -> Option<&Path> { self.settings_root.as_deref() }
     fn effective_volume(&self, requested: u8) -> u8 {
@@ -675,11 +686,79 @@ impl Music {
             .is_some_and(|track| matches!(track.status, Status::Loading | Status::Playing))
     }
 
+    /// Build a randomized, non-repeating track order for one album.
+    /// The selected song is always first; shuffle never interrupts playback.
+    fn begin_shuffle_from(&mut self, album: usize, index: usize) {
+        let count = self.library.albums[album].songs.len();
+        self.shuffle_album = Some(album);
+        self.shuffle_order = (0..count).filter(|&song| song != index).collect();
+        // Simple Fisher-Yates shuffle with a per-invocation time seed. This is
+        // UI playback ordering, not a security-sensitive RNG.
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_nanos() as u64
+            ^ ((album as u64) << 32) ^ index as u64;
+        if seed == 0 { seed = 0x9e37_79b9_7f4a_7c15; }
+        for i in (1..self.shuffle_order.len()).rev() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let j = (seed % (i as u64 + 1)) as usize;
+            self.shuffle_order.swap(i, j);
+        }
+        self.shuffle_order.insert(0, index);
+    }
+
+    fn shuffle_next(&mut self, album: usize, index: usize, forward: bool, wrap: bool) {
+        let count = self.library.albums[album].songs.len();
+        if count <= 1 { return; }
+        if self.shuffle_album != Some(album) || self.shuffle_order.len() != count {
+            self.begin_shuffle_from(album, index);
+        }
+        let position = self.shuffle_order.iter().position(|&song| song == index);
+        let Some(position) = position else {
+            self.begin_shuffle_from(album, index);
+            return;
+        };
+        let next = if forward {
+            if position + 1 < count {
+                Some(self.shuffle_order[position + 1])
+            } else if wrap {
+                // New cycle starts after the currently playing track; don't
+                // repeat the same song immediately, even with Repeat All.
+                self.begin_shuffle_from(album, index);
+                Some(self.shuffle_order[1])
+            } else {
+                None
+            }
+        } else if position > 0 {
+            Some(self.shuffle_order[position - 1])
+        } else {
+            None
+        };
+        if let Some(next) = next { self.start_album(album, next); }
+    }
+
+    fn toggle_shuffle(&mut self) {
+        self.settings.shuffle = !self.settings.shuffle;
+        self.shuffle_album = None;
+        self.shuffle_order.clear();
+        if self.settings.shuffle {
+            if let Some(track) = &self.track {
+                self.begin_shuffle_from(track.album, track.index);
+            }
+        }
+        self.persist_settings();
+    }
+
     /// User-initiated play opens Now Playing but retains the browser stack.
     fn start(&mut self, index: usize) {
         let album = self.selected_album().expect("song belongs to an album");
         // Keep the browser's chosen track, even after returning from playback.
         self.select_row(index);
+        // A new song selection begins a fresh shuffle cycle from that song.
+        self.shuffle_album = None;
+        self.shuffle_order.clear();
         self.start_album(album, index);
         self.now_playing_view = true;
     }
@@ -705,6 +784,10 @@ impl Music {
 
     fn switch(&mut self, index: usize, forward: bool) {
         let Some(album) = self.track.as_ref().map(|track| track.album) else { return };
+        if self.settings.shuffle {
+            self.shuffle_next(album, index, forward, false);
+            return;
+        }
         if let Some(next) = index
             .checked_add_signed(if forward { 1 } else { -1 })
             .filter(|&i| i < self.library.albums[album].songs.len())
@@ -715,8 +798,16 @@ impl Music {
 
     fn advance_at_end(&mut self, index: usize) {
         let Some(album) = self.track.as_ref().map(|track| track.album) else { return };
+        if self.settings.repeat == RepeatMode::One {
+            self.start_album(album, index);
+            return;
+        }
+        if self.settings.shuffle {
+            self.shuffle_next(album, index, true, self.settings.repeat == RepeatMode::All);
+            return;
+        }
         match self.settings.repeat {
-            RepeatMode::One => self.start_album(album, index),
+            RepeatMode::One => unreachable!(),
             RepeatMode::All if index + 1 == self.library.albums[album].songs.len() => {
                 self.start_album(album, 0)
             }
@@ -789,8 +880,13 @@ impl Music {
                         self.settings.repeat = self.settings.repeat.step(true);
                         self.persist_settings();
                     }
+                    Action::GbaDown(Btn::Y) => self.toggle_shuffle(),
                     _ => {}
                 }
+            }
+            // Y also arms shuffle before a track has been selected.
+            if self.track.is_none() && action == Action::GbaDown(Btn::Y) {
+                self.toggle_shuffle();
             }
             // Without a track, D-pad input and A do nothing. The B handler
             // above opens Albums; shoulder buttons switch sections earlier.

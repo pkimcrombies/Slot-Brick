@@ -968,8 +968,14 @@ mod tests {
         assert_eq!(music.row(1).0, "Beta", "same year, earlier month follows");
         assert_eq!(music.row(2).0, "Delta");
         assert_eq!(music.row(3).0, "Alpha", "unknown date last");
+        // Opening an album is browsing, not playback. Assert the browsed
+        // album first, then explicitly start the selected song.
+        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.browsed_album().title, "Gamma");
+        assert!(music.track.is_none());
         music.input(Action::GbaDown(Btn::A));
         assert_eq!(music.playing_album().title, "Gamma");
+        assert!(music.showing_now_playing());
         // Changing sort cannot move or replace the album being played.
         music.settings_row = 2;
         music.change_setting(true);

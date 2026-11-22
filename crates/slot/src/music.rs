@@ -546,6 +546,34 @@ impl Music {
             .cursor = cursor;
     }
 
+    /// Up/Down on Albums Cover Flow jump to the next/previous *available*
+    /// title initial (A, B, ...), not just the next card. Skip empty letters
+    /// and wrap at the ends. Never reorder albums to make this work: the
+    /// current A-Z/release sort and playback identities must remain intact.
+    fn jump_album_letter(&mut self, forward: bool) {
+        if !self.cover_flow() || self.album_order.is_empty() {
+            return;
+        }
+        let mut starts = std::collections::BTreeMap::<char, usize>::new();
+        for (row, &album) in self.album_order.iter().enumerate() {
+            let initial = slot_store::initial(&self.library.albums[album].title);
+            starts.entry(initial).or_insert(row);
+        }
+        if starts.len() < 2 {
+            return;
+        }
+        let current_album = self.album_order[self.cursor().min(self.album_order.len() - 1)];
+        let current = slot_store::initial(&self.library.albums[current_album].title);
+        let letters: Vec<char> = starts.keys().copied().collect();
+        let position = letters.iter().position(|&letter| letter == current).unwrap_or(0);
+        let next = if forward {
+            (position + 1) % letters.len()
+        } else {
+            (position + letters.len() - 1) % letters.len()
+        };
+        self.select_row(starts[&letters[next]]);
+    }
+
     pub(crate) fn row_count(&self) -> usize {
         match self.location().page {
             Page::Albums => self.library.albums.len(),
@@ -812,13 +840,16 @@ impl Music {
                     self.select_row(self.cursor() + 1);
                 }
             }
+            Action::GbaDown(Btn::Up) if self.cover_flow() => self.jump_album_letter(false),
+            Action::GbaDown(Btn::Down) if self.cover_flow() => self.jump_album_letter(true),
+            // The album list, Artists and track lists still move one row at a time.
             Action::GbaDown(Btn::Up) => self.select_row(self.cursor().saturating_sub(1)),
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
             // Keep the old D-pad behaviour in list mode: Left from Artists
             // returns to Albums and Right from Albums opens Artists.
-            // Only L1/R1 cycle all three top-level Music sections.
+            // Only L1/R1 cycle the four top-level Music sections.
             Action::GbaDown(Btn::Left) if self.is_root() && self.viewing_artists() => {
                 self.browse[0] = Location { page: Page::Albums, cursor: 0 };
             }
@@ -1191,6 +1222,108 @@ mod tests {
         music.open_page(Page::Album(0));
         assert!(music.album_for_row(0).is_none());
     }
+    #[test]
+    fn cover_flow_up_down_jumps_available_letters_and_wraps() {
+        let make_album = |title: &str| Album {
+            title: title.into(), artist: "artist".into(), release_date: None,
+            songs: vec![Song {
+                path: PathBuf::from(format!("{title}.mp3")),
+                title: "song".into(), artist: "artist".into(),
+                disc: 1, track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: ["#Hits", "Alpha", "Alpine", "Bravo", "Delta"]
+                .iter().map(|title| make_album(title)).collect(),
+            artists: vec![],
+        });
+        assert!(music.cover_flow());
+        // Use the ordered titles, not the original library storage positions.
+        assert_eq!(music.row(music.cursor()).0, "#Hits");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "Alpha");
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.row(music.cursor()).0, "Alpine",
+            "Left/Right still move a single cover");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "Bravo",
+            "skip the remaining A titles and unavailable letters");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "Delta");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "#Hits",
+            "Down wraps to the first available initial");
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.row(music.cursor()).0, "Delta",
+            "Up wraps to the last available initial");
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.row(music.cursor()).0, "Bravo");
+        music.input(Action::GbaDown(Btn::X)); // cover flow -> album list
+        assert!(!music.cover_flow());
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.row(music.cursor()).0, "Alpine",
+            "Up returns to single-row navigation in list mode");
+    }
+
+    #[test]
+    fn cover_flow_letter_jumps_respect_release_sort_without_reordering_albums() {
+        let make_album = |title: &str, date| Album {
+            title: title.into(), artist: "artist".into(), release_date: Some(date),
+            songs: vec![Song {
+                path: PathBuf::from(format!("{title}.mp3")),
+                title: "song".into(), artist: "artist".into(),
+                disc: 1, track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![
+                make_album("Alpha", 20200101), make_album("Beta", 20260101),
+                make_album("Alpine", 20250101), make_album("Delta", 20240101),
+            ],
+            artists: vec![],
+        });
+        music.settings_row = 2;
+        music.change_setting(true);
+        assert_eq!(music.settings.album_sort, AlbumSort::Release);
+        assert_eq!(music.row(0).0, "Beta");
+        // Under release sort, Down still means next alphabetically available
+        // letter, while the album rows themselves remain ordered by date.
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "Delta");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.row(music.cursor()).0, "Alpine",
+            "choose the first visible A album, not the oldest or a re-sort");
+        assert_eq!(music.row(0).0, "Beta", "release order must be unchanged");
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.row(music.cursor()).0, "Delta");
+    }
+
+    #[test]
+    fn cover_flow_letter_jumps_are_inert_for_empty_and_one_letter_libraries() {
+        let mut empty = Music::with_library(Library::default());
+        for action in [Btn::Up, Btn::Down] {
+            assert!(!empty.input(Action::GbaDown(action)));
+            assert_eq!(empty.cursor(), 0);
+        }
+        let mk = |name: &str| Album {
+            title: name.into(), artist: "artist".into(), release_date: None,
+            songs: vec![Song {
+                path: PathBuf::from(format!("{name}.mp3")),
+                title: "song".into(), artist: "artist".into(),
+                disc: 1, track: Some(1),
+            }],
+        };
+        let mut one_letter = Music::with_library(Library {
+            albums: vec![mk("Alpha"), mk("Alpine")], artists: vec![],
+        });
+        one_letter.input(Action::GbaDown(Btn::Right));
+        assert_eq!(one_letter.cursor(), 1);
+        one_letter.input(Action::GbaDown(Btn::Up));
+        one_letter.input(Action::GbaDown(Btn::Down));
+        assert_eq!(one_letter.cursor(), 1,
+            "do not unexpectedly reset selection if every album shares an initial");
+    }
+
     #[test]
     fn cover_flow_is_default_and_left_right_browse_albums_without_changing_tabs() {
         let albums = (0..3).map(|i| Album {

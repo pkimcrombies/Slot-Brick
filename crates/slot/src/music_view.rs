@@ -14,9 +14,14 @@ const LIST_TOP: f32 = 104.0;
 const ROW_H: f32 = 48.0;
 const ALBUM_COVER_SIDE: f32 = 40.0;
 const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
-const COVER_SIDE: f32 = 128.0;
-const COVER_X: f32 = OUT_W as f32 - EDGE - COVER_SIDE;
-const COVER_Y: f32 = 124.0;
+// ClassiPod-inspired composition, retaining Slot's native 640x480 layout,
+// typography, colour palette, embedded artwork decoder and physical controls.
+const PLAYING_COVER_SIDE: f32 = 214.0;
+const PLAYING_COVER_X: f32 = EDGE;
+const PLAYING_COVER_Y: f32 = 113.0;
+const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
+const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
+const PLAYING_PROGRESS_Y: f32 = 372.0;
 
 #[derive(Clone, Copy)]
 struct Face {
@@ -187,21 +192,45 @@ impl Painter<'_> {
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
         self.heading("now playing");
         let song = music.song(track);
-        let room = if let Some((texture, pixels)) = cover {
-            let size = pixels.map(|n| n as f32 * COVER_SIDE / THUMBNAIL as f32);
+        let album = music.playing_album();
+
+        // Keep the artwork area stable while covers load asynchronously or
+        // when the file has no embedded image; metadata never jumps sideways.
+        self.rect(
+            [PLAYING_COVER_X, PLAYING_COVER_Y],
+            [PLAYING_COVER_SIDE, PLAYING_COVER_SIDE],
+            [0.055, 0.055, 0.055, 1.0],
+        );
+        if let Some((texture, pixels)) = cover {
+            let size = pixels.map(|n| n as f32 * PLAYING_COVER_SIDE / THUMBNAIL as f32);
             self.draws.push(pixel_aligned_texture(
                 texture,
-                [COVER_X + (COVER_SIDE - size[0]) / 2.0, COVER_Y + (COVER_SIDE - size[1]) / 2.0],
+                [
+                    PLAYING_COVER_X + (PLAYING_COVER_SIDE - size[0]) / 2.0,
+                    PLAYING_COVER_Y + (PLAYING_COVER_SIDE - size[1]) / 2.0,
+                ],
                 size,
                 self.scale,
                 1.0,
             ));
-            (COVER_X - EDGE - 22.0) as u32
-        } else {
-            (OUT_W as f32 - 2.0 * EDGE - 4.0) as u32
-        };
-        self.text_with_room(&song.title, 26, [EDGE, 147.0], MENU_SELECTION_INK, room);
-        self.text_with_room(&song.artist, 18, [EDGE, 188.0], MENU_MUTED_INK, room);
+        }
+
+        // ClassiPod's artwork-left, information-right hierarchy, rendered with
+        // Slot's own text faces. All strings remain ellipsized to this column.
+        self.text_with_room(
+            &song.title, 26, [PLAYING_INFO_X, 128.0], MENU_SELECTION_INK, PLAYING_INFO_W,
+        );
+        self.text_with_room(
+            &song.artist, 19, [PLAYING_INFO_X, 185.0], MENU_TEXT_INK, PLAYING_INFO_W,
+        );
+        self.text_with_room(
+            &album.title, 17, [PLAYING_INFO_X, 221.0], MENU_MUTED_INK, PLAYING_INFO_W,
+        );
+
+        let position = format!("{} of {}", music.cursor() + 1, music.row_count());
+        self.text_with_room(
+            &position, 16, [PLAYING_INFO_X, 277.0], MENU_MUTED_INK, PLAYING_INFO_W,
+        );
         let state = match track.status {
             Status::Loading => "loading",
             Status::Playing => "playing",
@@ -210,24 +239,44 @@ impl Painter<'_> {
             Status::Unreadable => "could not play this track",
             Status::NoAudio => "audio output unavailable",
         };
-        self.text(state, 16, [EDGE, 230.0]);
+        self.text_with_room(
+            state, 15, [PLAYING_INFO_X, 306.0], MENU_MUTED_INK, PLAYING_INFO_W,
+        );
+
+        // The transport remains physical-button driven (A, B, left/right,
+        // L1/R1). Put the seek indicator at the bottom instead of adding
+        // faux touch controls or changing playback behaviour.
+        let width = OUT_W as f32 - 2.0 * EDGE;
+        self.rect([EDGE, PLAYING_PROGRESS_Y], [width, 4.0], [0.30, 0.30, 0.30, 1.0]);
         if let Some((elapsed, total)) = track.time() {
             if let Some(total) = total {
-                let (x, y, width) = (EDGE, 269.0, OUT_W as f32 - 2.0 * EDGE);
-                self.rect([x, y], [width, 4.0], [0.54, 0.53, 0.53, 1.0]);
-                let fraction = (elapsed / total).clamp(0.0, 1.0) as f32;
+                let fraction = if total > 0.0 {
+                    (elapsed / total).clamp(0.0, 1.0) as f32
+                } else {
+                    0.0
+                };
                 if fraction > 0.0 {
-                    self.rect([x, y], [width * fraction, 4.0], [0.96, 0.95, 0.93, 1.0]);
+                    let rose = MENU_SELECTION_INK.map(|n| n as f32 / 255.0);
+                    self.rect(
+                        [EDGE, PLAYING_PROGRESS_Y], [width * fraction, 4.0],
+                        [rose[0], rose[1], rose[2], 1.0],
+                    );
                 }
-                self.text(
-                    &format!("{} / {}", timestamp(elapsed), timestamp(total)),
-                    17,
-                    [EDGE, 284.0],
+                self.text_ink(&timestamp(elapsed), 17, [EDGE, 392.0], MENU_MUTED_INK);
+                self.text_right(
+                    &timestamp(total), 17, OUT_W as f32 - EDGE, 392.0, MENU_MUTED_INK,
                 );
             } else {
-                self.text(&timestamp(elapsed), 17, [EDGE, 284.0]);
+                self.text_ink(&timestamp(elapsed), 17, [EDGE, 392.0], MENU_MUTED_INK);
             }
         }
+    }
+
+    /// Place the time readout against the right edge of the progress bar.
+    fn text_right(&mut self, text: &str, px: u32, right: f32, y: f32, ink: [u8; 3]) {
+        let key = format!("{px}/120/{ink:?}/{text}");
+        let face = self.texture(key, |scale| menu_text_face(text, px, 120, scale, ink));
+        self.place(face, right - face.size[0] as f32, y);
     }
 
     fn heading(&mut self, title: &str) {
@@ -320,6 +369,17 @@ mod album_thumbnail_layout_tests {
         assert!(ALBUM_COVER_SIDE <= ROW_H);
         assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
         assert!(ALBUM_TEXT_X < OUT_W as f32 - EDGE);
+    }
+
+    #[test]
+    fn now_playing_art_and_text_are_separate_at_640_by_480() {
+        assert_eq!((OUT_W, OUT_H), (640, 480));
+        assert!(PLAYING_COVER_SIDE > 200.0);
+        assert!(PLAYING_COVER_X + PLAYING_COVER_SIDE + 12.0 < PLAYING_INFO_X);
+        assert!(PLAYING_INFO_W >= 270);
+        assert!(PLAYING_INFO_X + PLAYING_INFO_W as f32 <= OUT_W as f32 - EDGE);
+        assert!(PLAYING_COVER_Y + PLAYING_COVER_SIDE < PLAYING_PROGRESS_Y);
+        assert!(PLAYING_PROGRESS_Y + 48.0 < OUT_H as f32);
     }
 
     #[test]

@@ -1,0 +1,145 @@
+diff --git a/firmware/target/hosted/sdl/system-sdl.c b/firmware/target/hosted/sdl/system-sdl.c
+index 79348cc..195ffad 100644
+--- a/firmware/target/hosted/sdl/system-sdl.c
++++ b/firmware/target/hosted/sdl/system-sdl.c
+@@ -238,11 +238,18 @@ void system_init(void)
+ 
+ 
+     if (SDL_InitSubSystem(SDL_INIT_TIMER))
+-        panicf("%s", SDL_GetError());
++    {
++        fprintf(stderr, "Trimpod startup: SDL timer: %s\n", SDL_GetError());
++        exit(EXIT_FAILURE);
++    }
+ 
+ 
+ #ifndef __WIN32  /* Fails on Windows */
+-    SDL_InitSubSystem(SDL_INIT_VIDEO);
++    if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0)
++    {
++        fprintf(stderr, "Trimpod display: SDL video: %s\n", SDL_GetError());
++        exit(EXIT_FAILURE);
++    }
+ 
+ #if SDL_MAJOR_VERSION > 1
+     sdl_window_setup();
+diff --git a/firmware/target/hosted/sdl/window-sdl.c b/firmware/target/hosted/sdl/window-sdl.c
+index 1d9337a..b21f900 100644
+--- a/firmware/target/hosted/sdl/window-sdl.c
++++ b/firmware/target/hosted/sdl/window-sdl.c
+@@ -18,12 +18,13 @@
+  ****************************************************************************/
+ 
+ #include <SDL.h>
++#include <stdio.h>
++#include <stdlib.h>
+ #include "sim-ui-defines.h"
+ #include "window-sdl.h"
+ #include "lcd-sdl.h"
+ #include "misc.h"
+ #include "lcd.h"        /* lcd_panel_is_dark: no presents while the panel is off */
+-#include "panic.h"
+ 
+ /* Trimpod renders through an OpenGL ES 2/3 context (not an SDL_Renderer) so the
+  * Milkdrop visualizer (projectM) can draw into the same window. In normal UI
+@@ -81,9 +82,10 @@ static GLuint gl_compile(GLenum type, const char *src)
+     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+     if (!ok)
+     {
+-        char log[512];
++        char log[512] = {0};
+         glGetShaderInfoLog(s, sizeof(log), NULL, log);
+-        panicf("GL shader compile failed: %s", log);
++        fprintf(stderr, "Trimpod display: shader compilation failed: %s\n", log);
++        exit(EXIT_FAILURE);
+     }
+     return s;
+ }
+@@ -265,6 +267,40 @@ void sdl_window_adjustment_needed(void)
+     it is handled by the main thread later. */
+ }
+ 
++/* Startup errors must go to the log. Rockbox's on-screen panic needs the
++ * window and LCD surface that this code is still setting up. */
++static bool try_gl_window(int width, int height, Uint32 flags,
++                          int gles_version, int alpha_bits)
++{
++    const char *stage = "SDL_CreateWindow";
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, gles_version);
++    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, alpha_bits);
++    sdlWindow = SDL_CreateWindow(UI_TITLE, SDL_WINDOWPOS_CENTERED,
++                                 SDL_WINDOWPOS_CENTERED, width, height, flags);
++    if (sdlWindow)
++    {
++        stage = "SDL_GL_CreateContext";
++        gl_ctx = SDL_GL_CreateContext(sdlWindow);
++        if (gl_ctx)
++        {
++            stage = "SDL_GL_MakeCurrent";
++            if (SDL_GL_MakeCurrent(sdlWindow, gl_ctx) == 0)
++                return true;
++        }
++    }
++
++    fprintf(stderr, "Trimpod display (%s, %dx%d, ES%d, alpha %d): %s: %s\n",
++            SDL_GetCurrentVideoDriver(), width, height, gles_version, alpha_bits,
++            stage, SDL_GetError());
++    if (gl_ctx)
++        SDL_GL_DeleteContext(gl_ctx);
++    if (sdlWindow)
++        SDL_DestroyWindow(sdlWindow);
++    gl_ctx = NULL;
++    sdlWindow = NULL;
++    return false;
++}
++
+ void sdl_window_setup(void)
+ {
+     int width, height;
+@@ -281,20 +317,25 @@ void sdl_window_setup(void)
+     get_window_dimensions(&width, &height);
+ 
+     /* GLES 3.0 context (projectM needs it); the LCD is presented via GL too. */
+-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+-    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);   /* video shows through alpha 0 */
+     flags |= SDL_WINDOW_OPENGL;
+ 
+-    if ((sdlWindow = SDL_CreateWindow(UI_TITLE, SDL_WINDOWPOS_CENTERED,
+-                                   SDL_WINDOWPOS_CENTERED, width * display_zoom,
+-                                   height * display_zoom , flags)) == NULL)
+-        panicf("%s", SDL_GetError());
+-    if ((gl_ctx = SDL_GL_CreateContext(sdlWindow)) == NULL)
+-        panicf("SDL_GL_CreateContext: %s", SDL_GetError());
+-    SDL_GL_MakeCurrent(sdlWindow, gl_ctx);
++    int window_w = width * display_zoom, window_h = height * display_zoom;
++    if (!try_gl_window(window_w, window_h, flags, 3, 8))
++    {
++        /* Slot's PowerVR framebuffer uses an opaque RGB888 ES2 config. */
++        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
++        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
++        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
++        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
++        if (!try_gl_window(window_w, window_h, flags, 2, 0))
++            exit(EXIT_FAILURE);
++    }
++    const char *gl_version = (const char *)glGetString(GL_VERSION);
++    fprintf(stderr, "Trimpod display: %s, %s\n",
++            SDL_GetCurrentVideoDriver(), gl_version ? gl_version : "GL version unavailable");
+     SDL_GL_SetSwapInterval(1);
+     gl_init_present();
+ 
+@@ -302,7 +343,10 @@ void sdl_window_setup(void)
+     if ((sim_lcd_surface = SDL_CreateRGBSurface(0,
+                                                 SIM_LCD_WIDTH, SIM_LCD_HEIGHT,
+                                                 depth, 0, 0, 0, 0)) == NULL)
+-        panicf("%s", SDL_GetError());
++    {
++        fprintf(stderr, "Trimpod display: SDL_CreateRGBSurface: %s\n", SDL_GetError());
++        exit(EXIT_FAILURE);
++    }
+ 
+     display_zoom = 0; /* reset to 0 unless/until user requests a scale level change */
+     window_mutex = SDL_CreateMutex();

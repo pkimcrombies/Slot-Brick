@@ -2,7 +2,7 @@
 
 > Small handoff for future ChatGPT/AI coding sessions. **Read this first**, then verify the
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
-> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Previous branch tip before the dim-brightness change: `b27a978`.
+> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Navigation/HUD changes committed through `87b293c` (not yet built or tested on device).
 
 ## Where we work
 
@@ -49,6 +49,29 @@
 - Native Music: `crates/slot/src/music.rs`, `music_view.rs`,
   `music_cover.rs`, `music_library.rs`, `music_tags.rs` and `music_m4a.rs`.
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
+  **Now Playing navigation and background browsing (2026-11-23, not yet
+  ARM64-compiled or device-tested):** the real Music entry defaults to a
+  standalone **Now Playing** section, with Albums and Artists alongside it.
+  An empty Now Playing screen offers B/R1 to Albums. Starting a song switches
+  to Now Playing, but B returns to the existing browser/album detail without
+  stopping or discarding queued music; from Albums root L1 returns to Now
+  Playing, and Albums R1 goes to Artists. On Now Playing, A still pauses/
+  resumes, Left/Right still seek, L1/R1 still skip, and X cycles repeat.
+  Music::Track now owns its album ID and song index independently of the
+  browser location: audio decoding, repeat, metadata, album cover and track
+  count all use the playing album even when the user browses another album.
+  Automatically advancing tracks never takes over the current browsing
+  screen or selection. B on the browser's root or HOME/QuickMenu still exits
+  Music entirely and stops its music; playback outside the Music phase has
+  NOT been introduced.
+  **Shared shelf HUD in Music:** `app.rs` uses the same
+  `slot_ui::draw_status_bar` for Music and Shelf. Clock stays at the top-left,
+  battery/charging, connected Wi-Fi and update symbol at top-right with the
+  same black icons. Album-detail title/artist were shifted down to clear it.
+  Do not add a second HUD implementation or put the status bar behind the
+  ivory/gradient background. Added unit regression coverage for navigating
+  to/from Now Playing without stopping music, browsing another album while
+  preserving the original song, and the shared clock position.
   **Music Settings + repeat (Nov 2026, pending Rust/device validation):**
   press **Start** from any Music screen to open a full-width classic settings
   page; Up/Down select rows, Left/Right/A change values, B/Start closes.
@@ -234,7 +257,14 @@
 
 ## Next work
 
-1. Confirm latest **warm-ivory Music theme**, first-frame boot fade,
+1. Verify new **Now Playing / Albums / Artists** navigation and shared top
+   HUD first: Music defaults to Now Playing, B returns to the browser without
+   stopping music, Albums root L1 returns to Now Playing, A pauses/resumes,
+   background track keeps playing when browsing a different album, and the
+   clock/battery/Wi-Fi/update layout matches Shelf. Test track auto-advance
+   and repeat while browsing (including album identity and selection), menu
+   entry/exit, and empty libraries.
+   Confirm latest **warm-ivory Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
 2. Verify the redesigned **original iPod Classic-style song list**
    on the 640x480 Brick Pro: full-width rows, quiet top header, seven-row

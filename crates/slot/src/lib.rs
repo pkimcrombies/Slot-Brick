@@ -19,6 +19,8 @@ pub mod fonts;
 pub mod frames;
 pub mod frontend;
 mod music;
+mod music_library;
+mod music_tags;
 mod music_view;
 pub mod input;
 pub mod label_cache;

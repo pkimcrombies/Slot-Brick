@@ -8,9 +8,9 @@ use crate::music::{Music, Status, Track};
 
 const EDGE: f32 = 32.0;
 const CENTER: f32 = OUT_W as f32 / 2.0;
-const ROWS: usize = 7;
+const ROWS: usize = 6;
 const LIST_TOP: f32 = 104.0;
-const ROW_H: f32 = 43.0;
+const ROW_H: f32 = 48.0;
 const ROOM: u32 = OUT_W - 80;
 
 #[derive(Clone, Copy)]
@@ -63,21 +63,22 @@ struct Painter<'a> {
 
 impl Painter<'_> {
     fn browser(&mut self, music: &Music) {
-        self.text(music.folder_name(), 27, [EDGE, 45.0], false);
-        if music.entries.is_empty() {
-            let message = if music.is_root() {
-                "copy mp3 files to slot/music"
+        self.text(music.label(), 27, [EDGE, 45.0], false);
+        if music.row_count() == 0 {
+            let message = if music.scanning() {
+                "reading music tags"
             } else {
-                "no music in this folder"
+                "copy mp3 files to slot/music"
             };
             self.text(message, 22, [CENTER, 212.0], true);
             self.hints(&[("B", "back")]);
             return;
         }
-        let first = music.cursor.saturating_sub(ROWS - 1);
-        for (i, entry) in music.entries.iter().enumerate().skip(first).take(ROWS) {
+        let cursor = music.cursor();
+        let first = cursor.saturating_sub(ROWS - 1);
+        for i in first..(first + ROWS).min(music.row_count()) {
             let y = LIST_TOP + (i - first) as f32 * ROW_H;
-            if i == music.cursor {
+            if i == cursor {
                 let mut highlight = edge();
                 highlight[3] = 0.24;
                 self.rect([0.0, y], [OUT_W as f32, ROW_H], highlight);
@@ -87,28 +88,37 @@ impl Painter<'_> {
                     [0.96, 0.95, 0.93, 1.0],
                 );
             }
-            let label = if entry.folder {
-                format!("{}/", entry.name)
+            let (label, subtitle) = music.row(i);
+            if let Some(subtitle) = subtitle {
+                self.text(label, 21, [EDGE, y + 2.0], false);
+                self.text(subtitle, 13, [EDGE, y + 27.0], false);
             } else {
-                entry.name.clone()
-            };
-            self.text(&label, 24, [EDGE, y + 4.0], false);
+                self.text(label, 24, [EDGE, y + 6.0], false);
+            }
         }
-        let open = if music.entries[music.cursor].folder {
-            "open"
-        } else {
-            "play"
-        };
-        if music.has_tracks() {
-            self.hints(&[("B", "back"), ("Y", "play folder"), ("A", open)]);
-        } else {
-            self.hints(&[("B", "back"), ("A", open)]);
+        let mut hints = vec![("B", "back")];
+        if music.is_root() {
+            hints.push(("L1/R1", "view"));
         }
+        if music.can_play_album() {
+            hints.push(("Y", "play album"));
+        }
+        hints.push((
+            "A",
+            if music.showing_tracks() {
+                "play"
+            } else {
+                "open"
+            },
+        ));
+        self.hints(&hints);
     }
 
     fn playing(&mut self, music: &Music, track: &Track) {
         self.text("now playing", 27, [EDGE, 45.0], false);
-        self.text(music.track_name(track), 35, [CENTER, 159.0], true);
+        let song = music.song(track);
+        self.text(&song.title, 35, [CENTER, 147.0], true);
+        self.text(&song.artist, 21, [CENTER, 198.0], true);
         let (state, toggle) = match track.status {
             Status::Loading => ("loading", "pause"),
             Status::Playing => ("playing", "pause"),
@@ -117,7 +127,7 @@ impl Painter<'_> {
             Status::Unreadable => ("could not read this mp3", "retry"),
             Status::NoAudio => ("audio output unavailable", "retry"),
         };
-        self.text(state, 19, [CENTER, 217.0], true);
+        self.text(state, 17, [CENTER, 244.0], true);
         if let Some((elapsed, total)) = track.time() {
             if let Some(total) = total {
                 let (x, y, width) = (84.0, 279.0, OUT_W as f32 - 168.0);

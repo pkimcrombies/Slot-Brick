@@ -54,8 +54,12 @@ const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
 // Bottom-right repeat mode stays clear of elapsed/total time and progress.
-const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - 78.0;
-const REPEAT_BADGE_Y: f32 = OUT_H as f32 - 46.0;
+const REPEAT_ICON_SIDE: u32 = 32;
+const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
+const REPEAT_BADGE_Y: f32 = OUT_H as f32 - EDGE - REPEAT_ICON_SIDE as f32;
+// Downloaded from UXWing at install time and kept in Slot/System for offline play.
+const REPEAT_ICON_FILES: [&str; 3] =
+    ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
 const FLOW_SLOTS: usize = 7;
 // ClassiPod Original: 400 ms ease-out-sine, a 0.95 radian Y rotation,
 // 22% side scale reduction, and perspective coefficient 0.35 / cover size.
@@ -137,9 +141,47 @@ pub(crate) struct MusicView {
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
     playing_backdrop: Option<PlayingBackdrop>,
+    repeat_icons_loaded: bool,
+    repeat_icons: [Option<TexId>; 3],
 }
 
 impl MusicView {
+    /// Load official repeat PNGs once from the SD card, not from the network.
+    /// Missing/invalid files fall back to Slot's built-in simple arrow symbol.
+    fn repeat_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
+        if !self.repeat_icons_loaded {
+            self.repeat_icons_loaded = true;
+            if let Some(root) = music.icon_root() {
+                let folder = root.join("System/music-icons");
+                for (index, name) in REPEAT_ICON_FILES.iter().enumerate() {
+                    let path = folder.join(name);
+                    let Some(bytes) = std::fs::read(path).ok().filter(|b| b.len() <= 4 << 20) else {
+                        continue;
+                    };
+                    let Some(mut pixels) = decode_repeat_icon(&bytes) else { continue };
+                    let ink = if index == 0 { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
+                    // UXWing's black symbols become Slot's muted/rose ink while
+                    // retaining antialiased edges. White pixels are transparent.
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        let darkness = 255 - ((u16::from(pixel[0]) + u16::from(pixel[1])
+                            + u16::from(pixel[2])) / 3) as u8;
+                        pixel[3] = ((u16::from(pixel[3]) * u16::from(darkness)) / 255) as u8;
+                        pixel[..3].copy_from_slice(&ink);
+                    }
+                    self.repeat_icons[index] = Some(compositor.create_texture(
+                        REPEAT_ICON_SIDE, REPEAT_ICON_SIDE, &pixels,
+                    ));
+                }
+            }
+        }
+        let index = match music.repeat_mode() {
+            RepeatMode::Off => 0,
+            RepeatMode::All => 1,
+            RepeatMode::One => 2,
+        };
+        self.repeat_icons[index]
+    }
+
     pub(crate) fn cover_flow_animating(&self) -> bool {
         self.flow_motion.active(Instant::now())
     }
@@ -277,6 +319,12 @@ impl MusicView {
         } else {
             None
         };
+        let repeat_icon = if music.showing_now_playing()
+            && music.track.is_some() && !music.music_settings_open() {
+            self.repeat_icon(music, compositor)
+        } else {
+            None
+        };
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -297,7 +345,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover);
+                p.playing(music, track, cover, repeat_icon);
             } else {
                 p.empty_now_playing();
             }
@@ -310,6 +358,14 @@ impl MusicView {
         }
         p.draws
     }
+}
+
+/// UXWing PNG assets are downsized to a single 32px texture per mode.
+fn decode_repeat_icon(png: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = crate::cart_art::png_size(png)?;
+    if w > 1024 || h > 1024 || w == 0 || h == 0 { return None; }
+    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
+    slot_ui::cover_rgba(&rgba, w, h, REPEAT_ICON_SIDE, REPEAT_ICON_SIDE)
 }
 
 struct Painter<'a> {
@@ -513,36 +569,46 @@ impl Painter<'_> {
         self.place(face, (OUT_W as f32 - face.size[0] as f32) / 2.0, y);
     }
 
-    /// Two small, opposing arrows form a native repeat glyph without
-    /// requiring a new font or rasterized asset. Off is muted; active modes
-    /// use Slot's dusty rose, with text for accessible state distinction.
-    fn repeat_badge(&mut self, mode: RepeatMode) {
+    /// Three distinct UXWing glyphs are loaded as GPU textures and rendered
+    /// icon-only at the bottom-right. The native fallback is used if assets
+    /// have not been installed yet (for example, a pre-upgrade SD card).
+    fn repeat_badge(&mut self, mode: RepeatMode, icon: Option<TexId>) {
         let (x, y) = (REPEAT_BADGE_X, REPEAT_BADGE_Y);
+        if let Some(tex) = icon {
+            self.draws.push(Draw::Tex {
+                x, y, w: REPEAT_ICON_SIDE as f32, h: REPEAT_ICON_SIDE as f32,
+                tex, alpha: 1.0,
+            });
+            return;
+        }
         let ink = if mode == RepeatMode::Off { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
         let colour = [
             ink[0] as f32 / 255.0, ink[1] as f32 / 255.0,
             ink[2] as f32 / 255.0, 1.0,
         ];
-        // Clockwise top arrow, returning along the lower edge.
         for (dx, dy, w, h) in [
-            (2.0, 4.0, 22.0, 2.0),
-            (22.0, 4.0, 2.0, 11.0),
-            (19.0, 2.0, 5.0, 2.0),
-            (22.0, 7.0, 5.0, 2.0),
-            (4.0, 18.0, 22.0, 2.0),
-            (4.0, 10.0, 2.0, 10.0),
-            (4.0, 16.0, 5.0, 2.0),
-            (2.0, 20.0, 5.0, 2.0),
+            (2.0, 4.0, 22.0, 2.0), (22.0, 4.0, 2.0, 11.0),
+            (19.0, 2.0, 5.0, 2.0), (22.0, 7.0, 5.0, 2.0),
+            (4.0, 18.0, 22.0, 2.0), (4.0, 10.0, 2.0, 10.0),
+            (4.0, 16.0, 5.0, 2.0), (2.0, 20.0, 5.0, 2.0),
         ] {
             self.rect([x + dx, y + dy], [w, h], colour);
         }
-        let label = if mode == RepeatMode::One { "1" } else { mode.label() };
-        self.text_with_room(label, 18, [x + 33.0, y + 1.0], ink, 44);
+        if mode == RepeatMode::One {
+            self.text_with_room("1", 15, [x + 12.0, y + 6.0], ink, 15);
+        } else if mode == RepeatMode::Off {
+            // Slash across the arrows when the icon pack is missing.
+            for j in 0..8 {
+                self.rect([x + 5.0 + j as f32 * 2.7, y + 24.0 - j as f32 * 2.3],
+                    [2.0, 3.0], colour);
+            }
+        }
     }
 
-    fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
+    fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
+               repeat_icon: Option<TexId>) {
         self.music_tabs(0);
-        self.repeat_badge(music.repeat_mode());
+        self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
         let album = music.playing_album();
 
@@ -989,10 +1055,12 @@ mod album_thumbnail_layout_tests {
     fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
         assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
             "repeat must sit below the progress bar and timestamps");
-        assert!(REPEAT_BADGE_X + 77.0 <= OUT_W as f32 - EDGE,
-            "repeat icon and state must stay inside the right margin");
-        assert!(REPEAT_BADGE_Y + 28.0 < OUT_H as f32,
-            "repeat icon must stay on screen");
+        assert_eq!(REPEAT_ICON_SIDE, 32);
+        assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE,
+            "repeat icon must stay inside right margin");
+        assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - EDGE,
+            "repeat icon must stay inside bottom margin");
+        assert_eq!(REPEAT_ICON_FILES, ["repeat-off.png", "repeat-all.png", "repeat-one.png"]);
     }
 
     #[test]

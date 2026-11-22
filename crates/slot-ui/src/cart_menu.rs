@@ -3,11 +3,14 @@
 //! the right its plastic (colour, finish: Game Boy paks) and shape can be changed. NES and SNES
 //! carts only change shape, as they came in their system's grey. A saves, B puts it all back.
 use crate::draw::{Draw, TexId, OUT_H, OUT_W};
-use crate::plate::{arrows_hint_face, centred_hints, hint_face, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
-use crate::power_menu::{MENU_H, MENU_INK};
+use crate::menu_style::{
+    menu_hint_face_scaled, MENU_BACKGROUND, MENU_MUTED_INK, MENU_SELECTION_INK, MENU_TEXT_INK,
+};
+use crate::plate::{arrows_hint_face_scaled, centred_hints, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
+use crate::power_menu::MENU_H;
+use crate::quick_menu::{quick_top, QUICK_EDGE, QUICK_PITCH};
 use crate::shell::{shell_presets, Finish, Shell};
-use crate::slot_chrome::{edge, opening};
-use crate::text;
+use crate::text::{self, Case};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum CartRow {
@@ -98,7 +101,8 @@ pub fn colour_choices() -> Vec<(&'static str, Option<Shell>)> {
 }
 
 pub struct CartMenuFaces {
-    pub labels: Vec<(TexId, u32, u32)>,
+    /// The same [normal, selected] text variants as Slot's system Settings.
+    pub labels: Vec<[(TexId, u32, u32); 2]>,
     /// [dim, lit] for each colour_choices() name (then "Custom"), FINISHES, and SHAPES then
     /// SNES_SHAPES then NES_SHAPES.
     pub colours: Vec<[(TexId, u32, u32); 2]>,
@@ -125,14 +129,18 @@ pub struct CartMenuView<'a> {
     pub online: bool,
 }
 
+// Reserve the left for a large live cartridge. To the right, use the
+// same 48px row rhythm, two-column alignment and text-only selection
+// as Slot's system Settings, rather than a wide highlight rectangle.
 const PANEL_X: f32 = 300.0;
-const PANEL_RIGHT: f32 = OUT_W as f32 - 20.0;
-const PITCH: f32 = 50.0;
-const VALUE_W: f32 = 170.0;
+const PANEL_RIGHT: f32 = OUT_W as f32 - QUICK_EDGE;
+const VALUE_X: f32 = 446.0;
+const PITCH: f32 = QUICK_PITCH;
+const LABEL_W: f32 = VALUE_X - PANEL_X - 26.0;
+const VALUE_W: f32 = PANEL_RIGHT - VALUE_X - 24.0;
 const TEXT_PX: f32 = 22.0;
 const TEXT_MIN_PX: f32 = 14.0;
 const CARET_GAP: f32 = 8.0;
-const DIM_INK: [u8; 3] = [0x9a, 0x9a, 0xa4];
 /// A key that cannot be pressed just now: there but plainly not for the taking.
 pub const GREYED: f32 = 0.35;
 /// Where the cart stands: left of the rows, above the legend.
@@ -140,7 +148,11 @@ const CART_BOX: [f32; 4] = [20.0, 40.0, PANEL_X - 40.0, LEGEND_Y - 60.0];
 
 impl CartMenuView<'_> {
     pub fn draw(&self, out: &mut Vec<Draw>) {
-        out.push(Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: opening() });
+        // Cartridge customization belongs to the black system-menu family.
+        out.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: MENU_BACKGROUND,
+        });
         if let Some((colour, (x, y, w, h))) = self.recess {
             out.push(Draw::Rect { x, y, w, h, colour });
         }
@@ -149,23 +161,14 @@ impl CartMenuView<'_> {
             out.push(Draw::Tex { x, y, w, h, tex, alpha: 1.0 });
         }
         let top = rows_top(self.rows.len());
-        if let Some(at) = self.rows.iter().position(|r| *r == self.row) {
-            out.push(Draw::Rect {
-                x: PANEL_X - 12.0,
-                y: top + PITCH * at as f32 + 4.0,
-                w: PANEL_RIGHT - PANEL_X + 24.0,
-                h: PITCH - 8.0,
-                colour: edge(),
-            });
-        }
         let Some(faces) = self.faces else {
             return;
         };
         for (at, &row) in self.rows.iter().enumerate() {
-            let y = top + PITCH * at as f32 + (PITCH - MENU_H as f32) / 2.0;
+            let y = top + PITCH * at as f32;
             let lit = row == self.row;
-            if let Some(&(tex, w, h)) = faces.labels.get(row.index()) {
-                push(out, tex, PANEL_X, y, w, h);
+            if let Some(&(tex, w, h)) = faces.labels.get(row.index()).map(|pair| &pair[lit as usize]) {
+                push(out, tex, PANEL_X, y + (PITCH - h as f32) / 2.0, w, h);
             }
             let value = match row {
                 CartRow::Colour => faces.colours.get(self.colour),
@@ -177,16 +180,14 @@ impl CartMenuView<'_> {
                 continue;
             };
             let (tex, w, h) = value[lit as usize];
-            if !lit || row.acts() {
-                push(out, tex, PANEL_RIGHT - w as f32, y, w, h);
-                continue;
+            push(out, tex, VALUE_X, y + (PITCH - h as f32) / 2.0, w, h);
+            if lit && !row.acts() {
+                let [(left, lw, lh), (right, rw, rh)] = faces.carets;
+                push(out, left, VALUE_X - CARET_GAP - lw as f32,
+                    y + (PITCH - lh as f32) / 2.0, lw, lh);
+                push(out, right, PANEL_RIGHT - rw as f32,
+                    y + (PITCH - rh as f32) / 2.0, rw, rh);
             }
-            let [(left, lw, lh), (right, rw, rh)] = faces.carets;
-            let rx = PANEL_RIGHT - rw as f32;
-            push(out, right, rx, y, rw, rh);
-            let vx = rx - CARET_GAP - w as f32;
-            push(out, tex, vx, y, w, h);
-            push(out, left, vx - CARET_GAP - lw as f32, y, lw, lh);
         }
         let [cancel, change, save, reset, search] = faces.legend;
         // Y is on every row, so it keeps its place in the line whether it can be used or not.
@@ -224,39 +225,44 @@ pub fn cart_menu_cart_at(w: u32, h: u32) -> crate::label_adjust::Rect {
 }
 
 fn rows_top(rows: usize) -> f32 {
-    (LEGEND_Y - PITCH * rows as f32) / 2.0
+    quick_top(rows)
 }
 
 fn push(out: &mut Vec<Draw>, tex: TexId, x: f32, y: f32, w: u32, h: u32) {
     out.push(Draw::Tex { x: x.round(), y: y.round(), w: w as f32, h: h as f32, tex, alpha: 1.0 });
 }
 
-/// A row label: always lit.
-pub fn cart_menu_label_face(row: CartRow) -> UndoFace {
-    text_face(row.label(), MENU_INK, PANEL_RIGHT - PANEL_X)
+/// A label in the same two ink states as the system menu.
+pub fn cart_menu_label_face(row: CartRow, selected: bool) -> UndoFace {
+    let room = if row.acts() { PANEL_RIGHT - PANEL_X } else { LABEL_W };
+    text_face(row.label(), if selected { MENU_SELECTION_INK } else { MENU_TEXT_INK }, room)
 }
 
-/// A value: dim, or lit on the selected row; shrunk to fit beside its label.
-pub fn cart_menu_value_face(value: &str, lit: bool) -> UndoFace {
-    text_face(value, if lit { MENU_INK } else { DIM_INK }, VALUE_W)
+/// Values use the same muted/rose treatment as Slot's Settings pages.
+/// Fit long cart names without allowing them to overrun the arrow controls.
+pub fn cart_menu_value_face(value: &str, selected: bool) -> UndoFace {
+    text_face(value, if selected { MENU_SELECTION_INK } else { MENU_MUTED_INK }, VALUE_W)
 }
 
-
+/// The same lower-case hint typography as Slot's system menus. Button
+/// meanings and hint availability are unchanged.
 pub fn cart_menu_legend_faces() -> [UndoFace; 5] {
     [
-        hint_face("B", "Cancel"),
-        arrows_hint_face("Change"),
-        hint_face("A", "Save"),
-        hint_face("A", "Reset"),
-        hint_face("Y", "Label"),
+        menu_hint_face_scaled("B", "cancel", [1.0, 1.0]).0,
+        arrows_hint_face_scaled("change", [1.0, 1.0], Case::Lower).0,
+        menu_hint_face_scaled("A", "save", [1.0, 1.0]).0,
+        menu_hint_face_scaled("A", "reset", [1.0, 1.0]).0,
+        menu_hint_face_scaled("Y", "label", [1.0, 1.0]).0,
     ]
 }
 
-fn text_face(label: &str, colour: [u8; 3], max_w: f32) -> UndoFace {
+/// Cart row faces use the shared font and case convention, fitting the width
+/// rather than hiding long system names or changing the cartridge controls.
+fn text_face(label: &str, ink: [u8; 3], max_w: f32) -> UndoFace {
     let Some(font) = text::label_font() else {
         return UndoFace { rgba: Vec::new(), w: 0, h: 0 };
     };
-    let layout = text::fit(font, label, max_w, 1, TEXT_PX, TEXT_MIN_PX);
+    let layout = Case::Lower.fit_line(font, label, max_w, TEXT_PX, TEXT_MIN_PX);
     let set = layout
         .lines
         .iter()
@@ -264,6 +270,16 @@ fn text_face(label: &str, colour: [u8; 3], max_w: f32) -> UndoFace {
         .fold(0.0, f32::max);
     let w = (set.ceil() as u32).max(1);
     let mut rgba = vec![0u8; (w * MENU_H * 4) as usize];
-    text::draw_centred(&mut rgba, w, MENU_H, &layout, colour);
+    text::draw_centred(&mut rgba, w, MENU_H, &layout, ink);
     UndoFace { rgba, w, h: MENU_H }
+}
+
+/// Tint Slot's existing caret glyphs to the selected-row ink without
+/// adding a new font, icon asset or per-frame texture upload.
+pub fn cart_menu_caret_face(right: bool) -> UndoFace {
+    let mut face = crate::quick_menu::quick_caret_face(right);
+    for px in face.rgba.chunks_exact_mut(4) {
+        px[..3].copy_from_slice(&MENU_SELECTION_INK);
+    }
+    face
 }

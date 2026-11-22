@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use slot_input::{Action, Btn};
+use slot_store::BRIGHTNESS_MAX;
 
 use crate::audio::{volume, Ring};
 use crate::music_library::{Album, Library, Scan, Song};
@@ -253,6 +254,7 @@ struct MusicSettings {
     album_sort: AlbumSort,
     repeat: RepeatMode,
     dim_timeout_secs: u16,
+    dim_brightness: u8,
 }
 
 impl Default for MusicSettings {
@@ -265,6 +267,8 @@ impl Default for MusicSettings {
             repeat: RepeatMode::Off,
             // Keep the screen illuminated; gently dim after a minute.
             dim_timeout_secs: 60,
+            // Lowest nonzero hardware step; independent of normal brightness.
+            dim_brightness: 1,
         }
     }
 }
@@ -299,6 +303,13 @@ impl MusicSettings {
                             }
                         }
                     }
+                    ("dim_brightness", level) => {
+                        if let Ok(level) = level.parse::<u8>() {
+                            if (1..=BRIGHTNESS_MAX).contains(&level) {
+                                settings.dim_brightness = level;
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -315,12 +326,13 @@ impl MusicSettings {
             }
         }
         let text = format!(
-            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\ndim_timeout={}\n",
+            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\ndim_timeout={}\ndim_brightness={}\n",
             self.max_volume,
             if self.cover_flow { "covers" } else { "list" },
             if self.album_sort == AlbumSort::Az { "az" } else { "release" },
             self.repeat.label(),
             self.dim_timeout_secs,
+            self.dim_brightness,
         );
         let temp = path.with_extension("settings.tmp");
         if let Err(err) = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &path)) {
@@ -428,6 +440,7 @@ impl Music {
     }
     pub(crate) fn settings_sort(&self) -> &'static str { self.settings.album_sort.label() }
     pub(crate) fn dim_timeout_secs(&self) -> u16 { self.settings.dim_timeout_secs }
+    pub(crate) fn dim_brightness(&self) -> u8 { self.settings.dim_brightness }
     pub(crate) fn settings_dim_timeout(&self) -> &'static str {
         match self.settings.dim_timeout_secs {
             0 => "off",
@@ -477,6 +490,14 @@ impl Music {
                 let next = if forward { (current + 1) % VALUES.len() }
                     else { (current + VALUES.len() - 1) % VALUES.len() };
                 self.settings.dim_timeout_secs = VALUES[next];
+            }
+            5 => {
+                let level = self.settings.dim_brightness;
+                self.settings.dim_brightness = if forward {
+                    level.saturating_add(1).min(BRIGHTNESS_MAX)
+                } else {
+                    level.saturating_sub(1).max(1)
+                };
             }
             _ => {}
         }
@@ -629,7 +650,7 @@ impl Music {
                     self.settings_row = self.settings_row.saturating_sub(1);
                 }
                 Action::GbaDown(Btn::Down) => {
-                    self.settings_row = (self.settings_row + 1).min(4);
+                    self.settings_row = (self.settings_row + 1).min(5);
                 }
                 Action::GbaDown(Btn::A) | Action::GbaDown(Btn::Right) => {
                     self.change_setting(true);
@@ -819,6 +840,7 @@ mod tests {
         prefs.album_sort = AlbumSort::Release;
         prefs.repeat = RepeatMode::One;
         prefs.dim_timeout_secs = 120;
+        prefs.dim_brightness = 2;
         prefs.save(dir.path());
         let loaded = MusicSettings::load(dir.path());
         assert_eq!(loaded.max_volume, 40);
@@ -826,8 +848,17 @@ mod tests {
         assert_eq!(loaded.album_sort, AlbumSort::Release);
         assert_eq!(loaded.repeat, RepeatMode::One);
         assert_eq!(loaded.dim_timeout_secs, 120);
-        std::fs::write(MusicSettings::path(dir.path()), "max_volume=255\\n").unwrap();
-        assert_eq!(MusicSettings::load(dir.path()).max_volume, 70);
+        assert_eq!(loaded.dim_brightness, 2);
+        // Existing music.settings files without the new key use level 1.
+        std::fs::write(
+            MusicSettings::path(dir.path()),
+            "max_volume=255\ndim_brightness=0\n",
+        ).unwrap();
+        let invalid = MusicSettings::load(dir.path());
+        assert_eq!(invalid.max_volume, 70);
+        assert_eq!(invalid.dim_brightness, 1);
+        std::fs::write(MusicSettings::path(dir.path()), "dim_brightness=10\n").unwrap();
+        assert_eq!(MusicSettings::load(dir.path()).dim_brightness, 1);
     }
 
     #[test]
@@ -920,6 +951,9 @@ mod tests {
         music.input(Action::GbaDown(Btn::Down));
         music.input(Action::GbaDown(Btn::Right));
         assert_eq!(music.settings_dim_timeout(), "2 min");
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.dim_brightness(), 2);
         music.input(Action::GbaDown(Btn::B));
         assert!(!music.music_settings_open());
 
@@ -929,6 +963,7 @@ mod tests {
         assert!(!loaded.cover_flow);
         assert_eq!(loaded.repeat, RepeatMode::All);
         assert_eq!(loaded.dim_timeout_secs, 120);
+        assert_eq!(loaded.dim_brightness, 2);
     }
 
     #[test]
@@ -968,6 +1003,21 @@ mod tests {
         music.change_setting(false);
         assert_eq!(music.dim_timeout_secs(), 0);
         assert!(!music.should_dim());
+    }
+
+    #[test]
+    fn dim_brightness_stays_within_the_nonzero_hardware_range() {
+        let mut music = Music::with_library(Library::default());
+        music.settings_row = 5;
+        assert_eq!(music.dim_brightness(), 1);
+        music.change_setting(false);
+        assert_eq!(music.dim_brightness(), 1);
+        for _ in 0..20 { music.change_setting(true); }
+        assert_eq!(music.dim_brightness(), BRIGHTNESS_MAX);
+        music.change_setting(true);
+        assert_eq!(music.dim_brightness(), BRIGHTNESS_MAX);
+        music.change_setting(false);
+        assert_eq!(music.dim_brightness(), BRIGHTNESS_MAX - 1);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music UI: repeat symbol reduced to HUD-sized 20px, with black active and grey off states. Shuffle was considered but not added.
 - Music repeat indicator: black for Repeat All/One, neutral grey when Repeat Off, retaining the 28px bottom-right icon.
 - Music UI: aligned its 24px left inset with the Shelf clock and reduced the bottom-right UXWing repeat icon to 28px.
 - Music repeat icons now use the three UXWing Off/All/One PNG symbols, tinted to the Music palette and drawn bottom-right. The guarded installer places them under Slot/System/music-icons for offline use.

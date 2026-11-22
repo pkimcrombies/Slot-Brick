@@ -433,6 +433,8 @@ impl Music {
     }
 
     pub(crate) fn repeat_mode(&self) -> RepeatMode { self.settings.repeat }
+    /// Optional SD card root (the Slot directory), used for offline Music UI assets.
+    pub(crate) fn icon_root(&self) -> Option<&Path> { self.settings_root.as_deref() }
     fn effective_volume(&self, requested: u8) -> u8 {
         requested.min(self.settings.max_volume)
     }

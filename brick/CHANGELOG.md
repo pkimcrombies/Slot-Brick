@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music controls: L1/R1 cycle Now Playing, Albums and Artists; D-pad Left/Right switch tracks instead of seeking. Removed on-screen button hints and moved the repeat indicator to the bottom-right.
 - Music has a Now Playing section alongside Albums and Artists. Press B to browse without stopping the song, and return from Albums with L1. Music also shows the same clock, battery, Wi-Fi and update indicators as the shelf.
 - Music Settings → Dim brightness: choose the screen backlight level (1–9) used after the music dim timer, independently of normal brightness. Defaults to the lowest nonzero level.
 - Gameplay → Swap A/B: trade A and B's places, in games and in Slot's own menus. Also reachable without leaving the game: HOME's own menu now has a Buttons entry with the same switch.

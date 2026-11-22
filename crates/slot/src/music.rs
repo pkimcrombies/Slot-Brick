@@ -11,7 +11,6 @@ use crate::music_m4a::{is_m4a, M4aDecoder};
 use crate::resample::Resampler;
 
 const CHUNK: usize = 512;
-const SEEK_SECONDS: i32 = 10;
 
 unsafe extern "C" {
     fn slot_mp3_open(
@@ -197,7 +196,6 @@ pub(crate) struct Track {
     pub(crate) status: Status,
     playback: Option<Playback>,
     ending: bool,
-    seek_seconds: i32,
 }
 
 impl Track {
@@ -683,7 +681,6 @@ impl Music {
             status: Status::Loading,
             playback: None,
             ending: false,
-            seek_seconds: 0,
         });
         self.discard_audio = true;
     }
@@ -758,15 +755,14 @@ impl Music {
                         }
                         Status::Loading => {}
                     },
+                    // Left/right select tracks. No seek gestures in the
+                    // child-friendly player; shoulders remain section tabs.
                     Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
-                        track.seek_seconds = track.seek_seconds.saturating_sub(SEEK_SECONDS);
+                        self.switch(index, false)
                     }
                     Action::GbaDown(Btn::Right) | Action::ShelfRight => {
-                        track.seek_seconds = track.seek_seconds.saturating_add(SEEK_SECONDS);
-                    }
-                    // Up/down skip tracks, leaving L1/R1 free for sections.
-                    Action::GbaDown(Btn::Up) => self.switch(index, false),
-                    Action::GbaDown(Btn::Down) => self.switch(index, true),
+                        self.switch(index, true)
+                    },
                     Action::GbaDown(Btn::X) => {
                         self.settings.repeat = self.settings.repeat.step(true);
                         self.persist_settings();
@@ -880,21 +876,6 @@ impl Music {
             } else {
                 Status::Unreadable
             };
-        }
-        let seek = std::mem::take(&mut track.seek_seconds);
-        if seek != 0 {
-            if let Some(at_end) = track
-                .playback
-                .as_mut()
-                .and_then(|playback| playback.seek_by(seek, ring))
-            {
-                track.ending = false;
-                if at_end {
-                    track.status = Status::Finished;
-                } else if track.status == Status::Finished {
-                    track.status = Status::Paused;
-                }
-            }
         }
         if track.status != Status::Playing {
             return;
@@ -1401,8 +1382,8 @@ mod tests {
             ["Zig", "Jump", "Hop"]
         );
         music.input(Action::GbaDown(Btn::Y));
-        music.input(Action::GbaDown(Btn::Down));
-        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Right));
+        music.input(Action::GbaDown(Btn::Right));
         let track = music.track.as_ref().unwrap();
         assert_eq!(music.song(track).title, "Hop");
         assert_eq!(music.song(track).artist, "Émilie");
@@ -1462,9 +1443,9 @@ mod tests {
         music.input(Action::GbaDown(Btn::L1)); // albums -> now playing
         assert!(music.showing_now_playing());
 
-        music.input(Action::GbaDown(Btn::Down)); // skip to song two
+        music.input(Action::GbaDown(Btn::Right)); // skip to song two
         assert_eq!(music.playing_position(), Some((1, 2)));
-        music.input(Action::GbaDown(Btn::Up)); // skip to song one
+        music.input(Action::GbaDown(Btn::Left)); // skip to song one
         assert_eq!(music.playing_position(), Some((0, 2)));
         music.input(Action::GbaDown(Btn::L1));
         assert_eq!(music.playing_position(), Some((0, 2)));
@@ -1621,7 +1602,7 @@ mod tests {
         );
         music.update_audio(&ring, 80);
         assert!(ring.queued_frames() > 0);
-        music.input(Action::GbaDown(Btn::Up));
+        music.input(Action::GbaDown(Btn::Left));
         music.update_audio(&ring, 80);
         assert_eq!(music.cursor(), 0);
         music.input(Action::GbaDown(Btn::B));
@@ -1634,13 +1615,11 @@ mod tests {
     }
 
     #[test]
-    fn dpad_seeks_without_changing_tracks_and_keeps_paused_audio_paused() {
+    fn dpad_left_right_change_tracks_without_seeking_and_up_down_do_nothing() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Music");
         fs::create_dir(&folder).unwrap();
-        let first = folder.join("01.mp3");
-        silent_mp3(&first, 2);
-        fs::write(&first, fs::read(&first).unwrap().repeat(100)).unwrap();
+        silent_mp3(&folder.join("01.mp3"), 2);
         silent_mp3(&folder.join("02.mp3"), 2);
 
         let mut music = test_music(root.path());
@@ -1648,39 +1627,27 @@ mod tests {
         ring.reopen(48_000);
         music.input(Action::GbaDown(Btn::Y));
         music.update_audio(&ring, 80);
+        assert_eq!(music.playing_position(), Some((0, 2)));
+
         music.input(Action::GbaDown(Btn::Right));
         music.update_audio(&ring, 80);
-        let track = music.track.as_ref().unwrap();
-        assert_eq!(track.index, 0);
-        assert!((9.9..10.2).contains(&track.time().unwrap().0));
-
-        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.playing_position(), Some((1, 2)));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.playing_position(), Some((1, 2)), "last track is the boundary");
         music.input(Action::GbaDown(Btn::Left));
         music.update_audio(&ring, 80);
-        let track = music.track.as_ref().unwrap();
-        assert_eq!(track.index, 0);
-        assert!(!music.playing());
-        assert_eq!(track.time().unwrap().0, 0.0);
-        assert_eq!(ring.queued_frames(), 0);
+        assert_eq!(music.playing_position(), Some((0, 2)));
 
-        for _ in 0..4 {
-            music.input(Action::GbaDown(Btn::Right));
-            music.update_audio(&ring, 80);
-        }
-        let track = music.track.as_ref().unwrap();
-        assert_eq!(track.index, 0);
-        assert!(matches!(track.status, Status::Finished));
-        let (elapsed, total) = track.time().unwrap();
-        assert_eq!(Some(elapsed), total);
-
-        music.input(Action::GbaDown(Btn::Left));
-        music.update_audio(&ring, 80);
-        let track = music.track.as_ref().unwrap();
-        assert!(matches!(track.status, Status::Paused));
-        assert!((elapsed - track.time().unwrap().0 - 10.0).abs() < 0.001);
+        let time_before = music.track.as_ref().unwrap().time().unwrap().0;
+        music.input(Action::GbaDown(Btn::Up));
         music.input(Action::GbaDown(Btn::Down));
-        music.update_audio(&ring, 80);
-        assert_eq!(music.track.as_ref().unwrap().index, 1);
+        assert_eq!(music.playing_position(), Some((0, 2)));
+        assert_eq!(music.track.as_ref().unwrap().time().unwrap().0, time_before,
+            "up/down must neither skip nor seek");
+        music.input(Action::GbaDown(Btn::A));
+        assert!(!music.playing(), "A still pauses");
+        music.input(Action::GbaDown(Btn::A));
+        assert!(music.playing(), "A still resumes");
     }
 
     #[test]
@@ -1699,7 +1666,7 @@ mod tests {
             music.track.as_ref().unwrap().status,
             Status::Unreadable
         ));
-        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Right));
         music.update_audio(&ring, 80);
         assert!(music.playing());
         assert!(ring.queued_frames() > 0);

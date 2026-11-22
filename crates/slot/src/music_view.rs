@@ -744,14 +744,6 @@ impl Painter<'_> {
             self.text_with_room(value, 22, [SETTINGS_VALUE_X, y + 9.0], value_ink,
                 (OUT_W as f32 - SETTINGS_VALUE_X - EDGE) as u32);
         }
-        self.text_with_room(
-            "Screen stays on; a button restores brightness",
-            14, [EDGE, 419.0], MUSIC_MUTED_INK, 580,
-        );
-        self.text_with_room(
-            "Volume cap is not a certified safe headphone level",
-            14, [EDGE, 440.0], MUSIC_MUTED_INK, 580,
-        );
     }
 
     /// Place the time readout against the right edge of the progress bar.
@@ -770,12 +762,10 @@ impl Painter<'_> {
         }
     }
 
+    /// An idle player is deliberately blank beneath the tabs and HUD.
+    /// Music is discoverable through Albums; no placeholder copy is needed.
     fn empty_now_playing(&mut self) {
         self.music_tabs(0);
-        self.text("nothing playing", 25, [EDGE, 177.0]);
-        self.text_ink(
-            "choose an album to start listening", 18, [EDGE, 218.0], MUSIC_MUTED_INK,
-        );
     }
 
     fn heading(&mut self, title: &str) {
@@ -1173,8 +1163,8 @@ mod album_thumbnail_layout_tests {
             "Music settings must follow the standard system Settings row pitch");
         assert_eq!(SETTINGS_VALUE_X, QUICK_VALUE_EDGE,
             "Music settings values must use the standard two-column split");
-        assert!(bottom < 419.0, "dim brightness row must not overlap its caption");
-        assert!(440.0 + 18.0 < OUT_H as f32, "safety caption stays on screen");
+        assert!(bottom < OUT_H as f32 - EDGE,
+            "all six settings rows fit without a footer or help captions");
     }
 
     #[test]

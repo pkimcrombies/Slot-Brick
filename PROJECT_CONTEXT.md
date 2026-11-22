@@ -2,7 +2,7 @@
 
 > Small handoff for future ChatGPT/AI coding sessions. **Read this first**, then verify the
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
-> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Navigation/HUD changes committed through `87b293c` (not yet built or tested on device).
+> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
 
 ## Where we work
 

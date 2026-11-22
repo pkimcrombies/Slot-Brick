@@ -72,6 +72,11 @@
   quiet-shutdown installer failed in 3 new tests because the temporary
   test root lacked `Config/` before `write_slot_state`; the subsequent fix
   creates the standard Slot directories first. Do not bypass the tests.
+- Initial Cover Flow ARM64 installer failed after tests due to a false-negative
+  binary check: it searched for an 8-character Git prefix, although
+  `crates/slot/build.rs` embeds `git rev-parse --short HEAD` (normally 7).
+  Use the actual `git rev-parse --short HEAD` output for ELF string checks,
+  print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
 

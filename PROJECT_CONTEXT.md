@@ -20,8 +20,10 @@
 
 - Keep everything **native Slot (Rust)**. Do not introduce Trimpod, Flutter,
   ClassiPod itself, or a separate music launcher.
-- Minimal black backgrounds, Slot's existing typography, white text, subtle
-  rose/pink selection, no unnecessary chrome. Cartridge/game animations must stay intact.
+- Slot launcher and system menus remain minimal **black**. Native Music uses
+  **warm white (#F8F7F4)**, charcoal text and darker dusty-rose selection
+  across album lists, album details and Now Playing. Cover Flow will follow.
+  Keep Slot's typography and physical buttons; preserve game animations.
 - Prefer short, smooth fades. Avoid black flashes, extra loading screens and
   needless redraws/CPU use.
 - For each build-worthy change, provide the existing **one-command PowerShell
@@ -39,7 +41,7 @@
 - Native Music: `crates/slot/src/music.rs`, `music_view.rs`,
   `music_cover.rs`, `music_library.rs` and `music_m4a.rs`.
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
-  Album detail has large artwork on the right fading toward black on the left.
+  Album detail has large artwork on the right fading toward warm white on the left.
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
@@ -50,6 +52,9 @@
   sleep handling also uses `device_app.rs`. Boot 440ms, menu 220ms,
   sleep 300ms, wake 360ms, shutdown 210ms. Returning from game ejection
   **must not** add a black navigation fade; fix `85b0331` was confirmed smooth.
+  First-frame boot fade must also work when Slot starts in `Phase::Inserting`
+  (saved cartridge), not only `Phase::Shelf`; track this independent of
+  later navigation transitions.
 - Shutdown (commit `3daabad`): **no “Saving and Shutting Down” screen** on
   Brick; preserve black fade, plus 70ms GPIO rumble on deliberate power-off
   if Rumble is enabled, *after saves are settled*. Auto/battery shutdown
@@ -80,8 +85,8 @@
 
 ## Next work
 
-1. Confirm latest **Now Playing**, sleep/wake and silent-shutdown changes
-   on the actual device; fix reported defects first.
+1. Confirm latest **warm-white Music theme**, first-frame boot fade,
+   sleep/wake and silent-shutdown changes on-device; fix reported defects first.
 2. Then build **native Cover Flow** inspired by
    `adeeteya/Classipod`: centered selected album, angled neighbouring
    covers, subtle reflection, album/artist underneath, smooth button-driven

@@ -81,10 +81,22 @@ impl NavScene {
 struct NavFade {
     scene: Option<NavScene>,
     started: Option<(Instant, Duration)>,
+    /// The first actual Slot frame may be Inserting/Playing, not Shelf. Keep
+    /// this boot fade independent of later scene changes and game ejection.
+    boot_started: Option<Instant>,
     presented: bool,
 }
 
 impl NavFade {
+    fn begin_first_frame(&mut self, next: Option<NavScene>, now: Instant) {
+        if self.presented {
+            return;
+        }
+        self.presented = true;
+        self.scene = next;
+        self.boot_started = Some(now);
+    }
+
     fn update(&mut self, next: Option<NavScene>, now: Instant) {
         if self.scene == next {
             return;
@@ -107,18 +119,26 @@ impl NavFade {
         });
     }
 
-    fn opacity(&self, now: Instant) -> f32 {
-        let Some((start, duration)) = self.started else {
-            return 0.0;
-        };
+    fn fade_opacity(now: Instant, start: Instant, duration: Duration) -> f32 {
         let progress = (now.saturating_duration_since(start).as_secs_f32()
             / duration.as_secs_f32()).clamp(0.0, 1.0);
         let smooth = progress * progress * (3.0 - 2.0 * progress);
         1.0 - smooth
     }
 
+    fn opacity(&self, now: Instant) -> f32 {
+        let navigation = self.started.map_or(0.0, |(start, duration)| {
+            Self::fade_opacity(now, start, duration)
+        });
+        let boot = self.boot_started.map_or(0.0, |start| {
+            Self::fade_opacity(now, start, BOOT_FADE)
+        });
+        navigation.max(boot)
+    }
+
     fn active(&self, now: Instant) -> bool {
         self.started.is_some_and(|(start, duration)| now.saturating_duration_since(start) < duration)
+            || self.boot_started.is_some_and(|start| now.saturating_duration_since(start) < BOOT_FADE)
     }
 }
 
@@ -939,7 +959,12 @@ impl Frontend {
         // Start the fade only once the destination is actually being rendered,
         // so an initial library rebuild cannot consume the boot animation.
         let scene = NavScene::from_phase(self.session.app().phase());
-        self.nav_fade.update(scene, Instant::now());
+        let now = Instant::now();
+        // Begin at the very first rendered frame, irrespective of initial phase.
+        // A saved cartridge can start in Inserting rather than Shelf; waiting
+        // for Shelf there meant the boot fade never played on the real device.
+        self.nav_fade.begin_first_frame(scene, now);
+        self.nav_fade.update(scene, now);
         if self.session.app().shutting_down()
             && !matches!(self.session.app().phase(), Phase::Doze { .. }) {
             self.power_fade.begin_shutdown(Instant::now(), &self.draws);
@@ -1742,6 +1767,37 @@ mod power_render_tests {
 #[cfg(test)]
 mod navigation_fade_tests {
     use super::*;
+
+    #[test]
+    fn the_first_frame_fades_even_when_starting_with_a_seated_game() {
+        let now = Instant::now();
+        let mut fade = NavFade::default();
+        // An existing cart boots to Inserting: this is not a navigation scene.
+        fade.begin_first_frame(None, now);
+        fade.update(None, now);
+        assert_eq!(fade.opacity(now), 1.0);
+        assert!(fade.active(now + BOOT_FADE / 2));
+        assert_eq!(fade.opacity(now + BOOT_FADE), 0.0);
+        assert!(!fade.active(now + BOOT_FADE));
+
+        // Returning from the game must never replay a black fade.
+        fade.update(Some(NavScene::Shelf), now + Duration::from_secs(2));
+        assert_eq!(fade.opacity(now + Duration::from_secs(2)), 0.0);
+    }
+
+    #[test]
+    fn the_boot_fade_survives_early_scene_changes_without_restarting() {
+        let now = Instant::now();
+        let mut fade = NavFade::default();
+        fade.begin_first_frame(Some(NavScene::Shelf), now);
+        fade.update(Some(NavScene::Shelf), now);
+        fade.update(None, now + BOOT_FADE / 4);
+        assert!(fade.opacity(now + BOOT_FADE / 4) > 0.0);
+        fade.update(Some(NavScene::Shelf), now + BOOT_FADE / 2);
+        assert!(fade.opacity(now + BOOT_FADE / 2) < 1.0);
+        assert_eq!(fade.opacity(now + BOOT_FADE), 0.0);
+        assert!(!fade.active(now + BOOT_FADE));
+    }
 
     #[test]
     fn selection_movement_does_not_restart_a_menu_fade() {

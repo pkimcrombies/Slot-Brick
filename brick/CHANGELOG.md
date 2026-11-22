@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music repeat icons now use the three UXWing Off/All/One PNG symbols, tinted to the Music palette and drawn bottom-right. The guarded installer places them under Slot/System/music-icons for offline use.
 - Music Back navigation: B from Now Playing opens the current song's album track list with the active track selected; B again goes to Albums. B never exits Music—use HOME/Menu to leave the app.
 - Fixed: empty Now Playing no longer changes to Albums when pressing D-pad Right or A. Use L1/R1 to switch Music sections; B remains Back.
 - Music controls: L1/R1 cycle Now Playing, Albums and Artists; D-pad Left/Right switch tracks instead of seeking. Removed on-screen button hints and moved the repeat indicator to the bottom-right.

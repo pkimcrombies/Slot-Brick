@@ -92,8 +92,16 @@
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
   1 minute/2 minutes; default 1 minute), and **Dim brightness**
   (physical backlight step 1-9, default 1). **X** on Now Playing cycles
-  repeat; the native double-arrow indicator with off/all/1 state sits at the
-  bottom-right, below progress and time. Off plays the current album once; All wraps at the last track
+  repeat; the indicator at bottom-right (32×32, below progress and time)
+  now loads the exact UXWing Repeat Off/All/One transparent PNG icons from
+  `Slot/System/music-icons/repeat-{off,all,one}.png`, cached as three GPU
+  textures and tinted muted-ink/rose. The installer downloads and verifies
+  the three assets once, for offline runtime use; an internal glyph fallback
+  remains for older cards without icons. The three UXWing pages are
+  https://uxwing.com/music-player-no-repeat-symbol-icon/,
+  https://uxwing.com/music-player-repeat-symbol-icon/, and
+  https://uxwing.com/music-player-repeat-one-time-symbol-icon/.
+  Off plays the current album once; All wraps at the last track
   of the current album; One repeats the current song. These preferences
   persist independently at `Slot/Config/music.settings` with a temp-file
   rename. The volume cap is applied to decoded PCM, including when the
@@ -250,6 +258,18 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **UXWing repeat assets (2026-11-23):** The Music renderer reads three
+  PNG files under `Slot/System/music-icons/` exactly once per
+  `MusicView` lifecycle; the `png` decoder is native/offline and the
+  RGBA is downscaled to 32x32 before uploading. The three files are not
+  checked into Git because downloading them occurs during the Windows
+  installer preflight. The installer must validate PNG signatures,
+  backup/verify any replaced icons, and copy all three and `slot-native`
+  only after successful Rust tests and ARM64 build. The SD `slot`
+  wrapper, Games, Saves, Config and Music must not be touched. If UXWing
+  download fails, abort before modifying SD. Device visual test pending.
+
 
 - **2026-11-23 Music Back/exit policy:** B from Now Playing with a
   current track always opens `Page::Album(track.album)` under an Albums

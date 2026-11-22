@@ -583,6 +583,36 @@ impl Music {
 
     pub(crate) fn showing_now_playing(&self) -> bool { self.now_playing_view }
 
+    /// Music's three sections cycle in the same direction everywhere:
+    /// Now Playing <-> Albums <-> Artists, wrapping at either end.
+    /// Retain the current browser page when visiting Now Playing so B can
+    /// always return to the album/artist the user was exploring.
+    fn navigate_section(&mut self, forward: bool) {
+        let current = if self.now_playing_view {
+            0
+        } else if matches!(self.browse[0].page, Page::Artists) {
+            2
+        } else {
+            1
+        };
+        let next = (current + if forward { 1 } else { 2 }) % 3;
+        self.now_playing_view = next == 0;
+        let page = match next {
+            1 => Some(Page::Albums),
+            2 => Some(Page::Artists),
+            _ => None,
+        };
+        if let Some(page) = page {
+            let same_section = matches!(
+                (page, self.browse[0].page),
+                (Page::Albums, Page::Albums) | (Page::Artists, Page::Artists)
+            );
+            if !same_section {
+                self.browse = vec![Location { page, cursor: 0 }];
+            }
+        }
+    }
+
     pub(crate) fn showing_tracks(&self) -> bool {
         matches!(self.location().page, Page::Album(_))
     }
@@ -703,6 +733,19 @@ impl Music {
             }
             return false;
         }
+        // Shoulder buttons always switch Music sections, regardless of
+        // playback status or whether a browser subpage is open.
+        match action {
+            Action::GbaDown(Btn::L1) => {
+                self.navigate_section(false);
+                return false;
+            }
+            Action::GbaDown(Btn::R1) => {
+                self.navigate_section(true);
+                return false;
+            }
+            _ => {}
+        }
         if self.now_playing_view {
             if let Some(track) = &mut self.track {
                 let (album, index) = (track.album, track.index);
@@ -715,14 +758,15 @@ impl Music {
                         }
                         Status::Loading => {}
                     },
-                    Action::GbaDown(Btn::Left) => {
+                    Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
                         track.seek_seconds = track.seek_seconds.saturating_sub(SEEK_SECONDS);
                     }
-                    Action::GbaDown(Btn::Right) => {
+                    Action::GbaDown(Btn::Right) | Action::ShelfRight => {
                         track.seek_seconds = track.seek_seconds.saturating_add(SEEK_SECONDS);
                     }
-                    Action::GbaDown(Btn::L1) | Action::ShelfLeft => self.switch(index, false),
-                    Action::GbaDown(Btn::R1) | Action::ShelfRight => self.switch(index, true),
+                    // Up/down skip tracks, leaving L1/R1 free for sections.
+                    Action::GbaDown(Btn::Up) => self.switch(index, false),
+                    Action::GbaDown(Btn::Down) => self.switch(index, true),
                     Action::GbaDown(Btn::X) => {
                         self.settings.repeat = self.settings.repeat.step(true);
                         self.persist_settings();
@@ -732,7 +776,7 @@ impl Music {
                 }
             } else {
                 match action {
-                    Action::GbaDown(Btn::B | Btn::R1 | Btn::Right | Btn::A) => {
+                    Action::GbaDown(Btn::B | Btn::Right | Btn::A) => {
                         self.now_playing_view = false;
                     }
                     _ => {}
@@ -741,8 +785,8 @@ impl Music {
             return false;
         }
         match action {
-            // Cover Flow scrolls albums horizontally. L1/R1 still switch
-            // between the Albums and Artists roots. X restores list browsing.
+            // Cover Flow scrolls albums horizontally; L1/R1 cycle sections
+            // before these browsing controls. X restores list browsing.
             Action::GbaDown(Btn::X) if self.is_root() && !self.viewing_artists() => {
                 self.cover_flow = !self.cover_flow;
                 self.settings.cover_flow = self.cover_flow;
@@ -760,16 +804,21 @@ impl Music {
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
-            Action::GbaDown(btn @ (Btn::L1 | Btn::R1 | Btn::Left | Btn::Right)) if self.is_root() => {
-                match btn {
-                    Btn::L1 | Btn::Left if self.viewing_artists() => {
-                        self.browse[0] = Location { page: Page::Albums, cursor: 0 };
-                    }
-                    Btn::L1 | Btn::Left => self.now_playing_view = true,
-                    Btn::R1 | Btn::Right if !self.viewing_artists() => {
-                        self.browse[0] = Location { page: Page::Artists, cursor: 0 };
-                    }
-                    _ => {}
+            // In list mode, horizontal D-pad navigation retains the older
+            // direct Albums/Artists toggle. The shoulders always cycle all
+            // three sections, including Now Playing.
+            Action::GbaDown(Btn::Left) if self.is_root() => {
+                if self.viewing_artists() {
+                    self.browse[0] = Location { page: Page::Albums, cursor: 0 };
+                } else {
+                    self.now_playing_view = true;
+                }
+            }
+            Action::GbaDown(Btn::Right) if self.is_root() => {
+                if !self.viewing_artists() {
+                    self.browse[0] = Location { page: Page::Artists, cursor: 0 };
+                } else {
+                    self.now_playing_view = true;
                 }
             }
             Action::GbaDown(Btn::A) if self.row_count() > 0 => match self.location().page {
@@ -1360,8 +1409,8 @@ mod tests {
             ["Zig", "Jump", "Hop"]
         );
         music.input(Action::GbaDown(Btn::Y));
-        music.input(Action::GbaDown(Btn::R1));
-        music.input(Action::GbaDown(Btn::R1));
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Down));
         let track = music.track.as_ref().unwrap();
         assert_eq!(music.song(track).title, "Hop");
         assert_eq!(music.song(track).artist, "Émilie");
@@ -1389,6 +1438,71 @@ mod tests {
         assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::L1));
         assert_eq!(music.label(), "albums");
+    }
+
+    #[test]
+    fn shoulders_cycle_all_three_sections_without_skipping_tracks() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        std::fs::create_dir_all(&folder).unwrap();
+        silent_mp3(&folder.join("01.mp3"), 2);
+        silent_mp3(&folder.join("02.mp3"), 2);
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.showing_now_playing());
+        assert_eq!(music.playing_position(), Some((0, 2)));
+
+        music.input(Action::GbaDown(Btn::R1)); // now playing -> albums
+        assert!(!music.showing_now_playing());
+        assert_eq!(music.label(), "albums");
+        assert_eq!(music.playing_position(), Some((0, 2)));
+        music.input(Action::GbaDown(Btn::R1)); // albums -> artists
+        assert_eq!(music.label(), "artists");
+        music.input(Action::GbaDown(Btn::R1)); // artists -> now playing
+        assert!(music.showing_now_playing());
+        assert_eq!(music.playing_position(), Some((0, 2)));
+
+        music.input(Action::GbaDown(Btn::L1)); // now playing -> artists
+        assert_eq!(music.label(), "artists");
+        assert!(!music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::L1)); // artists -> albums
+        assert_eq!(music.label(), "albums");
+        music.input(Action::GbaDown(Btn::L1)); // albums -> now playing
+        assert!(music.showing_now_playing());
+
+        music.input(Action::GbaDown(Btn::Down)); // skip to song two
+        assert_eq!(music.playing_position(), Some((1, 2)));
+        music.input(Action::GbaDown(Btn::Up)); // skip to song one
+        assert_eq!(music.playing_position(), Some((0, 2)));
+        music.input(Action::GbaDown(Btn::L1));
+        assert_eq!(music.playing_position(), Some((0, 2)));
+    }
+
+    #[test]
+    fn shoulders_leave_nested_browser_pages_but_keep_the_active_song() {
+        let make = |title: &str| Album {
+            title: title.into(), artist: "artist".into(), release_date: None,
+            songs: vec![Song {
+                path: PathBuf::from(format!("{title}.mp3")),
+                title: "song".into(), artist: "artist".into(), disc: 1,
+                track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![make("Alpha"), make("Beta")],
+            artists: vec![],
+        });
+        music.input(Action::GbaDown(Btn::A)); // inside Alpha track list
+        music.input(Action::GbaDown(Btn::A)); // play Alpha
+        music.input(Action::GbaDown(Btn::B)); // browse Alpha tracks
+        music.input(Action::GbaDown(Btn::R1)); // Artists
+        assert_eq!(music.label(), "artists");
+        assert_eq!(music.playing_album().title, "Alpha");
+        music.input(Action::GbaDown(Btn::R1)); // Now Playing
+        assert!(music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::R1)); // Albums
+        assert_eq!(music.label(), "albums");
+        assert_eq!(music.playing_album().title, "Alpha");
     }
 
     #[test]
@@ -1515,7 +1629,7 @@ mod tests {
         );
         music.update_audio(&ring, 80);
         assert!(ring.queued_frames() > 0);
-        music.input(Action::GbaDown(Btn::L1));
+        music.input(Action::GbaDown(Btn::Up));
         music.update_audio(&ring, 80);
         assert_eq!(music.cursor(), 0);
         music.input(Action::GbaDown(Btn::B));
@@ -1572,7 +1686,7 @@ mod tests {
         let track = music.track.as_ref().unwrap();
         assert!(matches!(track.status, Status::Paused));
         assert!((elapsed - track.time().unwrap().0 - 10.0).abs() < 0.001);
-        music.input(Action::GbaDown(Btn::R1));
+        music.input(Action::GbaDown(Btn::Down));
         music.update_audio(&ring, 80);
         assert_eq!(music.track.as_ref().unwrap().index, 1);
     }
@@ -1593,7 +1707,7 @@ mod tests {
             music.track.as_ref().unwrap().status,
             Status::Unreadable
         ));
-        music.input(Action::GbaDown(Btn::R1));
+        music.input(Action::GbaDown(Btn::Down));
         music.update_audio(&ring, 80);
         assert!(music.playing());
         assert!(ring.queued_frames() > 0);

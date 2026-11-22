@@ -3448,7 +3448,21 @@ impl App {
                 disabled: QuickRow::ALL.map(|r| self.quick_disabled(r)),
             }
             .draw(out),
-            Phase::Music => out.extend_from_slice(&self.music_draws),
+            Phase::Music => {
+                out.extend_from_slice(&self.music_draws);
+                // The exact same shelf HUD: black top-left clock, top-right
+                // battery, Wi-Fi and update indicator on Music's ivory canvas.
+                draw_status_bar(
+                    self.battery,
+                    self.battery_percent,
+                    self.status_bolt,
+                    self.wifi_face(),
+                    self.update_face(),
+                    self.shelf_clock,
+                    self.status_scale,
+                    out,
+                );
+            },
             Phase::Shelf => {
                 Self::draw_shelf_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
@@ -6879,6 +6893,31 @@ mod quiet_poweroff_tests {
         app.set_music_dimmed(None);
         assert_eq!(writes.lock().unwrap().last().copied(), Some(3));
         assert_eq!(app.brightness(), 3);
+    }
+
+    #[test]
+    fn music_uses_the_same_top_corner_clock_as_the_shelf() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        let clock = TexId::from_raw(117);
+        app.set_shelf_clock_face(clock, 54);
+        app.phase = Phase::Music;
+        app.music_draws = vec![Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: [1.0, 1.0, 1.0, 1.0],
+        }];
+        let mut music_draws = Vec::new();
+        app.draw(&mut music_draws);
+        assert!(matches!(music_draws.first(), Some(Draw::Rect { x, y, .. })
+            if *x == 0.0 && *y == 0.0));
+        assert!(music_draws.iter().any(|draw| matches!(draw,
+            Draw::Tex { x, y, tex, .. }
+                if *x == 24.0 && *y == 12.0 && *tex == clock
+        )), "Music must reuse the shelf's top-left status clock");
     }
 
     #[test]

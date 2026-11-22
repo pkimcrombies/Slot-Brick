@@ -910,6 +910,10 @@ impl Frontend {
     pub fn needs_render(&self)->bool {
         if self.power_fade.wake_active(Instant::now())
             || self.power_fade.shutdown_active(Instant::now()) {return true}
+        // Cover Flow's 260ms animation must not rely on the idle 1s refresh;
+        // stop requesting extra frames as soon as the movement completes.
+        if matches!(self.app().phase(), Phase::Music)
+            && self.music_view.cover_flow_animating() {return true}
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.

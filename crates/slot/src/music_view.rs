@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_ui::{
     menu_text_face, pixel_aligned_texture, UndoFace, QUICK_EDGE,
@@ -30,6 +32,55 @@ const PLAYING_COVER_Y: f32 = 113.0;
 const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
+const FLOW_SLOTS: usize = 7;
+const FLOW_DURATION: Duration = Duration::from_millis(260);
+const FLOW_COVER_Y: f32 = 116.0;
+const FLOW_FRONT_SIDE: f32 = 212.0;
+const FLOW_REFLECT_H: f32 = 40.0;
+
+/// Navigation state stays in Music; only transient visual interpolation lives
+/// here. The renderer requests frames only during the 260ms movement.
+#[derive(Default)]
+struct FlowMotion {
+    position: Option<f32>,
+    travel: Option<(Instant, f32, f32)>,
+}
+
+impl FlowMotion {
+    fn at(&self, now: Instant) -> Option<f32> {
+        let (start, from, to) = match self.travel {
+            Some(travel) => travel,
+            None => return self.position,
+        };
+        let t = (now.saturating_duration_since(start).as_secs_f32()
+            / FLOW_DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        Some(from + (to - from) * eased)
+    }
+
+    fn to(&mut self, cursor: usize, now: Instant) -> f32 {
+        let target = cursor as f32;
+        if self.position.is_none() {
+            self.position = Some(target);
+            return target;
+        }
+        if self.position != Some(target) {
+            let current = self.at(now).unwrap_or(target);
+            self.position = Some(target);
+            self.travel = Some((now, current, target));
+        }
+        self.at(now).unwrap_or(target)
+    }
+
+    fn active(&self, now: Instant) -> bool {
+        self.travel.is_some_and(|(at, _, _)| now.saturating_duration_since(at) < FLOW_DURATION)
+    }
+
+    fn clear(&mut self) {
+        self.position = None;
+        self.travel = None;
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Face {
@@ -49,9 +100,16 @@ pub(crate) struct MusicView {
     album_covers: [MusicCover; ROWS],
     album_backdrop: MusicCover,
     fade_texture: Option<TexId>,
+    flow_covers: [MusicCover; FLOW_SLOTS],
+    flow_motion: FlowMotion,
+    flow_reflection_fade: Option<TexId>,
 }
 
 impl MusicView {
+    pub(crate) fn cover_flow_animating(&self) -> bool {
+        self.flow_motion.active(Instant::now())
+    }
+
     pub(crate) fn render(
         &mut self,
         music: &Music,
@@ -65,7 +123,7 @@ impl MusicView {
         // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
         let first = music.cursor().saturating_sub(ROWS - 1);
         let mut album_art = [None; ROWS];
-        if music.track.is_none() {
+        if music.track.is_none() && !music.cover_flow() {
             for (slot, art) in album_art.iter_mut().enumerate() {
                 if let Some(album) = music.album_for_row(first + slot) {
                     if let Some(song) = album.songs.first() {
@@ -91,6 +149,41 @@ impl MusicView {
         } else {
             None
         };
+        // A separate bounded cache for Cover Flow avoids synchronous decoding
+        // and never evicts the list's existing thumbnail textures.
+        let now = Instant::now();
+        let flow = if music.cover_flow() && music.row_count() > 0 {
+            Some(self.flow_motion.to(music.cursor(), now))
+        } else {
+            self.flow_motion.clear();
+            None
+        };
+        let flow_first = flow.map_or(0, |position| position.round() as isize - 3);
+        let mut flow_art = [None; FLOW_SLOTS];
+        if flow.is_some() {
+            for (slot, item) in flow_art.iter_mut().enumerate() {
+                let album_index = flow_first + slot as isize;
+                if album_index < 0 {
+                    continue;
+                }
+                let album_index = album_index as usize;
+                if let Some(album) = music.album_for_row(album_index) {
+                    if let Some(song) = album.songs.first() {
+                        // Modulo slot ownership remains stable when scrolling
+                        // through adjacent album indices.
+                        *item = self.flow_covers[album_index % FLOW_SLOTS]
+                            .texture(&song.path, album, compositor);
+                    }
+                }
+            }
+        }
+        let reflection_fade = if flow.is_some() {
+            Some(*self.flow_reflection_fade.get_or_insert_with(|| {
+                compositor.create_texture(1, 64, &reflection_fade_rgba())
+            }))
+        } else {
+            None
+        };
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -104,6 +197,8 @@ impl MusicView {
         }
         if let Some(track) = &music.track {
             p.playing(music, track, cover);
+        } else if let (Some(position), Some(reflection_fade)) = (flow, reflection_fade) {
+            p.cover_flow(music, &flow_art, flow_first, position, reflection_fade);
         } else {
             p.browser(music, &album_art);
         }
@@ -151,6 +246,9 @@ impl Painter<'_> {
             };
             let width = self.text_ink("albums", 24, [EDGE, TITLE_TOP], albums);
             self.text_ink("artists", 24, [EDGE + width as f32 + 22.0, TITLE_TOP], artists);
+            if !music.viewing_artists() {
+                self.text_right("x covers", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
+            }
         } else {
             self.heading(music.label());
         }
@@ -195,6 +293,81 @@ impl Painter<'_> {
                 self.text_ink(label, 24, [x, y + 6.0], ink);
             }
         }
+    }
+
+    /// Cover Flow's depth is a cheap native 2D projection: nearby covers are
+    /// foreshortened and gently tilted, with vertically mirrored reflections.
+    /// Far items paint first so the focused album stays in front.
+    fn cover_flow(
+        &mut self,
+        music: &Music,
+        art: &[Option<(TexId, [u32; 2])>; FLOW_SLOTS],
+        first: isize,
+        position: f32,
+        reflection_fade: TexId,
+    ) {
+        let label = self.text_ink("albums", 24, [EDGE, TITLE_TOP], MUSIC_SELECTION_INK);
+        self.text_ink("artists", 24, [EDGE + label as f32 + 22.0, TITLE_TOP], MUSIC_MUTED_INK);
+        self.text_right("x list", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
+
+        // Sort by distance from the moving centre (far -> near).
+        let mut order = [0usize, 1, 2, 3, 4, 5, 6];
+        order.sort_by(|&a, &b| {
+            let distance_a = ((first + a as isize) as f32 - position).abs();
+            let distance_b = ((first + b as isize) as f32 - position).abs();
+            distance_b.total_cmp(&distance_a)
+        });
+        for slot in order {
+            let index = first + slot as isize;
+            if index < 0 || index as usize >= music.row_count() {
+                continue;
+            }
+            let distance = index as f32 - position;
+            let Some((x, y, w, h, alpha, turn)) = flow_geometry(distance) else {
+                continue;
+            };
+            // An artwork-sized paper tile is deliberately shown while asynchronous
+            // embedded-art decoding runs (and for albums with no embedded art).
+            self.rect([x - 2.0, y - 2.0], [w + 4.0, h + 4.0],
+                [0.85, 0.84, 0.83, alpha * 0.65]);
+            self.rect([x, y], [w, h], MUSIC_COVER_PLACEHOLDER);
+            if let Some((tex, pixels)) = art[slot] {
+                let pw = w * pixels[0] as f32 / THUMBNAIL as f32;
+                let ph = h * pixels[1] as f32 / THUMBNAIL as f32;
+                let px = x + (w - pw) / 2.0;
+                let py = y + (h - ph) / 2.0;
+                self.draws.push(Draw::Turned {
+                    x: px, y: py, w: pw, h: ph, tex, alpha, turn,
+                });
+                // A negative-height sprite mirrors the cover vertically without
+                // a second decoded texture. The small gradient softens the end.
+                let reflect_y = py + ph + 4.0;
+                self.draws.push(Draw::Tex {
+                    x: px, y: reflect_y + FLOW_REFLECT_H, w: pw,
+                    h: -FLOW_REFLECT_H, tex, alpha: alpha * 0.19,
+                });
+                self.draws.push(Draw::Tex {
+                    x: px, y: reflect_y, w: pw, h: FLOW_REFLECT_H,
+                    tex: reflection_fade, alpha: 1.0,
+                });
+            }
+        }
+
+        let (album, artist) = music.row(music.cursor());
+        self.text_center(album, 26, 382.0, MUSIC_TEXT_INK, 544);
+        if let Some(artist) = artist {
+            self.text_center(artist, 18, 421.0, MUSIC_MUTED_INK, 544);
+        }
+        self.text_center(
+            &format!("{} / {}", music.cursor() + 1, music.row_count()),
+            15, 450.0, MUSIC_MUTED_INK, 160,
+        );
+    }
+
+    fn text_center(&mut self, text: &str, px: u32, y: f32, ink: [u8; 3], room: u32) {
+        let key = format!("{px}/{room}/{ink:?}/{text}");
+        let face = self.texture(key, |scale| menu_text_face(text, px, room, scale, ink));
+        self.place(face, (OUT_W as f32 - face.size[0] as f32) / 2.0, y);
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
@@ -363,6 +536,33 @@ fn backdrop_fade_rgba() -> Vec<u8> {
     }).collect()
 }
 
+/// Returns the projected artwork rectangle and subtle side tilt for a moving
+/// album. Culling keeps GPU work bounded, even for large music libraries.
+fn flow_geometry(distance: f32) -> Option<(f32, f32, f32, f32, f32, f32)> {
+    let abs = distance.abs();
+    if abs > 2.7 {
+        return None;
+    }
+    let near = (1.0 - abs).clamp(0.0, 1.0);
+    let w = 96.0 + (FLOW_FRONT_SIDE - 96.0) * near;
+    let h = 158.0 + (FLOW_FRONT_SIDE - 158.0) * near;
+    let span = abs.min(1.0) * 178.0 + (abs - 1.0).max(0.0) * 71.0;
+    let x = OUT_W as f32 / 2.0 + distance.signum() * span - w / 2.0;
+    let y = FLOW_COVER_Y + (FLOW_FRONT_SIDE - h) / 2.0;
+    let alpha = (1.0 - abs * 0.30).clamp(0.18, 1.0);
+    let turn = if abs < 0.01 { 0.0 } else { distance.signum() * 0.025 };
+    Some((x, y, w, h, alpha, turn))
+}
+
+/// Warm-white gradient to dissolve mirrored artwork into the Music canvas.
+fn reflection_fade_rgba() -> Vec<u8> {
+    (0..64).flat_map(|y| {
+        let t = y as f32 / 63.0;
+        let eased = t * t * (3.0 - 2.0 * t);
+        [248, 247, 244, (255.0 * eased).round() as u8]
+    }).collect()
+}
+
 fn timestamp(seconds: f64) -> String {
     let seconds = seconds as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -377,6 +577,57 @@ mod album_thumbnail_layout_tests {
         assert!(ALBUM_COVER_SIDE <= ROW_H);
         assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
         assert!(ALBUM_TEXT_X < OUT_W as f32 - EDGE);
+    }
+
+    #[test]
+    fn cover_flow_projection_keeps_a_focused_cover_between_two_smaller_neighbours() {
+        let focused = flow_geometry(0.0).unwrap();
+        let left = flow_geometry(-1.0).unwrap();
+        let right = flow_geometry(1.0).unwrap();
+        assert_eq!(focused.2, FLOW_FRONT_SIDE);
+        assert!(left.2 < focused.2 && right.2 < focused.2);
+        assert!(left.0 + left.2 < focused.0);
+        assert!(right.0 > focused.0 + focused.2);
+        assert_eq!(flow_geometry(3.0), None);
+        assert!(focused.4 > left.4);
+        assert!(left.5 < 0.0 && right.5 > 0.0);
+    }
+
+    #[test]
+    fn cover_flow_animation_eases_and_finishes_without_idle_redraws() {
+        let now = Instant::now();
+        let mut motion = FlowMotion::default();
+        assert_eq!(motion.to(2, now), 2.0);
+        assert_eq!(motion.to(3, now), 2.0);
+        assert!(motion.active(now + FLOW_DURATION / 2));
+        let halfway = motion.at(now + FLOW_DURATION / 2).unwrap();
+        assert!(halfway > 2.0 && halfway < 3.0);
+        assert_eq!(motion.at(now + FLOW_DURATION), Some(3.0));
+        assert!(!motion.active(now + FLOW_DURATION));
+        motion.clear();
+        assert_eq!(motion.at(now), None);
+    }
+
+    #[test]
+    fn rapid_cover_flow_navigation_continues_from_the_interpolated_position() {
+        let now = Instant::now();
+        let mut motion = FlowMotion::default();
+        motion.to(2, now);
+        motion.to(3, now);
+        let midway = now + FLOW_DURATION / 2;
+        let before = motion.at(midway).unwrap();
+        assert!((2.0..3.0).contains(&before));
+        let next = motion.to(4, midway);
+        assert!((next - before).abs() < 0.001, "navigation jumped instead of retargeting");
+        assert_eq!(motion.at(midway + FLOW_DURATION), Some(4.0));
+    }
+
+    #[test]
+    fn reflection_dissolves_into_the_warm_white_canvas() {
+        let pixels = reflection_fade_rgba();
+        assert_eq!(pixels.len(), 64 * 4);
+        assert_eq!(&pixels[0..4], &[248, 247, 244, 0]);
+        assert_eq!(&pixels[63 * 4..63 * 4 + 4], &[248, 247, 244, 255]);
     }
 
     #[test]

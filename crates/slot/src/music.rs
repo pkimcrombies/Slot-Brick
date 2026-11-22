@@ -229,6 +229,8 @@ pub(crate) struct Music {
     browse: Vec<Location>,
     pub(crate) track: Option<Track>,
     discard_audio: bool,
+    /// Cover Flow is the default root album browser. X toggles the former list.
+    cover_flow: bool,
 }
 
 impl Music {
@@ -248,6 +250,7 @@ impl Music {
             }],
             track: None,
             discard_audio: false,
+            cover_flow: true,
         }
     }
 
@@ -322,6 +325,10 @@ impl Music {
             }
             Page::Artists | Page::Album(_) => None,
         }
+    }
+
+    pub(crate) fn cover_flow(&self) -> bool {
+        self.cover_flow && self.is_root() && !self.viewing_artists()
     }
 
     pub(crate) fn showing_tracks(&self) -> bool {
@@ -410,6 +417,19 @@ impl Music {
             return false;
         }
         match action {
+            // Cover Flow scrolls albums horizontally. L1/R1 still switch
+            // between the Albums and Artists roots. X restores list browsing.
+            Action::GbaDown(Btn::X) if self.is_root() && !self.viewing_artists() => {
+                self.cover_flow = !self.cover_flow;
+            }
+            Action::GbaDown(Btn::Left) | Action::ShelfLeft if self.cover_flow() => {
+                self.select_row(self.cursor().saturating_sub(1));
+            }
+            Action::GbaDown(Btn::Right) | Action::ShelfRight if self.cover_flow() => {
+                if self.cursor() + 1 < self.row_count() {
+                    self.select_row(self.cursor() + 1);
+                }
+            }
             Action::GbaDown(Btn::Up) => self.select_row(self.cursor().saturating_sub(1)),
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
@@ -545,6 +565,36 @@ mod tests {
         music.open_page(Page::Album(0));
         assert!(music.album_for_row(0).is_none());
     }
+    #[test]
+    fn cover_flow_is_default_and_left_right_browse_albums_without_changing_tabs() {
+        let albums = (0..3).map(|i| Album {
+            title: format!("album {i}"),
+            artist: "artist".into(),
+            songs: vec![Song {
+                path: std::path::PathBuf::from(format!("{i}.mp3")),
+                title: "song".into(),
+                artist: "artist".into(),
+                disc: 1,
+                track: Some(1),
+            }],
+        }).collect();
+        let mut music = Music::with_library(Library { albums, artists: vec![] });
+        assert!(music.cover_flow());
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.cursor(), 1);
+        assert!(!music.viewing_artists());
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 0);
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 0);
+        music.input(Action::GbaDown(Btn::X));
+        assert!(!music.cover_flow());
+        music.input(Action::GbaDown(Btn::Right));
+        assert!(music.viewing_artists(), "list mode retains the existing root tab controls");
+        music.input(Action::GbaDown(Btn::L1));
+        assert!(music.cover_flow() == false && !music.viewing_artists());
+    }
+
     use std::fs;
 
     fn silent_mp3(path: &Path, channels: u8) {

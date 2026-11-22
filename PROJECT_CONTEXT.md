@@ -22,7 +22,7 @@
   ClassiPod itself, or a separate music launcher.
 - Slot launcher and system menus remain minimal **black**. Native Music uses
   **warm white (#F8F7F4)**, charcoal text and darker dusty-rose selection
-  across album lists, album details and Now Playing. Cover Flow will follow.
+  across album lists, album details, Now Playing and the Cover Flow screen.
   Keep Slot's typography and physical buttons; preserve game animations.
 - Prefer short, smooth fades. Avoid black flashes, extra loading screens and
   needless redraws/CPU use.
@@ -45,6 +45,13 @@
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
+- Album root now defaults to **native Cover Flow** on warm white: selected
+  central cover, compressed/dim neighbouring covers, mirrored reflections,
+  title/artist below, 260ms eased Left/Right movement. **X** toggles the
+  original album list; **L1/R1** switches Albums/Artists; **A** opens album,
+  **Y** starts album, **B** exits root. Artists and tracks stay lists.
+  Implementation is in `music.rs`, `music_view.rs`, with the animation
+  redraw gate in `frontend.rs`. Device verification pending.
 - Now Playing was redesigned (commit `7515789`): **214px artwork on left**,
   track/artist/album and position on right, progress/time at bottom. Keep
   physical playback controls. Device feedback on this redesign is pending.
@@ -87,10 +94,9 @@
 
 1. Confirm latest **warm-white Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
-2. Then build **native Cover Flow** inspired by
-   `adeeteya/Classipod`: centered selected album, angled neighbouring
-   covers, subtle reflection, album/artist underneath, smooth button-driven
-   horizontal movement. Preserve the current list as an alternative.
+2. Test and refine the **native Cover Flow** inspired by
+   `adeeteya/Classipod` on the actual Brick Pro (positions, reflections,
+   text and motion). Keep the original list accessible via **X**.
    ClassiPod is *visual reference only*, not code to port wholesale.
 3. PSP replacement work can resume separately when requested.
 

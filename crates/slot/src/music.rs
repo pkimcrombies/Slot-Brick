@@ -352,7 +352,7 @@ pub(crate) struct Music {
     /// Cover Flow is the default root album browser. X toggles the former list.
     cover_flow: bool,
     settings: MusicSettings,
-    settings_open: bool,
+    settings_view: bool,
     settings_row: usize,
     settings_root: Option<PathBuf>,
     /// Stable album identities: sorting never mutates the library itself.
@@ -385,7 +385,7 @@ impl Music {
             discard_audio: false,
             cover_flow: true,
             settings: MusicSettings::default(),
-            settings_open: false,
+            settings_view: false,
             settings_row: 0,
             settings_root: None,
             album_order: Vec::new(),
@@ -438,7 +438,7 @@ impl Music {
     fn effective_volume(&self, requested: u8) -> u8 {
         requested.min(self.settings.max_volume)
     }
-    pub(crate) fn music_settings_open(&self) -> bool { self.settings_open }
+    pub(crate) fn music_settings_open(&self) -> bool { self.settings_view }
     pub(crate) fn settings_cursor(&self) -> usize { self.settings_row }
     pub(crate) fn settings_max_volume(&self) -> u8 { self.settings.max_volume }
     pub(crate) fn settings_album_view(&self) -> &'static str {
@@ -457,7 +457,7 @@ impl Music {
         }
     }
     pub(crate) fn should_dim(&self) -> bool {
-        self.playing() && !self.settings_open && self.settings.dim_timeout_secs > 0
+        self.playing() && !self.settings_view && self.settings.dim_timeout_secs > 0
     }
 
     fn change_setting(&mut self, forward: bool) {
@@ -578,7 +578,7 @@ impl Music {
 
     pub(crate) fn cover_flow(&self) -> bool {
         self.cover_flow && self.is_root() && !self.viewing_artists()
-            && !self.now_playing_view
+            && !self.now_playing_view && !self.settings_view
     }
 
     pub(crate) fn showing_now_playing(&self) -> bool { self.now_playing_view }
@@ -604,21 +604,25 @@ impl Music {
         }
     }
 
-    /// Music's three sections cycle in the same direction everywhere:
-    /// Now Playing <-> Albums <-> Artists, wrapping at either end.
-    /// A shoulder-button section switch always enters that section's root,
-    /// even when Now Playing was opened from an album's track list. Unlike
-    /// section switches, B explicitly opens the current track's album.
+    /// All four Music sections are peers; shoulders wrap in both directions.
+    /// Enter Albums/Artists at their roots and Settings at its first row.
+    /// Unlike switching sections, B from Now Playing opens the playing album.
     fn navigate_section(&mut self, forward: bool) {
-        let current = if self.now_playing_view {
+        let current = if self.settings_view {
+            3
+        } else if self.now_playing_view {
             0
         } else if matches!(self.browse[0].page, Page::Artists) {
             2
         } else {
             1
         };
-        let next = (current + if forward { 1 } else { 2 }) % 3;
+        let next = (current + if forward { 1 } else { 3 }) % 4;
         self.now_playing_view = next == 0;
+        self.settings_view = next == 3;
+        if self.settings_view {
+            self.settings_row = 0;
+        }
         let page = match next {
             1 => Some(Page::Albums),
             2 => Some(Page::Artists),
@@ -727,11 +731,20 @@ impl Music {
     /// True when the browser should return to Slot's menu.
     pub(crate) fn input(&mut self, action: Action) -> bool {
         if action == Action::QuickMenu { return true; }
-        if action == Action::GbaDown(Btn::Start) {
-            self.settings_open = !self.settings_open;
-            return false;
+        // All sections, including Settings, share the same tab navigation.
+        // Start is intentionally unmapped; HOME/Menu alone exits Music.
+        match action {
+            Action::GbaDown(Btn::L1) => {
+                self.navigate_section(false);
+                return false;
+            }
+            Action::GbaDown(Btn::R1) => {
+                self.navigate_section(true);
+                return false;
+            }
+            _ => {}
         }
-        if self.settings_open {
+        if self.settings_view {
             match action {
                 Action::GbaDown(Btn::Up) => {
                     self.settings_row = self.settings_row.saturating_sub(1);
@@ -743,23 +756,10 @@ impl Music {
                     self.change_setting(true);
                 }
                 Action::GbaDown(Btn::Left) => self.change_setting(false),
-                Action::GbaDown(Btn::B) => self.settings_open = false,
+                // B at a section root is inert; only HOME/Menu leaves Music.
                 _ => {}
             }
             return false;
-        }
-        // Shoulder buttons always switch Music sections, regardless of
-        // playback status or whether a browser subpage is open.
-        match action {
-            Action::GbaDown(Btn::L1) => {
-                self.navigate_section(false);
-                return false;
-            }
-            Action::GbaDown(Btn::R1) => {
-                self.navigate_section(true);
-                return false;
-            }
-            _ => {}
         }
         if self.now_playing_view {
             if action == Action::GbaDown(Btn::B) {
@@ -1027,7 +1027,7 @@ mod tests {
         let mut music = Music::with_library(Library::default());
         music.settings_root = Some(root.path().to_path_buf());
         music.input(Action::GbaDown(Btn::Start));
-        assert!(music.music_settings_open());
+        assert!(music.music_settings_view());
         assert_eq!(music.settings_max_volume(), 70);
         music.input(Action::GbaDown(Btn::Left));
         assert_eq!(music.settings_max_volume(), 60);
@@ -1047,7 +1047,7 @@ mod tests {
         music.input(Action::GbaDown(Btn::Right));
         assert_eq!(music.dim_brightness(), 2);
         music.input(Action::GbaDown(Btn::B));
-        assert!(!music.music_settings_open());
+        assert!(!music.music_settings_view());
 
         let loaded = MusicSettings::load(root.path());
         assert_eq!(loaded.max_volume, 60);

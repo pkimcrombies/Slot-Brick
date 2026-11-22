@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_store::BRIGHTNESS_MAX;
 use slot_ui::{
-    menu_text_face, pixel_aligned_texture, UndoFace, QUICK_EDGE,
+    menu_text_face, pixel_aligned_texture, UndoFace, STATUS_MARGIN,
 };
 
 use crate::music::{Music, RepeatMode, Status, Track};
@@ -24,7 +24,8 @@ const MUSIC_SELECTION_INK: [u8; 3] = [0xa0, 0x50, 0x69];
 const MUSIC_PROGRESS_TRACK: [f32; 4] = [0.84, 0.83, 0.82, 1.0];
 const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
 
-const EDGE: f32 = QUICK_EDGE;
+// Match the shared top-left clock, rather than the 32px quick-menu inset.
+const EDGE: f32 = STATUS_MARGIN;
 const ROWS: usize = 6;
 const TITLE_TOP: f32 = 42.0;
 const LIST_TOP: f32 = 104.0;
@@ -54,11 +55,11 @@ const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
 // Bottom-right repeat mode stays clear of elapsed/total time and progress.
-const REPEAT_ICON_SIDE: u32 = 32;
+const REPEAT_ICON_SIDE: u32 = 28;
 const REPEAT_ICON_BOTTOM_MARGIN: f32 = 20.0;
 const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
-// The progress bar is at y=372 and time labels begin at y=392. Position
-// the icon at y=428 so it clears the labels rather than sharing their row.
+// The progress bar is at y=372 and time labels begin at y=392. The
+// smaller icon stays below the timestamps with a 20px bottom margin.
 const REPEAT_BADGE_Y: f32 = OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN - REPEAT_ICON_SIDE as f32;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
@@ -1075,13 +1076,25 @@ mod album_thumbnail_layout_tests {
     fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
         assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
             "repeat must sit below the progress bar and timestamps");
-        assert_eq!(REPEAT_ICON_SIDE, 32);
+        assert_eq!(REPEAT_ICON_SIDE, 28);
         assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE,
             "repeat icon must stay inside right margin");
-        assert_eq!(REPEAT_BADGE_Y, 428.0, "repeat icon sits below the time labels");
+        assert_eq!(REPEAT_BADGE_Y, 432.0, "repeat icon sits below the time labels");
         assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN,
             "repeat icon must stay inside bottom margin");
         assert_eq!(REPEAT_ICON_FILES, ["repeat-off.png", "repeat-all.png", "repeat-one.png"]);
+    }
+
+    #[test]
+    fn music_left_margin_matches_the_shelf_clock_and_hud() {
+        assert_eq!(STATUS_MARGIN, 24.0);
+        assert_eq!(EDGE, STATUS_MARGIN);
+        assert_eq!(PLAYING_COVER_X, EDGE);
+        assert_eq!(ALBUM_TRACK_TITLE_X, EDGE + 44.0);
+        assert_eq!(REPEAT_BADGE_X, 588.0,
+            "repeat icon aligns with the opposite HUD edge");
+        assert_eq!(REPEAT_BADGE_Y, 432.0,
+            "28px icon retains a 20px bottom margin");
     }
 
     #[test]

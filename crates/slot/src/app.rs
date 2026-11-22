@@ -65,6 +65,9 @@ pub const LINK_LOST_MS: Millis = 2000;
 const PLAY_HOLD_MS: Millis = 500;
 
 const SHUTDOWN_SHOW_MS: Millis = 250;
+/// The Brick Pro's rumble motor is GPIO on/off, not strength controlled.
+#[cfg(feature = "brick")]
+const SHUTDOWN_HAPTIC_MS: u64 = 70;
 
 const POWER_MENU_PITCH: f32 = 44.0;
 const POWER_MENU_BAR_INSET: f32 = 4.0;
@@ -449,6 +452,10 @@ pub struct App {
     #[cfg(feature = "brick")]
     lease_check_at: Millis,
     powering_off: bool,
+    /// Only deliberate shutdowns confirm with a short vibration. Battery
+    /// safety and automatic sleep-timeout shutdowns stay silent.
+    #[cfg(feature = "brick")]
+    shutdown_haptic: bool,
     /// An update was swapped in: Slot ends, for launch.sh to start the new one.
     updating: bool,
     /// HOME → System → Reset Settings: asked (A again resets) or done, until the menu moves on.
@@ -712,6 +719,8 @@ impl App {
             #[cfg(feature = "brick")]
             lease_check_at: 0,
             powering_off: false,
+            #[cfg(feature = "brick")]
+            shutdown_haptic: false,
         }
     }
 
@@ -2046,8 +2055,16 @@ impl App {
     }
 
     pub fn poweroff(&mut self) {
+        // Do not compromise safe shutdown: all saves are completed before the
+        // optional haptic acknowledgement and the existing platform poweroff.
         self.settle_saves();
         if let Some(power) = &mut self.power {
+            #[cfg(feature = "brick")]
+            if self.shutdown_haptic && self.state.rumble {
+                power.set_rumble(1);
+                std::thread::sleep(std::time::Duration::from_millis(SHUTDOWN_HAPTIC_MS));
+                power.set_rumble(0);
+            }
             power.poweroff();
         }
     }
@@ -3354,6 +3371,11 @@ impl App {
                 h: OUT_H as f32,
                 colour: [0.0, 0.0, 0.0, 1.0],
             });
+            // The Brick fades to black silently on power-off. The separate
+            // exit-to-stock choice retains its confirmation text.
+            if cfg!(feature = "brick") && self.powering_off {
+                return;
+            }
             let which = if self.restarting {
                 PowerChoice::Restart
             } else {
@@ -4211,7 +4233,10 @@ impl App {
         }
         self.flush_resume();
         if self.power_off_only {
-            return self.begin_power_off();
+            self.begin_power_off();
+            #[cfg(feature = "brick")]
+            { self.shutdown_haptic = true; }
+            return;
         }
         self.power_menu = Some(0);
     }
@@ -4243,7 +4268,11 @@ impl App {
                         self.act_at = self.now() + SHUTDOWN_SHOW_MS;
                         self.set_led(LedState::Off);
                     }
-                    PowerChoice::PowerOff => self.begin_power_off(),
+                    PowerChoice::PowerOff => {
+                        self.begin_power_off();
+                        #[cfg(feature = "brick")]
+                        { self.shutdown_haptic = true; }
+                    },
                 }
             }
             _ => {}
@@ -6614,3 +6643,66 @@ impl CartMenu {
     }
 }
 
+
+#[cfg(all(test, feature = "brick"))]
+mod quiet_poweroff_tests {
+    use super::*;
+
+    #[test]
+    fn deliberate_shutdown_requests_a_confirmation_pulse() {
+        let root = tempfile::tempdir().unwrap();
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        // Under stock-style power menus, the first Brick row is Power Off.
+        app.set_power_off_only(false);
+        app.apply(Action::PowerHold);
+        assert_eq!(app.power_menu(), Some(0));
+        app.apply(Action::GbaDown(Btn::A));
+        assert!(app.powering_off());
+        assert!(app.shutdown_haptic);
+        assert!(app.rumble_enabled());
+        let mut draws = Vec::new();
+        app.draw(&mut draws);
+        assert_eq!(draws.len(), 1, "shutdown must fade to plain black, without a text face");
+        match draws[0] {
+            Draw::Rect { colour, .. } => assert_eq!(colour, [0.0, 0.0, 0.0, 1.0]),
+            other => panic!("power-off drew {other:?} rather than plain black"),
+        }
+    }
+
+    #[test]
+    fn auto_shutdown_and_exit_to_stock_do_not_request_a_pulse() {
+        let root = tempfile::tempdir().unwrap();
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut automatic = App::boot(root.path());
+        automatic.apply(Action::LidClose);
+        automatic.on_doze_timeout();
+        assert!(automatic.powering_off());
+        assert!(!automatic.shutdown_haptic);
+
+        let mut exiting = App::boot(root.path());
+        exiting.set_power_off_only(false);
+        exiting.apply(Action::PowerHold);
+        exiting.apply(Action::GbaDown(Btn::Down));
+        exiting.apply(Action::GbaDown(Btn::A));
+        assert!(exiting.restarting());
+        assert!(!exiting.shutdown_haptic);
+    }
+
+    #[test]
+    fn direct_power_hold_is_also_a_deliberate_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.set_power_off_only(true);
+        app.apply(Action::PowerHold);
+        assert!(app.powering_off());
+        assert!(app.shutdown_haptic);
+    }
+}

@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_store::BRIGHTNESS_MAX;
 use slot_ui::{
-    menu_text_face, pixel_aligned_texture, UndoFace, STATUS_MARGIN,
+    menu_text_face, pixel_aligned_texture, UndoFace, QUICK_PITCH,
+    QUICK_VALUE_EDGE, STATUS_MARGIN,
 };
 
 use crate::music::{Music, RepeatMode, Status, Track};
@@ -44,9 +45,11 @@ const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
 const ALBUM_HEADER_BOTTOM: f32 = 108.0;
 const ALBUM_LIST_TOP: f32 = 116.0;
 const ALBUM_TRACK_ROW_H: f32 = 44.0;
-const SETTINGS_FIRST_ROW_Y: f32 = 106.0;
-const SETTINGS_ROW_STEP: f32 = 51.0;
+// Match Slot's native two-column settings rhythm, on Music's ivory canvas.
+const SETTINGS_FIRST_ROW_Y: f32 = 108.0;
+const SETTINGS_ROW_STEP: f32 = QUICK_PITCH;
 const SETTINGS_ROW_H: f32 = 44.0;
+const SETTINGS_VALUE_X: f32 = QUICK_VALUE_EDGE;
 const ALBUM_VISIBLE_ROWS: usize = 7;
 const ALBUM_TRACK_TITLE_X: f32 = EDGE + 44.0;
 // A gentle tonal step beneath the header, not a separate white panel.
@@ -286,7 +289,8 @@ impl MusicView {
         // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
         let first = music.cursor().saturating_sub(ROWS - 1);
         let mut album_art = [None; ROWS];
-        if !music.showing_now_playing() && !music.cover_flow() {
+        if !music.showing_now_playing() && !music.music_settings_open()
+            && !music.cover_flow() {
             for (slot, art) in album_art.iter_mut().enumerate() {
                 if let Some(album) = music.album_for_row(first + slot) {
                     if let Some(song) = album.songs.first() {
@@ -710,10 +714,11 @@ impl Painter<'_> {
         }
     }
 
-    /// Full-width classic Music settings. Start opens and closes this view;
-    /// directions change a selected row, B returns to playback/browser.
+    /// Same two-column, text-only selection as Slot's system Settings:
+    /// no full-width coloured selection bars, cards, dividers or new palette.
+    /// Settings is a peer tab and remains usable while music plays.
     fn settings(&mut self, music: &Music) {
-        self.heading("music settings");
+        self.music_tabs(3);
         let volume = format!("{}%", music.settings_max_volume());
         let dim_brightness = format!("{}/{}", music.dim_brightness(), BRIGHTNESS_MAX);
         let values = [
@@ -731,17 +736,13 @@ impl Painter<'_> {
         for (index, (label, value)) in labels.iter().zip(values).enumerate() {
             let y = SETTINGS_FIRST_ROW_Y + index as f32 * SETTINGS_ROW_STEP;
             let selected = music.settings_cursor() == index;
-            if selected {
-                let rose = MUSIC_SELECTION_INK.map(|n| n as f32 / 255.0);
-                self.rect([0.0, y], [OUT_W as f32, SETTINGS_ROW_H],
-                    [rose[0], rose[1], rose[2], 1.0]);
-            } else {
-                self.rect([EDGE, y + SETTINGS_ROW_H], [OUT_W as f32 - EDGE * 2.0, 1.0],
-                    ALBUM_ROW_SEPARATOR);
-            }
-            let ink = if selected { ALBUM_WHITE_INK } else { MUSIC_TEXT_INK };
-            self.text_with_room(label, 23, [EDGE + 8.0, y + 12.0], ink, 285);
-            self.text_with_room(value, 21, [346.0, y + 13.0], ink, 250);
+            // System Settings highlights the label and value, not the row.
+            let label_ink = if selected { MUSIC_SELECTION_INK } else { MUSIC_TEXT_INK };
+            let value_ink = if selected { MUSIC_SELECTION_INK } else { MUSIC_MUTED_INK };
+            self.text_with_room(label, 23, [EDGE, y + 9.0], label_ink,
+                (SETTINGS_VALUE_X - EDGE - 16.0) as u32);
+            self.text_with_room(value, 22, [SETTINGS_VALUE_X, y + 9.0], value_ink,
+                (OUT_W as f32 - SETTINGS_VALUE_X - EDGE) as u32);
         }
         self.text_with_room(
             "Screen stays on; a button restores brightness",
@@ -762,7 +763,7 @@ impl Painter<'_> {
 
     fn music_tabs(&mut self, selected: usize) {
         let mut x = EDGE;
-        for (index, title) in ["now playing", "albums", "artists"].iter().enumerate() {
+        for (index, title) in ["now playing", "albums", "artists", "settings"].iter().enumerate() {
             let ink = if index == selected { MUSIC_TEXT_INK } else { MUSIC_MUTED_INK };
             let width = self.text_ink(title, 23, [x, TITLE_TOP], ink);
             x += width as f32 + 20.0;
@@ -1168,6 +1169,10 @@ mod album_thumbnail_layout_tests {
     #[test]
     fn music_settings_six_rows_fit_above_the_footer() {
         let bottom = SETTINGS_FIRST_ROW_Y + 5.0 * SETTINGS_ROW_STEP + SETTINGS_ROW_H;
+        assert_eq!(SETTINGS_ROW_STEP, QUICK_PITCH,
+            "Music settings must follow the standard system Settings row pitch");
+        assert_eq!(SETTINGS_VALUE_X, QUICK_VALUE_EDGE,
+            "Music settings values must use the standard two-column split");
         assert!(bottom < 419.0, "dim brightness row must not overlap its caption");
         assert!(440.0 + 18.0 < OUT_H as f32, "safety caption stays on screen");
     }

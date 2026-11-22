@@ -2,7 +2,7 @@
 
 > Small handoff for future ChatGPT/AI coding sessions. **Read this first**, then verify the
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
-> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-22.
+> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-22. Current branch tip before this context-only update: `14f850e`.
 
 ## Where we work
 
@@ -33,6 +33,11 @@
   installer** workflow: exact Git commit, regression tests, ARM64 build, backup,
   replace and SHA-256 verification. Distribute standalone PowerShell as `.txt`
   for renaming to `.ps1`. Never silently overwrite a working installation.
+- Latest code changes on this branch (as of 2026-11-22): `3dfb0d4`
+  sleep fade, `f055987` power test expectations, `1e45f95` classic song
+  list, `e9b77ac` Cover Flow labels/counter removal, `d66b63c` reused
+  GPU album art, `14f850e` soft ivory Music theme. These are commits,
+  **not proof of a successful device build or installation**.
 - User primarily works on Windows. Previous checkout:
   `C:\Users\pk\Downloads\slot\Slot-Brick-PSP-Feature`; SD usually `F:\`.
   **Treat both as defaults, not guarantees; verify before copying.**
@@ -48,7 +53,7 @@
   The earlier ClassiPod *Cover Flow selection panel* interpretation was
   rejected: no floating bordered panel, coloured gradient header, large
   artwork backdrop or Cover Flow flip animation. Native
-  `music_view.rs::album_tracks` now draws a full-width warm-white list with
+  `music_view.rs::album_tracks` now draws a full-width warm-ivory list with
   a quiet album/artist title bar, seven 44px rows, track numbers **before**
   titles, subtle separators, one full-width dusty-rose selected row, a slim
   scroll indicator for long albums, and a small position count. The old
@@ -66,10 +71,14 @@
   Now Playing's own asynchronous decoder. The existing seven Cover Flow +
   six list slots remain bounded; no unbounded texture map. Texture-key
   regression tests cover both browsing modes and stale/different albums.
+  This is **reuse of visible/in-flight GPU artwork**, not a persistent
+  all-albums or disk cache: artwork not yet requested must still load.
+  Verify first-frame appearance, subsequent songs from the same album, and
+  revisiting previously browsed covers on the device.
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
-- Album root defaults to **native Cover Flow** on warm white. The first
+- Album root defaults to **native Cover Flow** on warm ivory. The first
   flat approximation (260ms / screen-plane tilt) was rejected by the user.
   Replacement is based on ClassiPod's **Original** carousel, not Big:
   `adeeteya/Classipod` master:
@@ -136,7 +145,10 @@
   `slot-psp-sim` and `slot-psp-arm64`; Cargo home typically
   `/src/.docker-cache/music-cargo`. Installer scripts have the exact invocations.
 - Tests: `cargo test --offline --locked -p slot --no-default-features
-  --features brick,sim --lib --test quick_menu --test pause_menu`.
+  --features brick,sim --lib --test quick_menu --test pause_menu --test power`.
+  Do not omit power integration tests: the first sleep-fade installer revealed
+  two obsolete immediate-backlight assertions. They were corrected in
+  `f055987` while preserving power-button and wake checks.
   ARM64 build: `cargo build --offline --locked --profile device
   --target aarch64-unknown-linux-gnu -p slot --no-default-features --features brick`.
 - SD launcher: `Slot/System/slot-native`; keep the `Slot/System/slot`
@@ -151,7 +163,7 @@
 
 ## Next work
 
-1. Confirm latest **warm-white Music theme**, first-frame boot fade,
+1. Confirm latest **warm-ivory Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
 2. Verify the redesigned **original iPod Classic-style song list**
    on the 640x480 Brick Pro: full-width rows, quiet top header, seven-row

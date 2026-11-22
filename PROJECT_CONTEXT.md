@@ -21,8 +21,11 @@
 - Keep everything **native Slot (Rust)**. Do not introduce Trimpod, Flutter,
   ClassiPod itself, or a separate music launcher.
 - Slot launcher and system menus remain minimal **black**. Native Music uses
-  **warm white (#F8F7F4)**, charcoal text and darker dusty-rose selection
+  **soft warm ivory (#F5F1EA; changed from near-white #F8F7F4 after user
+  feedback on 2026-11-22)**, charcoal text and darker dusty-rose selection
   across album lists, album details, Now Playing and the Cover Flow screen.
+  The album song-list header is a quiet deeper ivory (#EFEAE1). No changes
+  to global menus, game views, texture decoding or cover placeholders.
   Keep Slot's typography and physical buttons; preserve game animations.
 - Prefer short, smooth fades. Avoid black flashes, extra loading screens and
   needless redraws/CPU use.

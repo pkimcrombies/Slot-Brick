@@ -9,9 +9,10 @@ use slot_ui::{
 use crate::music::{Music, Status, Track};
 use crate::music_cover::{MusicCover, THUMBNAIL};
 
-// Music alone uses a warm-white canvas. System menus and the launcher keep
-// their dark palette; do not change the global MENU_* constants.
-const MUSIC_BACKGROUND: [f32; 4] = [248.0 / 255.0, 247.0 / 255.0, 244.0 / 255.0, 1.0];
+// Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
+// less stark than pure white. System menus and the launcher keep their
+// original dark palette; never change global MENU_* constants.
+const MUSIC_BACKGROUND: [f32; 4] = [245.0 / 255.0, 241.0 / 255.0, 234.0 / 255.0, 1.0];
 const MUSIC_TEXT_INK: [u8; 3] = [0x24, 0x24, 0x24];
 const MUSIC_MUTED_INK: [u8; 3] = [0x74, 0x6e, 0x6b];
 const MUSIC_SELECTION_INK: [u8; 3] = [0xa0, 0x50, 0x69];
@@ -32,7 +33,8 @@ const ALBUM_LIST_TOP: f32 = 116.0;
 const ALBUM_TRACK_ROW_H: f32 = 44.0;
 const ALBUM_VISIBLE_ROWS: usize = 7;
 const ALBUM_TRACK_TITLE_X: f32 = EDGE + 44.0;
-const ALBUM_HEADER_BACKGROUND: [f32; 4] = [0.972, 0.966, 0.954, 1.0];
+// A gentle tonal step beneath the header, not a separate white panel.
+const ALBUM_HEADER_BACKGROUND: [f32; 4] = [239.0 / 255.0, 234.0 / 255.0, 225.0 / 255.0, 1.0];
 const ALBUM_ROW_SEPARATOR: [f32; 4] = [0.89, 0.88, 0.87, 1.0];
 const ALBUM_WHITE_INK: [u8; 3] = [255, 255, 255];
 // ClassiPod-inspired composition, retaining Slot's native 640x480 layout,
@@ -783,7 +785,15 @@ mod album_thumbnail_layout_tests {
 
     #[test]
     fn music_has_its_own_light_palette_without_changing_system_menus() {
-        assert_eq!(MUSIC_BACKGROUND, [248.0 / 255.0, 247.0 / 255.0, 244.0 / 255.0, 1.0]);
+        assert_eq!(MUSIC_BACKGROUND, [245.0 / 255.0, 241.0 / 255.0, 234.0 / 255.0, 1.0]);
+        // A warm off-white should not read as an untinted 255-white canvas.
+        assert!(MUSIC_BACKGROUND[0] > MUSIC_BACKGROUND[1]);
+        assert!(MUSIC_BACKGROUND[1] > MUSIC_BACKGROUND[2]);
+        assert!(MUSIC_BACKGROUND[2] < 0.94);
+        // The classic album title bar stays slightly deeper than the canvas.
+        for channel in 0..3 {
+            assert!(ALBUM_HEADER_BACKGROUND[channel] < MUSIC_BACKGROUND[channel]);
+        }
         assert_eq!(MUSIC_TEXT_INK, [0x24, 0x24, 0x24]);
         assert_ne!(MUSIC_BACKGROUND, slot_ui::MENU_BACKGROUND);
         assert_ne!(MUSIC_TEXT_INK, slot_ui::MENU_TEXT_INK);

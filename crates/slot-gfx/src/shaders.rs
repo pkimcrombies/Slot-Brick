@@ -33,7 +33,7 @@ void main() {
 }
 "#;
 
-// Default uniforms (yaw=0, perspective=0, reflection=0) reproduce the
+// Default uniforms (yaw=0, perspective=0) reproduce the
 // original sprite path exactly. Cover Flow opts in to a perspective-correct
 // Y-axis rotation: gl_Position.w carries the depth so texture coordinates
 // interpolate correctly on both OpenGL ES 2 and desktop GL.
@@ -43,9 +43,7 @@ uniform vec4 u_rect;
 uniform vec2 u_target;
 uniform vec2 u_turn;
 uniform vec2 u_cover_perspective; // yaw (radians), perspective per pixel
-uniform float u_cover_reflection; // 0 for cover, 0.25 for mirrored bottom quarter
 varying vec2 v_uv;
-varying float v_cover_fade;
 void main() {
     vec2 mid = u_rect.zw * 0.5;
     vec2 local = a_pos * u_rect.zw - mid;
@@ -61,15 +59,7 @@ void main() {
     vec2 local_ndc = vec2(horizontal.x / u_target.x * 2.0,
                           -horizontal.y / u_target.y * 2.0);
     gl_Position = vec4(centre_ndc * hom + local_ndc, 0.0, hom);
-    if (u_cover_reflection > 0.0) {
-        // Show the cover's bottom quarter, vertically reversed and faded.
-        v_uv = vec2(a_pos.x, 1.0 - a_pos.y * u_cover_reflection);
-        float fade = 1.0 - a_pos.y;
-        v_cover_fade = fade * fade * 0.28;
-    } else {
-        v_uv = a_pos;
-        v_cover_fade = 1.0;
-    }
+    v_uv = a_pos;
 }
 "#;
 
@@ -147,10 +137,8 @@ precision mediump float;
 uniform sampler2D u_tex;
 uniform vec4 u_colour;
 varying vec2 v_uv;
-varying float v_cover_fade;
 void main() {
-    vec4 texel = texture2D(u_tex, v_uv) * u_colour;
-    FRAG_COLOR = vec4(texel.rgb, texel.a * v_cover_fade);
+    FRAG_COLOR = texture2D(u_tex, v_uv) * u_colour;
 }
 "#;
 

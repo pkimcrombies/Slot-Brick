@@ -38,8 +38,7 @@ pub enum Draw {
         alpha: f32,
         turn: f32,
     },
-    /// Perspective-correct cover art, with an optional mirrored bottom
-    /// quarter for the original iPod-style Cover Flow. No effect on games.
+    /// Perspective-correct album artwork. No effect on games.
     CoverFlow {
         x: f32,
         y: f32,
@@ -49,7 +48,6 @@ pub enum Draw {
         alpha: f32,
         yaw: f32,
         perspective: f32,
-        reflected: bool,
     },
     Game,
     Shot {
@@ -65,7 +63,6 @@ pub struct Sprites {
     u_colour: gl::types::GLint,
     u_turn: gl::types::GLint,
     u_cover_perspective: gl::types::GLint,
-    u_cover_reflection: gl::types::GLint,
 }
 
 impl Sprites {
@@ -79,7 +76,7 @@ impl Sprites {
             gl::RGBA,
             Some(&[255u8; 4]),
         );
-        let (u_rect, u_colour, u_turn, u_cover_perspective, u_cover_reflection);
+        let (u_rect, u_colour, u_turn, u_cover_perspective);
         unsafe {
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_tex"), 0);
@@ -92,7 +89,6 @@ impl Sprites {
             u_colour = crate::gl::uniform_location(prog, "u_colour");
             u_turn = crate::gl::uniform_location(prog, "u_turn");
             u_cover_perspective = crate::gl::uniform_location(prog, "u_cover_perspective");
-            u_cover_reflection = crate::gl::uniform_location(prog, "u_cover_reflection");
         }
         Ok(Sprites {
             prog,
@@ -102,7 +98,6 @@ impl Sprites {
             u_colour,
             u_turn,
             u_cover_perspective,
-            u_cover_reflection,
         })
     }
 
@@ -156,9 +151,9 @@ impl Sprites {
             gl::ActiveTexture(gl::TEXTURE0);
         }
         for item in items {
-            let (x, y, w, h, tex, colour, turn, yaw, perspective, reflection) = match *item {
+            let (x, y, w, h, tex, colour, turn, yaw, perspective) = match *item {
                 Draw::Rect { x, y, w, h, colour } => {
-                    (x, y, w, h, self.white, colour, 0.0, 0.0, 0.0, 0.0)
+                    (x, y, w, h, self.white, colour, 0.0, 0.0, 0.0)
                 },
                 Draw::Tex {
                     x,
@@ -168,7 +163,7 @@ impl Sprites {
                     tex,
                     alpha,
                 } => match self.textures.get(tex.0) {
-                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], 0.0, 0.0, 0.0, 0.0),
+                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], 0.0, 0.0, 0.0),
                     None => continue,
                 },
                 Draw::Turned {
@@ -180,15 +175,15 @@ impl Sprites {
                     alpha,
                     turn,
                 } => match self.textures.get(tex.0) {
-                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], turn, 0.0, 0.0, 0.0),
+                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], turn, 0.0, 0.0),
                     None => continue,
                 },
                 Draw::CoverFlow {
-                    x, y, w, h, tex, alpha, yaw, perspective, reflected,
+                    x, y, w, h, tex, alpha, yaw, perspective,
                 } => match self.textures.get(tex.0) {
                     Some(t) => (
                         x, y, w, h, *t, [1.0, 1.0, 1.0, alpha],
-                        0.0, yaw, perspective, if reflected { 0.25 } else { 0.0 },
+                        0.0, yaw, perspective,
                     ),
                     None => continue,
                 },
@@ -204,7 +199,6 @@ impl Sprites {
                 gl::Uniform4f(self.u_rect, x, y, w, h);
                 gl::Uniform2f(self.u_turn, cos, sin);
                 gl::Uniform2f(self.u_cover_perspective, yaw, perspective);
-                gl::Uniform1f(self.u_cover_reflection, reflection);
                 gl::Uniform4f(self.u_colour, colour[0], colour[1], colour[2], colour[3]);
             }
             quad.draw();

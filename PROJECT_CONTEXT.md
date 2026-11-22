@@ -63,8 +63,11 @@
   `lib/features/music/cover_flow/widgets/cover_flow_carousel.dart`.
   Translate its offset (0.25 screen for first neighbour, then 0.085),
   22% side scale, 0.95 radian Y rotation, perspective 0.35/size,
-  distance draw order, 400ms easeOutSine, and quarter-height mirrored
-  reflection into native `slot-gfx` GLSL/Draw::CoverFlow. No Flutter.
+  distance draw order, and 400ms easeOutSine into native `slot-gfx`
+  GLSL/Draw::CoverFlow. No Flutter. After inspecting a real device photo
+  on 2026-11-22, the user asked to **remove the mirrored reflections** as
+  outdated. Covers keep their original 3D perspective; the extra mirrored
+  draw pass, shader UV/fade path, and reflection uniform have been removed.
   `X` toggles original list, `L1/R1` Albums/Artists, `A` opens,
   `Y` plays, `B` leaves root. Artists/tracks unchanged.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
@@ -124,7 +127,7 @@
 2. Verify the redesigned **ClassiPod-inspired album detail panel** on the
    640x480 Brick Pro (gradient, compact rows, long title truncation,
    scrollbar, Back/Play buttons), plus the Original-style GPU Cover Flow
-   perspective, rack overlap, mirrored reflection, frame rate and artwork.
+   perspective, rack overlap, frame rate and artwork; no reflections.
    Keep original album list via **X**.
 3. PSP replacement work can resume separately when requested.
 

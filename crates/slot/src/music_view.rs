@@ -49,7 +49,6 @@ const FLOW_SLOTS: usize = 7;
 const FLOW_DURATION: Duration = Duration::from_millis(400);
 const FLOW_COVER_Y: f32 = 100.0;
 const FLOW_FRONT_SIDE: f32 = 218.0;
-const FLOW_REFLECT_H: f32 = FLOW_FRONT_SIDE * 0.25;
 const FLOW_YAW: f32 = 0.95;
 const FLOW_PERSPECTIVE: f32 = 0.35 / FLOW_FRONT_SIDE;
 
@@ -448,24 +447,9 @@ impl Painter<'_> {
             let py = y + (size - h) * 0.5;
             self.draws.push(Draw::CoverFlow {
                 x: px, y: py, w, h, tex, alpha,
-                yaw, perspective: FLOW_PERSPECTIVE, reflected: false,
+                yaw, perspective: FLOW_PERSPECTIVE,
             });
-            if art[slot].is_some() {
-                // The shader mirrors the *bottom quarter* of the same artwork
-                // and fades it into warm white. Unlike the old negative-height
-                // sprite, this reflection uses the identical 3D transform.
-                self.draws.push(Draw::CoverFlow {
-                    x: px,
-                    y: py + h + 3.0,
-                    w,
-                    h: h * FLOW_REFLECT_H / FLOW_FRONT_SIDE,
-                    tex,
-                    alpha,
-                    yaw,
-                    perspective: FLOW_PERSPECTIVE,
-                    reflected: true,
-                });
-            }
+
         }
 
         let (album, artist) = music.row(music.cursor());
@@ -742,8 +726,7 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn reflection_is_the_bottom_quarter_of_the_same_perspective_art() {
-        assert_eq!(FLOW_REFLECT_H, FLOW_FRONT_SIDE * 0.25);
+    fn cover_flow_keeps_perspective_and_symmetry_without_reflections() {
         assert!((FLOW_PERSPECTIVE * FLOW_FRONT_SIDE - 0.35).abs() < 0.0001);
         let left = flow_geometry(-1.0).unwrap();
         let right = flow_geometry(1.0).unwrap();

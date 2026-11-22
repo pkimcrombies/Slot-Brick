@@ -116,7 +116,14 @@ impl FlowMotion {
         if self.position != Some(target) {
             let current = self.at(now).unwrap_or(target);
             self.position = Some(target);
-            self.travel = Some((now, current, target));
+            if (target - current).abs() > 3.0 {
+                // An alphabet jump can skip dozens of covers. Snap straight
+                // to the selected group rather than spending 400ms decoding
+                // and uploading every intermediate carousel window.
+                self.travel = None;
+            } else {
+                self.travel = Some((now, current, target));
+            }
         }
         self.at(now).unwrap_or(target)
     }
@@ -967,6 +974,19 @@ mod album_thumbnail_layout_tests {
         let next = motion.to(4, midway);
         assert!((next - before).abs() < 0.001, "navigation jumped instead of retargeting");
         assert_eq!(motion.at(midway + FLOW_DURATION), Some(4.0));
+    }
+
+    #[test]
+    fn cover_flow_long_alphabet_jumps_skip_intermediate_cover_animation() {
+        let now = Instant::now();
+        let mut motion = FlowMotion::default();
+        assert_eq!(motion.to(0, now), 0.0);
+        assert_eq!(motion.to(18, now), 18.0,
+            "jumping several alphabet groups should land directly on the target");
+        assert!(!motion.active(now), "no intermediate covers should animate or decode");
+        assert_eq!(motion.to(19, now), 18.0,
+            "adjacent Left/Right cover moves still use the original easing");
+        assert!(motion.active(now + FLOW_DURATION / 2));
     }
 
     #[test]

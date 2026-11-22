@@ -581,6 +581,27 @@ impl Music {
 
     pub(crate) fn showing_now_playing(&self) -> bool { self.now_playing_view }
 
+    /// B from Now Playing opens the album the current track belongs to,
+    /// regardless of which artist or album was previously being browsed.
+    /// The root cursor follows the sorted album order so a second B
+    /// highlights the same album. If nothing is playing, B opens Albums.
+    fn browse_playing_album(&mut self) {
+        self.now_playing_view = false;
+        let root_cursor = self.track.as_ref().and_then(|track| {
+            self.album_order.iter().position(|&album| album == track.album)
+        }).unwrap_or(0);
+        self.browse = vec![Location {
+            page: Page::Albums,
+            cursor: root_cursor,
+        }];
+        if let Some(track) = &self.track {
+            self.browse.push(Location {
+                page: Page::Album(track.album),
+                cursor: track.index,
+            });
+        }
+    }
+
     /// Music's three sections cycle in the same direction everywhere:
     /// Now Playing <-> Albums <-> Artists, wrapping at either end.
     /// A shoulder-button section switch always enters that section's root,
@@ -739,6 +760,10 @@ impl Music {
             _ => {}
         }
         if self.now_playing_view {
+            if action == Action::GbaDown(Btn::B) {
+                self.browse_playing_album();
+                return false;
+            }
             if let Some(track) = &mut self.track {
                 let (album, index) = (track.album, track.index);
                 match action {
@@ -762,17 +787,11 @@ impl Music {
                         self.settings.repeat = self.settings.repeat.step(true);
                         self.persist_settings();
                     }
-                    Action::GbaDown(Btn::B) => self.now_playing_view = false,
                     _ => {}
                 }
-            } else {
-                // Without a track, the D-pad (and A) must not change
-                // Music sections. Only L1/R1 navigate the tabs; B remains
-                // the explicit Back action to restore the browser.
-                if action == Action::GbaDown(Btn::B) {
-                    self.now_playing_view = false;
-                }
             }
+            // Without a track, D-pad input and A do nothing. The B handler
+            // above opens Albums; shoulder buttons switch sections earlier.
             return false;
         }
         match action {
@@ -819,7 +838,8 @@ impl Music {
                     self.start(0);
                 }
             }
-            Action::GbaDown(Btn::B) if self.is_root() => return true,
+            // B is strictly navigation inside Music. Only HOME/Menu exits.
+            Action::GbaDown(Btn::B) if self.is_root() => {},
             Action::GbaDown(Btn::B) => {
                 self.browse.pop();
             }

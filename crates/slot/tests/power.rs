@@ -360,10 +360,22 @@ fn power_pressed_while_dozing_lights_the_panel_before_the_menu_is_raised() {
         matches!(s.app().phase(), Phase::Doze { .. }),
         "the device never dozed"
     );
+    // This integration test drives Session directly, not the Brick render
+    // loop. Doze starts with the panel still lit while the 300ms sleep fade
+    // runs; Frontend closes the backlight only after its final black swap.
+    // The full fade-complete/off/wake sequence is tested in App's Brick
+    // mock-backlight regression test.
+    #[cfg(feature = "brick")]
+    assert_eq!(
+        backlight.load(Ordering::Relaxed),
+        lit,
+        "Brick must retain the backlight while the sleep fade is pending"
+    );
+    #[cfg(not(feature = "brick"))]
     assert_eq!(
         backlight.load(Ordering::Relaxed),
         0,
-        "the doze left the panel lit"
+        "non-Brick lid close must still darken the panel immediately"
     );
 
     event(&mut s, RawEvent::Down(Btn::Power), &mut now);
@@ -421,6 +433,13 @@ fn the_press_that_woke_the_panel_does_not_doze_again_when_it_is_let_go() {
         matches!(s.app().phase(), Phase::Doze { .. }),
         "POWER stopped being able to put the device out"
     );
+    #[cfg(feature = "brick")]
+    assert_eq!(
+        backlight.load(Ordering::Relaxed),
+        lit,
+        "a second Brick doze must also leave the panel on until the fade completes"
+    );
+    #[cfg(not(feature = "brick"))]
     assert_eq!(backlight.load(Ordering::Relaxed), 0);
 }
 

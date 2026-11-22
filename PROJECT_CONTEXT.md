@@ -88,8 +88,13 @@
   become visible. For Brick only, defer that hardware close until
   `Frontend::sleep_fade_frame()` has presented its last black frame;
   `App::finish_doze_fade()` closes once then, with a mock-backlight test
-  to protect mid-fade brightness and wake restoration. Non-Brick lid
-  semantics, the 3.3s suspend delay and wake fade remain unchanged.
+  to protect mid-fade brightness and wake restoration. The first installer
+  caught two old `crates/slot/tests/power.rs` integration assertions that
+  expected immediate backlight-off on entering Doze. Those tests exercise
+  `Session` without `Frontend`'s real 300ms frame loop, so on Brick they
+  now assert the backlight remains lit while fade is pending; the separate
+  `app.rs` mock test verifies turning it off when the fade completes.
+  Non-Brick lid semantics, the 3.3s suspend delay and wake fade remain unchanged.
   Returning from game ejection **must not** add a black navigation fade;
   fix `85b0331` was confirmed smooth.
   First-frame boot fade must also work when Slot starts in `Phase::Inserting`

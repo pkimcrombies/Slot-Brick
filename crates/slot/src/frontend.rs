@@ -44,6 +44,70 @@ const IDLE_AFTER_WAKE: Duration = Duration::from_secs(90);
 
 const ALERT_INK: [u8; 3] = [0xf0, 0xb4, 0x3c];
 
+/// Fade from the hardware boot logo into Slot, then into each navigated menu.
+const BOOT_FADE: Duration = Duration::from_millis(440);
+const MENU_FADE: Duration = Duration::from_millis(220);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavScene {
+    Shelf,
+    QuickMenu(Option<QuickRow>),
+    Music,
+    About,
+    Clock,
+}
+
+impl NavScene {
+    fn from_phase(phase: &Phase) -> Option<Self> {
+        match phase {
+            Phase::Shelf => Some(Self::Shelf),
+            // The parent identifies the page. Moving between rows on that page
+            // must not replay the fade.
+            Phase::QuickMenu { row } => Some(Self::QuickMenu(row.parent())),
+            Phase::Music => Some(Self::Music),
+            Phase::About => Some(Self::About),
+            Phase::SetClock { from_menu: true, .. } => Some(Self::Clock),
+            _ => None,
+        }
+    }
+}
+
+/// A single fullscreen black layer fades away over the destination screen.
+#[derive(Default)]
+struct NavFade {
+    scene: Option<NavScene>,
+    started: Option<(Instant, Duration)>,
+    presented: bool,
+}
+
+impl NavFade {
+    fn update(&mut self, next: Option<NavScene>, now: Instant) {
+        if self.scene == next {
+            return;
+        }
+        self.scene = next;
+        self.started = next.map(|scene| {
+            let first_launcher = !self.presented && scene == NavScene::Shelf;
+            self.presented = true;
+            (now, if first_launcher { BOOT_FADE } else { MENU_FADE })
+        });
+    }
+
+    fn opacity(&self, now: Instant) -> f32 {
+        let Some((start, duration)) = self.started else {
+            return 0.0;
+        };
+        let progress = (now.saturating_duration_since(start).as_secs_f32()
+            / duration.as_secs_f32()).clamp(0.0, 1.0);
+        let smooth = progress * progress * (3.0 - 2.0 * progress);
+        1.0 - smooth
+    }
+
+    fn active(&self, now: Instant) -> bool {
+        self.started.is_some_and(|(start, duration)| now.saturating_duration_since(start) < duration)
+    }
+}
+
 pub struct Frontend {
     session: Session,
     start: Instant,
@@ -52,6 +116,7 @@ pub struct Frontend {
     last_input: Instant,
     last_render: Instant,
     rendered_effects: (f32,f32,f32,Option<f32>),
+    nav_fade: NavFade,
     draws: Vec<Draw>,
     polaroid_texes: Vec<TexId>,
     title_tex: Option<TexId>,
@@ -378,6 +443,7 @@ impl Frontend {
             last_input: now,
             last_render: now,
             rendered_effects: (0.0,0.0,0.0,None),
+            nav_fade: NavFade::default(),
             draws: Vec::new(),
             polaroid_texes: Vec::new(),
             title_tex: None,
@@ -742,6 +808,8 @@ impl Frontend {
     pub fn audio_underruns(&self)->u64 {self.session.audio_ring().underruns()}
     #[cfg(feature = "brick")]
     pub fn needs_render(&self)->bool {
+        if self.nav_fade.scene != NavScene::from_phase(self.app().phase())
+            || self.nav_fade.active(Instant::now()) {return true}
         if self.app().wifi.as_ref().map(|w|w.dirty).unwrap_or(false) {return true}
         if self.app().banner_active() {return true}
         if self.render_effects()!=self.rendered_effects {return true}
@@ -782,6 +850,10 @@ impl Frontend {
         if self.draw_rebuild(compositor) {
             return;
         }
+        // Start the fade only once the destination is actually being rendered,
+        // so an initial library rebuild cannot consume the boot animation.
+        let scene = NavScene::from_phase(self.session.app().phase());
+        self.nav_fade.update(scene, Instant::now());
         if let Some(frame) = self.session.frame() {
             compositor.upload_game(&frame);
             crate::latency::taken();
@@ -873,6 +945,16 @@ impl Frontend {
         );
         self.draws.clear();
         self.session.app().draw(&mut self.draws);
+        let opacity = self.nav_fade.opacity(Instant::now());
+        if opacity > 0.0 {
+            self.draws.push(Draw::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: OUT_W as f32,
+                h: OUT_H as f32,
+                colour: [0.0, 0.0, 0.0, opacity],
+            });
+        }
         compositor.draw_list(&self.draws);
     }
 
@@ -1512,5 +1594,55 @@ mod power_render_tests {
         assert!(f.needs_render(),"clock and asynchronous artwork must refresh");
         f.last_render=Instant::now();f.draws.clear();
         assert!(f.needs_render(),"changed drawing commands must redraw");
+    }
+}
+
+#[cfg(test)]
+mod navigation_fade_tests {
+    use super::*;
+
+    #[test]
+    fn selection_movement_does_not_restart_a_menu_fade() {
+        let now = Instant::now();
+        let mut fade = NavFade::default();
+        let screen = NavScene::QuickMenu(QuickRow::Screen.parent());
+        let game = NavScene::QuickMenu(QuickRow::Game.parent());
+        assert_eq!(screen, game);
+        fade.update(Some(screen), now);
+        fade.update(Some(game), now + Duration::from_millis(50));
+        assert!(fade.opacity(now + Duration::from_millis(100)) < 1.0);
+        assert_eq!(fade.opacity(now + MENU_FADE), 0.0);
+    }
+
+    #[test]
+    fn opening_and_closing_a_page_fades_in_the_destination() {
+        let now = Instant::now();
+        let mut fade = NavFade::default();
+        fade.update(Some(NavScene::Shelf), now);
+        assert_eq!(fade.opacity(now), 1.0);
+        assert_eq!(fade.opacity(now + BOOT_FADE), 0.0);
+
+        let menu_start = now + BOOT_FADE;
+        fade.update(Some(NavScene::QuickMenu(None)), menu_start);
+        assert_eq!(fade.opacity(menu_start), 1.0);
+        assert!(fade.active(menu_start + Duration::from_millis(100)));
+        assert_eq!(fade.opacity(menu_start + MENU_FADE), 0.0);
+
+        let subpage = menu_start + MENU_FADE;
+        fade.update(Some(NavScene::QuickMenu(Some(QuickRow::System))), subpage);
+        assert_eq!(fade.opacity(subpage), 1.0);
+        fade.update(Some(NavScene::Shelf), subpage + MENU_FADE);
+        assert_eq!(fade.opacity(subpage + MENU_FADE), 1.0);
+        assert_eq!(fade.opacity(subpage + MENU_FADE + MENU_FADE), 0.0);
+    }
+
+    #[test]
+    fn game_playback_does_not_get_a_menu_fade() {
+        let mut fade = NavFade::default();
+        let now = Instant::now();
+        fade.update(Some(NavScene::Shelf), now);
+        fade.update(None, now + Duration::from_millis(10));
+        assert!(!fade.active(now + Duration::from_millis(10)));
+        assert_eq!(fade.opacity(now + Duration::from_millis(10)), 0.0);
     }
 }

@@ -224,7 +224,7 @@ impl MusicView {
         // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
         let first = music.cursor().saturating_sub(ROWS - 1);
         let mut album_art = [None; ROWS];
-        if music.track.is_none() && !music.cover_flow() {
+        if !music.showing_now_playing() && !music.cover_flow() {
             for (slot, art) in album_art.iter_mut().enumerate() {
                 if let Some(album) = music.album_for_row(first + slot) {
                     if let Some(song) = album.songs.first() {
@@ -268,7 +268,8 @@ impl MusicView {
         } else {
             None
         };
-        let backdrop = if music.track.is_some() && !music.music_settings_open() {
+        let backdrop = if music.showing_now_playing() && music.track.is_some()
+            && !music.music_settings_open() {
             self.playing_background_texture(accent, compositor)
         } else {
             None
@@ -291,8 +292,12 @@ impl MusicView {
         }
         if music.music_settings_open() {
             p.settings(music);
-        } else if let Some(track) = &music.track {
-            p.playing(music, track, cover);
+        } else if music.showing_now_playing() {
+            if let Some(track) = &music.track {
+                p.playing(music, track, cover);
+            } else {
+                p.empty_now_playing();
+            }
         } else if music.showing_tracks() {
             p.album_tracks(music);
         } else if let (Some(position), Some(placeholder)) = (flow, flow_placeholder) {
@@ -318,7 +323,7 @@ impl Painter<'_> {
     /// Keep the content full-width with only a quiet title bar and one
     /// highlighted song, retaining the physical controls in Music::input.
     fn album_tracks(&mut self, music: &Music) {
-        let album = music.playing_album();
+        let album = music.browsed_album();
         let total = music.row_count();
         let cursor = music.cursor();
         let (first, end) = album_window(cursor, total);
@@ -330,8 +335,9 @@ impl Painter<'_> {
             [OUT_W as f32, ALBUM_HEADER_BOTTOM],
             ALBUM_HEADER_BACKGROUND,
         );
-        self.text_center(&album.title, 27, 34.0, MUSIC_TEXT_INK, 568);
-        self.text_center(&album.artist, 18, 73.0, MUSIC_MUTED_INK, 568);
+        // Keep both lines clear of the shared shelf status bar at y=12.
+        self.text_center(&album.title, 27, 42.0, MUSIC_TEXT_INK, 568);
+        self.text_center(&album.artist, 18, 78.0, MUSIC_MUTED_INK, 568);
         self.rect(
             [0.0, ALBUM_HEADER_BOTTOM - 1.0],
             [OUT_W as f32, 1.0],
@@ -399,13 +405,7 @@ impl Painter<'_> {
 
     fn browser(&mut self, music: &Music, album_art: &[Option<(TexId, [u32; 2])>; ROWS]) {
         if music.is_root() {
-            let (albums, artists) = if music.viewing_artists() {
-                (MUSIC_MUTED_INK, MUSIC_TEXT_INK)
-            } else {
-                (MUSIC_TEXT_INK, MUSIC_MUTED_INK)
-            };
-            let width = self.text_ink("albums", 24, [EDGE, TITLE_TOP], albums);
-            self.text_ink("artists", 24, [EDGE + width as f32 + 22.0, TITLE_TOP], artists);
+            self.music_tabs(if music.viewing_artists() { 2 } else { 1 });
             if !music.viewing_artists() {
                 self.text_right("x covers", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
             }
@@ -469,8 +469,7 @@ impl Painter<'_> {
     ) {
         // Match the Artists tab: selected navigation labels are charcoal,
         // while inactive labels stay muted. Rose is for row selection.
-        let label = self.text_ink("albums", 24, [EDGE, TITLE_TOP], MUSIC_TEXT_INK);
-        self.text_ink("artists", 24, [EDGE + label as f32 + 22.0, TITLE_TOP], MUSIC_MUTED_INK);
+        self.music_tabs(1);
         self.text_right("x list", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
 
         let mut order = [0usize, 1, 2, 3, 4, 5, 6];
@@ -546,7 +545,7 @@ impl Painter<'_> {
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
-        self.heading("now playing");
+        self.music_tabs(0);
         self.repeat_badge(music.repeat_mode());
         let song = music.song(track);
         let album = music.playing_album();
@@ -584,7 +583,8 @@ impl Painter<'_> {
             &album.title, 17, [PLAYING_INFO_X, 221.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
 
-        let position = format!("{} of {}", music.cursor() + 1, music.row_count());
+        let (current, total) = music.playing_position().expect("active track");
+        let position = format!("{} of {}", current + 1, total);
         self.text_with_room(
             &position, 16, [PLAYING_INFO_X, 277.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
@@ -681,6 +681,23 @@ impl Painter<'_> {
         let key = format!("{px}/120/{ink:?}/{text}");
         let face = self.texture(key, |scale| menu_text_face(text, px, 120, scale, ink));
         self.place(face, right - face.size[0] as f32, y);
+    }
+
+    fn music_tabs(&mut self, selected: usize) {
+        let mut x = EDGE;
+        for (index, title) in ["now playing", "albums", "artists"].iter().enumerate() {
+            let ink = if index == selected { MUSIC_TEXT_INK } else { MUSIC_MUTED_INK };
+            let width = self.text_ink(title, 23, [x, TITLE_TOP], ink);
+            x += width as f32 + 20.0;
+        }
+    }
+
+    fn empty_now_playing(&mut self) {
+        self.music_tabs(0);
+        self.text("nothing playing", 25, [EDGE, 177.0]);
+        self.text_ink(
+            "press b or r1 to browse albums", 18, [EDGE, 218.0], MUSIC_MUTED_INK,
+        );
     }
 
     fn heading(&mut self, title: &str) {

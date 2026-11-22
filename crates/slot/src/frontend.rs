@@ -808,7 +808,11 @@ impl Frontend {
     pub fn audio_underruns(&self)->u64 {self.session.audio_ring().underruns()}
     #[cfg(feature = "brick")]
     pub fn needs_render(&self)->bool {
-        if self.nav_fade.scene != NavScene::from_phase(self.app().phase())
+        // Before the first frame, no transition has actually been presented.
+        // The normal initial frame is already requested by the boot/input path;
+        // don't defeat the idle redraw gate just because scene is still None.
+        if (self.nav_fade.presented
+            && self.nav_fade.scene != NavScene::from_phase(self.app().phase()))
             || self.nav_fade.active(Instant::now()) {return true}
         if self.app().wifi.as_ref().map(|w|w.dirty).unwrap_or(false) {return true}
         if self.app().banner_active() {return true}
@@ -1587,6 +1591,9 @@ mod power_render_tests {
         f.last_render=Instant::now();f.rendered_effects=f.render_effects();
         let mut scene=vec![];f.app().draw(&mut scene);f.draws=scene;
         assert!(!f.needs_render(),"unchanged shelf should not redraw");
+        // A completed boot fade should also allow the regular idle redraw gate.
+        f.nav_fade.update(Some(NavScene::Shelf), Instant::now()-BOOT_FADE);
+        assert!(!f.needs_render(),"finished boot fade should not keep redrawing");
         f.last_input=Instant::now();assert!(f.needs_render(),"input must redraw immediately");
         f.last_input=Instant::now()-Duration::from_secs(3);
         f.rendered_effects.0=-1.0;assert!(f.needs_render(),"screen transitions must animate");

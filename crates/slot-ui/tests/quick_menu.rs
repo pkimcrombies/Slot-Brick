@@ -19,7 +19,20 @@ fn ink_columns(f: &UndoFace) -> (u32, u32) {
 }
 
 #[test]
-fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
+fn menu_labels_values_and_hints_are_measured_in_lowercase() {
+    let font = slot_ui::text::label_font().unwrap();
+    let label = slot_ui::text::line_width(font, "sort by", 30.0, 3.0).ceil() as u32;
+    let value = slot_ui::text::line_width(font, "by console", 30.0, 3.0).ceil() as u32;
+    assert_eq!(quick_label_face(QuickRow::LibrarySort).w, label + 2 * MENU_PAD);
+    assert_eq!(quick_value_face("By Console", true).w, value + 2 * MENU_PAD);
+
+    let back = slot_ui::text::line_width(font, "back", 16.0, 2.0).ceil() as u32;
+    let hint_w = slot_ui::quick_legend_faces_scaled([1.6, 1.6])[0].1;
+    assert_eq!(hint_w, slot_ui::cap_width("B") + slot_ui::CAP_GAP + back + slot_ui::HINT_EDGE);
+}
+
+#[test]
+fn the_type_keeps_the_menu_padding_around_its_ink() {
     for f in [
         quick_label_face(QuickRow::FastForwardSound),
         quick_label_face(QuickRow::Rumble),
@@ -35,7 +48,8 @@ fn the_type_sits_exactly_menu_pad_in_from_both_sides_of_its_face() {
             f.w
         );
         assert!(
-            (right - 4..=right).contains(&last),
+            // A lowercase f can extend one pixel past its advance width.
+            (right - 4..=right + 1).contains(&last),
             "ink ends at {last} of {}",
             f.w
         );

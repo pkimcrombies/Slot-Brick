@@ -2,7 +2,7 @@ use crate::draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
 use crate::plate::{arrows_hint_face_scaled, centred_hints, hint_face_scaled, UndoFace, HINT_H, LEGEND_GAP, LEGEND_Y};
 use crate::power_menu::{MENU_H, MENU_INK, MENU_PAD, MENU_PX};
 use crate::slot_chrome::{edge, opening};
-use crate::text;
+use crate::text::{self, Case};
 
 /// The Brick Pro: set once at startup, it adds the Brick Pro's own rows (the stick lights).
 static BRICK_PRO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -721,7 +721,7 @@ fn quick_text_face(label: &str, colour: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFac
             h: 0,
         }, 0);
     };
-    let layout = text::fit(font, label, OUT_W as f32, 1, MENU_PX, MENU_PX);
+    let layout = Case::Lower.fit_line(font, label, OUT_W as f32, MENU_PX, MENU_PX);
     let set = layout
         .lines
         .iter()
@@ -801,10 +801,10 @@ pub fn quick_legend_faces() -> [UndoFace; 4] {
 
 pub fn quick_legend_faces_scaled(scale: [f32; 2]) -> [(UndoFace, u32); 4] {
     [
-        hint_face_scaled("B", "Back", scale),
-        arrows_hint_face_scaled("Change", scale),
-        hint_face_scaled("A", "Open", scale),
-        hint_face_scaled("A", "Reset", scale),
+        hint_face_scaled("B", "back", scale, Case::Lower),
+        arrows_hint_face_scaled("change", scale, Case::Lower),
+        hint_face_scaled("A", "open", scale, Case::Lower),
+        hint_face_scaled("A", "reset", scale, Case::Lower),
     ]
 }
 

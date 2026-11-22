@@ -1,5 +1,5 @@
 use crate::draw::{Draw, TexId, OUT_W};
-use crate::text;
+use crate::text::{self, Case};
 
 pub const HINT_H: u32 = 24;
 pub const CAP: u32 = 20;
@@ -72,15 +72,16 @@ pub fn hint_width(key: &str, label: &str) -> u32 {
 }
 
 pub fn hint_face(key: &str, label: &str) -> UndoFace {
-    hint_face_scaled(key, label, [1.0, 1.0]).0
+    hint_face_scaled(key, label, [1.0, 1.0], Case::Upper).0
 }
 
-pub(crate) fn hint_face_scaled(key: &str, label: &str, [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
-    let width = hint_width(key, label);
+pub(crate) fn hint_face_scaled(key: &str, label: &str, [sx, sy]: [f32; 2], case: Case) -> (UndoFace, u32) {
+    let cap_w = cap_width(key);
+    let text_w = band_width_cased(label, case);
+    let width = cap_w + CAP_GAP + text_w + EDGE;
     let w = (width as f32 * sx).round() as u32;
     let h = (HINT_H as f32 * sy).round() as u32;
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    let cap_w = cap_width(key);
     let cap_px = (cap_w as f32 * sx).round() as u32;
     let cap_h = (CAP as f32 * sy).round() as u32;
     let mut cap = Vec::with_capacity((cap_px * cap_h * 4) as usize);
@@ -93,7 +94,7 @@ pub(crate) fn hint_face_scaled(key: &str, label: &str, [sx, sy]: [f32; 2]) -> (U
     }
     blit(&mut rgba, w, &cap, cap_px, cap_h, 0, (h - cap_h) / 2);
     let mut face = UndoFace { rgba, w, h };
-    draw_hint_label(&mut face, label, cap_w + CAP_GAP, [sx, sy]);
+    draw_hint_label(&mut face, label, cap_w + CAP_GAP, text_w, [sx, sy], case);
 
     (face, width)
 }
@@ -163,10 +164,14 @@ pub fn centred_hints(hints: &[(TexId, u32)], gap: f32) -> Vec<(TexId, u32, f32)>
 }
 
 fn band_width(label: &str) -> u32 {
+    band_width_cased(label, Case::Upper)
+}
+
+fn band_width_cased(label: &str, case: Case) -> u32 {
     let Some(font) = text::label_font() else {
         return LABEL_MAX_W as u32;
     };
-    let layout = text::fit(font, label, LABEL_MAX_W, 1, LABEL_PX, LABEL_MIN_PX);
+    let layout = case.fit_line(font, label, LABEL_MAX_W, LABEL_PX, LABEL_MIN_PX);
     let ink = layout
         .lines
         .iter()
@@ -265,11 +270,13 @@ pub fn arrows_hint_width(label: &str) -> u32 {
 }
 
 pub fn arrows_hint_face(label: &str) -> UndoFace {
-    arrows_hint_face_scaled(label, [1.0, 1.0]).0
+    arrows_hint_face_scaled(label, [1.0, 1.0], Case::Upper).0
 }
 
-pub(crate) fn arrows_hint_face_scaled(label: &str, [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
-    let width = arrows_hint_width(label);
+pub(crate) fn arrows_hint_face_scaled(label: &str, [sx, sy]: [f32; 2], case: Case) -> (UndoFace, u32) {
+    let text_x = 2 * CAP + ARROW_GAP + CAP_GAP;
+    let text_w = band_width_cased(label, case);
+    let width = text_x + text_w + EDGE;
     let w = (width as f32 * sx).round() as u32;
     let h = (HINT_H as f32 * sy).round() as u32;
     let mut rgba = vec![0u8; (w * h * 4) as usize];
@@ -287,18 +294,17 @@ pub(crate) fn arrows_hint_face_scaled(label: &str, [sx, sy]: [f32; 2]) -> (UndoF
         );
     }
     let mut face = UndoFace { rgba, w, h };
-    draw_hint_label(&mut face, label, 2 * CAP + ARROW_GAP + CAP_GAP, [sx, sy]);
+    draw_hint_label(&mut face, label, text_x, text_w, [sx, sy], case);
     (face, width)
 }
 
-fn draw_hint_label(face: &mut UndoFace, label: &str, x: u32, [sx, sy]: [f32; 2]) {
-    let text_w = band_width(label);
+fn draw_hint_label(face: &mut UndoFace, label: &str, x: u32, text_w: u32, [sx, sy]: [f32; 2], case: Case) {
     let left = (x as f32 * sx).round() as u32;
     let right = ((x + text_w) as f32 * sx).round() as u32;
     let width = right - left;
     let mut band = vec![0u8; (width * face.h * 4) as usize];
     if let Some(font) = text::label_font() {
-        let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX).scaled(sy);
+        let layout = case.fit_line(font, label, text_w as f32, LABEL_PX, LABEL_MIN_PX).scaled(sy);
         text::draw_centred(&mut band, width, face.h, &layout, INK);
     }
     blit(&mut face.rgba, face.w, &band, width, face.h, left, 0);

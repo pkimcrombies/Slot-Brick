@@ -19,6 +19,22 @@ impl Layout {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Case {
+    Upper,
+    Lower,
+}
+
+impl Case {
+    pub(crate) fn fit_line(self, font: &Font, text: &str, width: f32, max_px: f32, min_px: f32) -> Layout {
+        let text = match self {
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+        };
+        fit_cased(font, &text, width, f32::INFINITY, 1, max_px, min_px)
+    }
+}
+
 /// The font picked under HOME → System → Font, set once at startup before anything is drawn.
 static CHOSEN: OnceLock<Font> = OnceLock::new();
 
@@ -88,11 +104,22 @@ pub fn fit_box(
     max_px: f32,
     min_px: f32,
 ) -> Layout {
-    let upper = text.to_uppercase();
+    fit_cased(font, &text.to_uppercase(), max_w, max_h, max_lines, max_px, min_px)
+}
+
+fn fit_cased(
+    font: &Font,
+    text: &str,
+    max_w: f32,
+    max_h: f32,
+    max_lines: usize,
+    max_px: f32,
+    min_px: f32,
+) -> Layout {
     let mut px = max_px;
     while px > min_px {
         let tracking = tracking_for(px);
-        let lines = wrap(font, &upper, px, tracking, max_w, false);
+        let lines = wrap(font, text, px, tracking, max_w, false);
         if lines.len() <= max_lines
             && lines
                 .iter()
@@ -109,7 +136,7 @@ pub fn fit_box(
     }
     let tracking = tracking_for(min_px);
     Layout {
-        lines: wrap(font, &upper, min_px, tracking, max_w, true)
+        lines: wrap(font, text, min_px, tracking, max_w, true)
             .into_iter()
             .take(max_lines)
             .collect(),

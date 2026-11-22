@@ -2,7 +2,7 @@
 
 > Small handoff for future ChatGPT/AI coding sessions. **Read this first**, then verify the
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
-> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-22. Current branch tip before this context-only update: `14f850e`.
+> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Previous branch tip before the dim-brightness change: `b27a978`.
 
 ## Where we work
 
@@ -55,7 +55,8 @@
   Rows: Music-only digital volume cap (default 70%, steps of 10 to 0-100),
   default album browse view (Cover Flow/list), album sort (A-Z/newest tagged
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
-  1 minute/2 minutes; default 1 minute). **X** on Now Playing cycles
+  1 minute/2 minutes; default 1 minute), and **Dim brightness**
+  (physical backlight step 1-9, default 1). **X** on Now Playing cycles
   repeat; a native double-arrow indicator with off/all/1 state appears at the
   top-right. Off plays the current album once; All wraps at the last track
   of the current album; One repeats the current song. These preferences
@@ -72,10 +73,13 @@
   Existing physical play/pause, skip and seek controls are preserved.
   **Music sleep/resume + dim (2026-11-23, pending device validation):**
   Physical backlight dimming is optional, applies only while Music is actively
-  playing and the settings screen is closed, and halves the normal brightness
-  step but never uses zero. Any input immediately restores brightness.
-  Dim timeout lives in `Config/music.settings`; no automatic screen-off is
-  introduced. Power still triggers the existing 300ms fade and actual kernel
+  playing and the settings screen is closed. Previously it halved the
+  normal brightness step (e.g. 6 to 3), which remained fairly bright.
+  Now the independent **Dim brightness** setting selects an absolute hardware
+  step 1-9 (default 1, the lowest nonzero brightness), capped so it never
+  exceeds the normal setting. Both dim settings live in `Config/music.settings`;
+  any input restores normal brightness, and no automatic screen-off is
+  introduced. The new setting and UI have not been device-validated. Power still triggers the existing 300ms fade and actual kernel
   suspend. Previously `App::doze()` destroyed Music and `wake()` returned to
   the launcher; now a Doze-origin flag preserves the same Music object,
   current browsing location, playing/paused status and track index through
@@ -240,9 +244,11 @@
 3. Validate **Music Settings, repeat, and the new dim timer** on device:
    Start/B navigation; X cycles off/all/one on Now Playing; 70% default
    volume cap; album sorts and saved preferences; Dim after Off/30sec/1min/2min
-   with default 1min and physical display remaining on. Confirm any button
-   restores normal brightness, settings screen never dims, and volume and
-   games are unaffected. No parental-control PIN is present.
+   with default 1min, plus Dim brightness 1-9 (default 1) and physical
+   display remaining on. Test both the lowest and highest steps and verify
+   the dim level never exceeds normal brightness. Confirm any button restores
+   normal brightness, settings screen never dims, and volume and games are
+   unaffected. No parental-control PIN is present.
    Then test **Power from Now Playing** (while playing and paused):
    the normal fade to full suspend, no music during actual suspend,
    same Music screen/album/position on wake, automatic resume only if

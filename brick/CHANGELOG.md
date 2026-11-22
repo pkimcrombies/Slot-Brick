@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music Settings is now a fourth L1/R1 tab after Artists, not a Start-button overlay. The ivory settings page uses Slot's standard two-column text-only menu style with rose selection text; B stays in the app, and HOME exits.
 - Music UI: repeat symbol reduced to HUD-sized 20px, with black active and grey off states. Shuffle was considered but not added.
 - Music repeat indicator: black for Repeat All/One, neutral grey when Repeat Off, retaining the 28px bottom-right icon.
 - Music UI: aligned its 24px left inset with the Shelf clock and reduced the bottom-right UXWing repeat icon to 28px.

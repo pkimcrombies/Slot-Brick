@@ -9,12 +9,12 @@ use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, bezel_face, cart_shadow, chip_face, chip_shadow_face,
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
-    quick_caret_face, quick_caret_face_scaled, quick_label_face, quick_label_face_scaled,
+    quick_caret_face, quick_label_face, quick_label_face_scaled,
     quick_legend_faces_scaled, quick_value_face_scaled, rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
     wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
     QuickRow, QuickValue, RebuildScreen, StatusIcon, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
-    HUD_ICON_PX, HUD_INK, LEGEND, QUICK_TEXT_H,
+    HUD_ICON_PX, HUD_INK, LEGEND, MENU_MUTED_INK, MENU_TEXT_INK, QUICK_TEXT_H,
 };
 
 use crate::app::{App, LinkRow, Phase};
@@ -106,8 +106,6 @@ struct OverlayTex {
     texts: [[Option<TexId>; 2]; QuickRow::NAMED],
     /// A name too long for its row, scrolled while the row is lit.
     scrolls: [Option<Scroll>; QuickRow::NAMED],
-    /// The carets' widths, left and right, measured once.
-    carets: Option<(u32, u32)>,
 }
 
 /// A value too long to show whole beside its label: the whole of it drawn once, and the piece
@@ -144,8 +142,7 @@ impl Scroll {
         x.clamp(0.0, span) as u32
     }
 
-    /// The piece `at` along, inside the clear margin every value face has at its sides (so it
-    /// sits by the carets as a whole one would), faded in at an edge where more carries on.
+    /// The piece `at` along, with the same margin as a complete value and a fade at clipped edges.
     fn piece(&self, at: u32) -> Vec<u8> {
         let (w, h, room) = (self.whole.w, self.whole.h, self.room);
         let pad = (slot_ui::MENU_PAD as f32 * self.scale_x).round() as u32;
@@ -197,7 +194,6 @@ fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut Overla
     if app.quick_menu().is_none() {
         return;
     }
-    let carets = *tex.carets.get_or_insert_with(|| (quick_caret_face(false).w, quick_caret_face(true).w));
     let lit_row = app.quick_menu();
     for row in QuickRow::ALL {
         let Some(i) = row.named() else {
@@ -216,8 +212,8 @@ fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut Overla
                 None => draw(),
             };
             let label_w = quick_label_face(row).w;
-            let (dim, dim_w) = in_own(&mut || shortened_value_face(&text, slot_ui::quick_value_room(label_w, None), scale));
-            let room = slot_ui::quick_value_room(label_w, Some(carets));
+            let room = slot_ui::quick_value_room(label_w);
+            let (dim, dim_w) = in_own(&mut || shortened_value_face(&text, room, scale));
             let (whole, whole_w) = in_own(&mut || quick_value_face_scaled(&text, true, scale));
             let (lit, lit_w, scroll) = if whole_w > room {
                 let scroll = Scroll {
@@ -592,22 +588,37 @@ impl Frontend {
         };
         let labels = QuickRow::ALL
             .iter()
-            .map(|r| up(quick_label_face_scaled(*r, scale)))
+            .map(|r| [false, true].map(|active| up(quick_label_face_scaled(*r, active, scale))))
             .collect();
         let values = QuickValue::ALL
             .iter()
             .map(|v| [false, true].map(|lit| up(quick_value_face_scaled(v.text(), lit, scale))))
             .collect();
-        let carets = [false, true].map(|right| up(quick_caret_face_scaled(right, scale)));
+        let open = up(quick_value_face_scaled("›", false, scale));
         let legend = quick_legend_faces_scaled(scale).map(|f| {
             let (tex, w, _) = up(f);
             (tex, w)
         });
+        let mut heading = |label: &str, px, ink| {
+            let (face, [w, h]) = slot_ui::menu_text_face(label, px, slot_ui::OUT_W - 100, scale, ink);
+            (compositor.create_texture(face.w, face.h, &face.rgba), w, h)
+        };
+        let root = heading("menu", 32, MENU_TEXT_INK);
+        let headings = QuickRow::ALL.iter().map(|row| {
+            row.child()?;
+            let parent = row.parent().map_or("menu", QuickRow::label);
+            Some(slot_ui::QuickHeading {
+                crumb: heading(&format!("{parent} /"), 20, MENU_MUTED_INK),
+                title: heading(row.label(), 32, MENU_TEXT_INK),
+            })
+        }).collect();
         self.session.app_mut().set_quick_menu_faces(QuickMenuFaces {
             scale,
             labels,
             values,
-            carets,
+            open,
+            root,
+            headings,
             legend,
         });
         crate::boot_times::mark("  power and quick menus");

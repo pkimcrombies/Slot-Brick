@@ -1,17 +1,18 @@
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_ui::{
-    centred_hints, edge, menu_hint_face_scaled, music_text_face, pixel_aligned_texture, UndoFace,
-    HINT_H, LEGEND_GAP, LEGEND_Y, MENU_BACKGROUND,
+    draw_menu_cursor, draw_menu_hints, menu_hint_face_scaled, menu_text_face, pixel_aligned_texture,
+    UndoFace, HINT_H, MENU_BACKGROUND, MENU_MUTED_INK, MENU_ROSE_INK, MENU_TEXT_INK, QUICK_EDGE,
 };
 
 use crate::music::{Music, Status, Track};
 
-const EDGE: f32 = 32.0;
+const EDGE: f32 = QUICK_EDGE;
+const HEADER_EDGE: f32 = EDGE - 20.0;
 const CENTER: f32 = OUT_W as f32 / 2.0;
 const ROWS: usize = 6;
 const LIST_TOP: f32 = 104.0;
 const ROW_H: f32 = 48.0;
-const ROOM: u32 = OUT_W - 80;
+const ROOM: u32 = OUT_W - 144;
 
 #[derive(Clone, Copy)]
 struct Face {
@@ -63,7 +64,7 @@ struct Painter<'a> {
 
 impl Painter<'_> {
     fn browser(&mut self, music: &Music) {
-        self.text(music.label(), 27, [EDGE, 45.0], false);
+        self.heading(music.label());
         if music.row_count() == 0 {
             let message = if music.scanning() {
                 "reading music tags"
@@ -78,22 +79,16 @@ impl Painter<'_> {
         let first = cursor.saturating_sub(ROWS - 1);
         for i in first..(first + ROWS).min(music.row_count()) {
             let y = LIST_TOP + (i - first) as f32 * ROW_H;
-            if i == cursor {
-                let mut highlight = edge();
-                highlight[3] = 0.24;
-                self.rect([0.0, y], [OUT_W as f32, ROW_H], highlight);
-                self.rect(
-                    [EDGE - 12.0, y + 9.0],
-                    [3.0, ROW_H - 18.0],
-                    [0.96, 0.95, 0.93, 1.0],
-                );
-            }
+            let ink = if i == cursor {
+                draw_menu_cursor(&mut self.draws, HEADER_EDGE, y + ROW_H / 2.0);
+                MENU_ROSE_INK
+            } else { MENU_TEXT_INK };
             let (label, subtitle) = music.row(i);
             if let Some(subtitle) = subtitle {
-                self.text(label, 21, [EDGE, y + 2.0], false);
-                self.text(subtitle, 13, [EDGE, y + 27.0], false);
+                self.text_ink(label, 23, [EDGE, y + 1.0], false, ink);
+                self.text_ink(subtitle, 14, [EDGE, y + 28.0], false, MENU_MUTED_INK);
             } else {
-                self.text(label, 24, [EDGE, y + 6.0], false);
+                self.text_ink(label, 26, [EDGE, y + 6.0], false, ink);
             }
         }
         let mut hints = vec![("B", "back")];
@@ -115,10 +110,10 @@ impl Painter<'_> {
     }
 
     fn playing(&mut self, music: &Music, track: &Track) {
-        self.text("now playing", 27, [EDGE, 45.0], false);
+        self.heading("now playing");
         let song = music.song(track);
         self.text(&song.title, 35, [CENTER, 147.0], true);
-        self.text(&song.artist, 21, [CENTER, 198.0], true);
+        self.text_ink(&song.artist, 21, [CENTER, 198.0], true, MENU_MUTED_INK);
         let (state, toggle) = match track.status {
             Status::Loading => ("loading", "pause"),
             Status::Playing => ("playing", "pause"),
@@ -149,15 +144,26 @@ impl Painter<'_> {
         self.hints(&[("B", "back"), ("L1/R1", "skip"), ("A", toggle)]);
     }
 
-    fn text(&mut self, text: &str, px: u32, [x, y]: [f32; 2], centred: bool) {
-        let key = format!("{px}/{text}");
-        let face = self.texture(key, |scale| music_text_face(text, px, ROOM, scale));
+    fn heading(&mut self, title: &str) {
+        let crumb = self.text_ink("music /", 20, [HEADER_EDGE, 54.0], false, MENU_MUTED_INK);
+        self.text(title, 32, [HEADER_EDGE + crumb as f32 + 9.0, 42.0], false);
+    }
+
+    fn text(&mut self, text: &str, px: u32, at: [f32; 2], centred: bool) {
+        self.text_ink(text, px, at, centred, MENU_TEXT_INK);
+    }
+
+    fn text_ink(&mut self, text: &str, px: u32, [x, y]: [f32; 2], centred: bool, ink: [u8; 3]) -> u32 {
+        let key = format!("{px}/{ink:?}/{text}");
+        let room = if centred { ROOM } else { ROOM.min(OUT_W.saturating_sub(x as u32 + HEADER_EDGE as u32 + 4)) };
+        let face = self.texture(key, |scale| menu_text_face(text, px, room, scale, ink));
         let x = if centred {
             x - face.size[0] as f32 / 2.0
         } else {
             x
         };
         self.place(face, x, y);
+        face.size[0]
     }
 
     fn hints(&mut self, hints: &[(&str, &str)]) {
@@ -171,16 +177,7 @@ impl Painter<'_> {
                 (face.tex, face.size[0])
             })
             .collect();
-        for (tex, width, x) in centred_hints(&faces, LEGEND_GAP) {
-            self.place(
-                Face {
-                    tex,
-                    size: [width, HINT_H],
-                },
-                x,
-                LEGEND_Y,
-            );
-        }
+        draw_menu_hints(&mut self.draws, &faces, HEADER_EDGE, self.scale);
     }
 
     fn texture(

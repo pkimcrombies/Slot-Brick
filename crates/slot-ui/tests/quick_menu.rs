@@ -20,15 +20,15 @@ fn ink_columns(f: &UndoFace) -> (u32, u32) {
 
 #[test]
 fn menu_labels_values_and_hints_are_measured_in_lowercase() {
-    let font = slot_ui::text::label_font().unwrap();
-    let label = slot_ui::text::line_width(font, "sort by", 30.0, 3.0).ceil() as u32;
-    let value = slot_ui::text::line_width(font, "by console", 30.0, 3.0).ceil() as u32;
+    let font = slot_ui::text::menu_font().unwrap();
+    let label = slot_ui::text::line_width(font, "sort by", 26.0, 0.0).ceil() as u32;
+    let value = slot_ui::text::line_width(font, "by console", 26.0, 0.0).ceil() as u32;
     assert_eq!(quick_label_face(QuickRow::LibrarySort).w, label + 2 * MENU_PAD);
     assert_eq!(quick_value_face("By Console", true).w, value + 2 * MENU_PAD);
 
-    let back = slot_ui::text::line_width(font, "back", 16.0, 2.0).ceil() as u32;
+    let back = slot_ui::text::line_width(font, "B back", 17.0, 0.0).ceil() as u32;
     let hint_w = slot_ui::quick_legend_faces_scaled([1.6, 1.6])[0].1;
-    assert_eq!(hint_w, slot_ui::cap_width("B") + slot_ui::CAP_GAP + back + slot_ui::HINT_EDGE);
+    assert_eq!(hint_w, back + 4);
 }
 
 #[test]
@@ -228,8 +228,8 @@ fn a_value_is_grey_until_its_row_is_in_hand() {
             .map(|p| [p[0], p[1], p[2]])
             .expect("an empty face")
     };
-    assert_eq!(inkiest(true), [0xf6, 0xf4, 0xef]);
-    assert_eq!(inkiest(false), [0x9a, 0x9a, 0xa4]);
+    assert_eq!(inkiest(true), slot_ui::MENU_ROSE_INK);
+    assert_eq!(inkiest(false), slot_ui::MENU_MUTED_INK);
 }
 
 #[test]
@@ -245,14 +245,12 @@ fn the_arrows_are_faces_the_height_of_a_value() {
 }
 
 #[test]
-fn a_value_gets_the_room_beside_its_label_and_less_of_it_beside_the_carets() {
-    use slot_ui::{quick_caret_face, quick_label_face, quick_value_room};
+fn a_long_label_leaves_less_room_for_its_value() {
+    use slot_ui::{quick_label_face, quick_value_room};
     let label = quick_label_face(QuickRow::GbaOverlay).w;
-    let carets = (quick_caret_face(false).w, quick_caret_face(true).w);
-    let (dim, lit) = (quick_value_room(label, None), quick_value_room(label, Some(carets)));
-    assert!(lit > 200 && dim > lit, "dim {dim}, lit {lit}");
-    // A longer label leaves less room.
-    assert!(quick_value_room(quick_label_face(QuickRow::GbcOverlay).w, None) < dim);
+    let room = quick_value_room(label);
+    assert!(room > 200);
+    assert!(quick_value_room(quick_label_face(QuickRow::GbcOverlay).w) < room);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use slot::frontend::Frontend;
 use slot_gfx::{Compositor, HeadlessSurface, OUT_H, OUT_W};
 use slot_input::{Btn, InputSource, Millis, RawEvent};
 use slot_power::SimPlatform;
-use slot_ui::{quick_pitch, QuickRow, QUICK_PITCH, QUICK_TOP};
+use slot_ui::{quick_pitch, QuickRow, MENU_ROSE_INK, QUICK_EDGE, QUICK_TOP};
 
 struct Script(VecDeque<Vec<RawEvent>>);
 
@@ -32,7 +32,7 @@ fn at(px: &[u8], x: usize, y: usize) -> [u8; 3] {
 }
 
 fn inked(px: &[u8], xs: std::ops::Range<usize>, top: usize) -> Vec<usize> {
-    xs.filter(|&x| (top + 8..top + 44).any(|y| at(px, x, y)[0] > 0x80))
+    xs.filter(|&x| (top + 8..top + 35).any(|y| at(px, x, y)[0] > 0x80))
         .collect()
 }
 
@@ -69,34 +69,22 @@ fn the_quick_menu_renders_full_screen() {
     let mut input = Script(VecDeque::new());
     tap(&mut f, &mut input, Btn::Menu);
 
-    let bar = [0x4d, 0x4d, 0x57];
-    let ground = [0x05, 0x05, 0x08];
-    let mut bar_on = QuickRow::MAIN[0];
-    for (name, selected) in [
-        ("screen", QuickRow::Screen),
-        ("game", QuickRow::Game),
-        ("date-time", QuickRow::DateTime),
-        ("about", QuickRow::About),
-    ] {
-        for _ in bar_on.position()..selected.position() {
+    let ground = [0, 0, 0];
+    let label_edge = QUICK_EDGE as usize;
+    let right = OUT_W as usize - label_edge;
+    let middle = OUT_W as usize / 2;
+    for (i, selected) in QuickRow::MAIN.into_iter().enumerate() {
+        if i > 0 {
             tap(&mut f, &mut input, Btn::Down);
         }
-        bar_on = selected;
+        let name = selected.label();
         let px = composed(&mut f, &mut c, name);
-
-        let top = (QUICK_TOP + QUICK_PITCH * selected.position() as f32) as usize;
+        let pitch = quick_pitch(QuickRow::MAIN.len());
+        let y = (QUICK_TOP + pitch * (i as f32 + 0.5)) as usize;
+        assert_eq!(at(&px, label_edge - 19, y), MENU_ROSE_INK, "{name}: no cursor");
         for x in [1, OUT_W as usize - 2] {
-            assert_eq!(at(&px, x, top + 26), bar, "{name}: no bar at x {x}");
+            assert_eq!(at(&px, x, y), ground, "{name}: background at x {x}");
         }
-        assert!(
-            (0..OUT_W as usize).all(|x| at(&px, x, top + 26) != ground),
-            "{name}: the bar breaks somewhere across the row"
-        );
-        assert_eq!(
-            at(&px, 360, top + 1),
-            ground,
-            "{name}: the bar is not inset"
-        );
         assert_eq!(
             at(&px, 2, OUT_H as usize - 2),
             ground,
@@ -104,30 +92,32 @@ fn the_quick_menu_renders_full_screen() {
         );
 
         for row in QuickRow::MAIN {
-            let top = (QUICK_TOP + QUICK_PITCH * row.position() as f32) as usize;
-            let label = inked(&px, 0..360, top);
+            let top = (QUICK_TOP + pitch * row.position() as f32) as usize;
+            let label = inked(&px, label_edge..middle, top);
             let first = *label.first().expect("a row with no label");
             assert!(
-                (32..=36).contains(&first),
+                (label_edge..=label_edge + 8).contains(&first),
                 "{name}: {row:?}'s label starts at x {first}"
             );
-            if matches!(row, QuickRow::About | QuickRow::Screen | QuickRow::Game) {
-                continue;
-            }
-            let value = inked(&px, 360..OUT_W as usize, top);
-            let last = *value.last().expect("a row with no value");
+            let value = inked(&px, middle..OUT_W as usize, top);
+            let last = *value.last().expect("a row with no submenu chevron");
             assert!(
-                (679..=688).contains(&last),
-                "{name}: {row:?}'s value ends at x {last}"
+                (right - 8..=right + 1).contains(&last),
+                "{name}: {row:?}'s chevron ends at x {last}"
             );
         }
     }
 
-    tap(&mut f, &mut input, Btn::Up);
+    tap(&mut f, &mut input, Btn::A);
+    for _ in 0..QuickRow::DateTime.position() {
+        tap(&mut f, &mut input, Btn::Down);
+    }
     tap(&mut f, &mut input, Btn::A);
     let px = composed(&mut f, &mut c, "clock");
     assert!(
-        (200..270).any(|x| at(&px, x, 298) == [0xf6, 0xf4, 0xef]),
+        (274..320).any(|y| (middle - 180..middle).any(|x| {
+            at(&px, x, y) == slot_ui::MENU_TEXT_INK
+        })),
         "the clock from the menu does not offer B BACK"
     );
 }
@@ -151,27 +141,30 @@ fn every_fast_forward_speed_sits_on_the_rows_right_edge_and_clears_the_label() {
     tap(&mut f, &mut input, Btn::Left);
     tap(&mut f, &mut input, Btn::Left);
 
-    let top = ((OUT_H as f32 - quick_pitch(QuickRow::GAME.len()) * QuickRow::GAME.len() as f32) / 2.0) as usize;
-    for name in ["2x", "3x", "4x", "6x", "8x"] {
+    let top = QUICK_TOP as usize;
+    let edge = QUICK_EDGE as usize;
+    let right = OUT_W as usize - edge;
+    let middle = OUT_W as usize / 2;
+    for name in ["2x", "3x", "4x", "6x"] {
         let px = composed(&mut f, &mut c, name);
-        let value = inked(&px, 360..OUT_W as usize, top);
+        let value = inked(&px, middle..OUT_W as usize, top);
         let last = *value
             .last()
             .unwrap_or_else(|| panic!("{name}: the Fast Forward row has no value"));
         assert!(
-            (679..=688).contains(&last),
+            (right - 8..=right + 1).contains(&last),
             "{name} ends at x {last}, off the edge every other value keeps"
         );
         assert!(
-            inked(&px, 350..370, top).is_empty(),
-            "{name} and its arrows reach the middle of the row"
+            inked(&px, middle - 10..middle + 10, top).is_empty(),
+            "{name} reaches the middle of the row"
         );
-        let label = inked(&px, 0..350, top);
+        let label = inked(&px, edge..middle, top);
         let first = *label
             .first()
             .unwrap_or_else(|| panic!("{name}: the Fast Forward row has no label"));
         assert!(
-            (32..=36).contains(&first),
+            (edge..=edge + 8).contains(&first),
             "the label moved to x {first} to make room for {name}"
         );
         tap(&mut f, &mut input, Btn::Right);
@@ -193,29 +186,34 @@ fn the_screen_page_sets_gb_palettes_in_line_with_the_rows_above() {
     let mut input = Script(VecDeque::new());
     tap(&mut f, &mut input, Btn::Menu);
     tap(&mut f, &mut input, Btn::A);
+    tap(&mut f, &mut input, Btn::A);
     for _ in 0..QuickRow::GbPalettes.position() {
         tap(&mut f, &mut input, Btn::Down);
     }
     let px = composed(&mut f, &mut c, "screen-page");
 
-    let top = (QUICK_TOP + QUICK_PITCH * QuickRow::GbPalettes.position() as f32) as usize;
+    let edge = QUICK_EDGE as usize;
+    let right = OUT_W as usize - edge;
+    let middle = OUT_W as usize / 2;
+    let pitch = quick_pitch(QuickRow::SCREEN_GB.len());
+    let y = (QUICK_TOP + pitch * (QuickRow::GbPalettes.position() as f32 + 0.5)) as usize;
     assert_eq!(
-        at(&px, 1, top + 26),
-        [0x4d, 0x4d, 0x57],
-        "the bar is not on GB Palettes"
+        at(&px, edge - 19, y),
+        MENU_ROSE_INK,
+        "the cursor is not on GB Palettes"
     );
     for row in QuickRow::SCREEN_GB {
-        let top = (QUICK_TOP + QUICK_PITCH * row.position() as f32) as usize;
-        let label = inked(&px, 0..360, top);
+        let top = (QUICK_TOP + pitch * row.position() as f32) as usize;
+        let label = inked(&px, edge..middle, top);
         let first = *label.first().expect("a row with no label");
         assert!(
-            (32..=36).contains(&first),
+            (edge..=edge + 8).contains(&first),
             "{row:?}'s label starts at x {first}"
         );
-        let value = inked(&px, 360..OUT_W as usize, top);
+        let value = inked(&px, middle..OUT_W as usize, top);
         let last = *value.last().expect("a row with no value");
         assert!(
-            (679..=688).contains(&last),
+            (right - 8..=right + 1).contains(&last),
             "{row:?}'s value ends at x {last}"
         );
     }

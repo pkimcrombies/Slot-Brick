@@ -1428,6 +1428,41 @@ mod tests {
     }
 
     #[test]
+    fn repeat_advances_the_playing_album_even_when_another_album_is_open() {
+        let album = |name: &str, count: usize| Album {
+            title: name.into(),
+            artist: "artist".into(),
+            release_date: None,
+            songs: (0..count).map(|index| Song {
+                path: PathBuf::from(format!("{name}/{index}.mp3")),
+                title: format!("{index}"),
+                artist: "artist".into(),
+                disc: 1,
+                track: Some((index + 1) as u16),
+            }).collect(),
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![album("Alpha", 2), album("Beta", 1)],
+            artists: vec![],
+        });
+        music.input(Action::GbaDown(Btn::A)); // Alpha
+        music.input(Action::GbaDown(Btn::A)); // song 1 -> Now Playing
+        music.input(Action::GbaDown(Btn::B));
+        music.input(Action::GbaDown(Btn::B));
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::A)); // browsing Beta
+        music.settings.repeat = RepeatMode::All;
+        music.advance_at_end(0);
+        assert_eq!(music.playing_position(), Some((1, 2)));
+        assert_eq!(music.playing_album().title, "Alpha");
+        assert_eq!(music.browsed_album().title, "Beta");
+        assert!(!music.showing_now_playing());
+        music.advance_at_end(1);
+        assert_eq!(music.playing_position(), Some((0, 2)));
+        assert_eq!(music.browsed_album().title, "Beta");
+    }
+
+    #[test]
     fn scans_and_plays_only_mp3s_in_the_current_folder() {
         let root = tempfile::tempdir().unwrap();
         let album = root.path().join("Music/An album");

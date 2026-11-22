@@ -9,7 +9,7 @@ use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, bezel_face, cart_shadow, chip_face, chip_shadow_face,
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
-    menu_hint_face_scaled, menu_row_face_scaled, quick_caret_face, quick_value_face_scaled,
+    menu_hint_face_scaled, menu_row_face_scaled, quick_value_face_scaled,
     rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
     wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,

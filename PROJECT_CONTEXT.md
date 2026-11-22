@@ -245,6 +245,17 @@
   Test corrected in `c0b28c8`. The original installer correctly aborted
   before replacing the SD launcher. A fresh pinned installer is required;
   **Rust tests and ARM64 build for the corrected commit remain unverified**.
+- **Next installer validation 2026-11-23:** on `59325ab` the complete
+  simulation/unit test set passed (258 passed, 8 intentionally ignored);
+  pause-menu integration tests passed (19/19) and power tests passed
+  (22/22). The quick-menu suite passed 41/42, with one obsolete test
+  `music_opens_from_the_menu_and_returns_to_the_same_carousel` expecting
+  B to exit Music immediately. The new default Now Playing section
+  requires B once to open Albums, B again to exit Music into the same
+  HOME menu, and a third B to return to the shelf. Fixed the integration
+  test in `4cf8ef4`; no application behavior changed. Installer again
+  correctly stopped before the ARM64 build or SD changes. The fixed
+  integration test and subsequent ARM64 build remain unverified.
 
 - Prior Docker image: `slot-brick-psp-tools`, target volumes
   `slot-psp-sim` and `slot-psp-arm64`; Cargo home typically

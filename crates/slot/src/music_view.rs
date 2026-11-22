@@ -6,7 +6,7 @@ use slot_ui::{
     menu_text_face, pixel_aligned_texture, UndoFace, QUICK_EDGE,
 };
 
-use crate::music::{Music, Status, Track};
+use crate::music::{Music, RepeatMode, Status, Track};
 use crate::music_cover::{MusicCover, THUMBNAIL};
 
 // Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
@@ -222,7 +222,9 @@ impl MusicView {
             draws: Vec::new(),
         };
         p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
-        if let Some(track) = &music.track {
+        if music.music_settings_open() {
+            p.settings(music);
+        } else if let Some(track) = &music.track {
             p.playing(music, track, cover);
         } else if music.showing_tracks() {
             p.album_tracks(music);
@@ -446,8 +448,39 @@ impl Painter<'_> {
         self.place(face, (OUT_W as f32 - face.size[0] as f32) / 2.0, y);
     }
 
+    /// Two small, opposing arrows form a native repeat glyph without
+    /// requiring a new font or rasterized asset. Off is muted; active modes
+    /// use Slot's dusty rose, with text for accessible state distinction.
+    fn repeat_badge(&mut self, mode: RepeatMode) {
+        let x = OUT_W as f32 - EDGE - 154.0;
+        let y = TITLE_TOP + 1.0;
+        let ink = if mode == RepeatMode::Off { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
+        let colour = [
+            ink[0] as f32 / 255.0, ink[1] as f32 / 255.0,
+            ink[2] as f32 / 255.0, 1.0,
+        ];
+        // Clockwise top arrow, returning along the lower edge.
+        for (dx, dy, w, h) in [
+            (2.0, 4.0, 22.0, 2.0),
+            (22.0, 4.0, 2.0, 11.0),
+            (19.0, 2.0, 5.0, 2.0),
+            (22.0, 7.0, 5.0, 2.0),
+            (4.0, 18.0, 22.0, 2.0),
+            (4.0, 10.0, 2.0, 10.0),
+            (4.0, 16.0, 5.0, 2.0),
+            (2.0, 20.0, 5.0, 2.0),
+        ] {
+            self.rect([x + dx, y + dy], [w, h], colour);
+        }
+        let label = if mode == RepeatMode::One { "1" } else { mode.label() };
+        self.text_with_room(label, 18, [x + 35.0, y + 1.0], ink, 55);
+        self.text_with_room("x repeat", 14, [x + 93.0, y + 3.0],
+            MUSIC_MUTED_INK, 92);
+    }
+
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
         self.heading("now playing");
+        self.repeat_badge(music.repeat_mode());
         let song = music.song(track);
         let album = music.playing_album();
 
@@ -527,6 +560,43 @@ impl Painter<'_> {
                 self.text_ink(&timestamp(elapsed), 17, [EDGE, 392.0], MUSIC_MUTED_INK);
             }
         }
+    }
+
+    /// Full-width classic Music settings. Start opens and closes this view;
+    /// directions change a selected row, B returns to playback/browser.
+    fn settings(&mut self, music: &Music) {
+        self.heading("music settings");
+        self.text_with_room(
+            "start / b back", 15, [EDGE, TITLE_TOP + 36.0],
+            MUSIC_MUTED_INK, 220,
+        );
+        let volume = format!("{}%", music.settings_max_volume());
+        let values = [
+            volume.as_str(),
+            music.settings_album_view(),
+            music.settings_sort(),
+            music.repeat_mode().label(),
+        ];
+        let labels = ["volume limit", "album view", "sort albums", "repeat"];
+        for (index, (label, value)) in labels.iter().zip(values).enumerate() {
+            let y = 120.0 + index as f32 * 66.0;
+            let selected = music.settings_cursor() == index;
+            if selected {
+                let rose = MUSIC_SELECTION_INK.map(|n| n as f32 / 255.0);
+                self.rect([0.0, y], [OUT_W as f32, 52.0],
+                    [rose[0], rose[1], rose[2], 1.0]);
+            } else {
+                self.rect([EDGE, y + 51.0], [OUT_W as f32 - EDGE * 2.0, 1.0],
+                    ALBUM_ROW_SEPARATOR);
+            }
+            let ink = if selected { ALBUM_WHITE_INK } else { MUSIC_TEXT_INK };
+            self.text_with_room(label, 23, [EDGE + 8.0, y + 12.0], ink, 285);
+            self.text_with_room(value, 21, [346.0, y + 13.0], ink, 250);
+        }
+        self.text_with_room(
+            "Music limit only; safe loudness also depends on headphones",
+            14, [EDGE, 428.0], MUSIC_MUTED_INK, 580,
+        );
     }
 
     /// Place the time readout against the right edge of the progress bar.

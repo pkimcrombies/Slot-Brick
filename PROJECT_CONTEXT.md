@@ -47,8 +47,30 @@
 ## Current features / important locations
 
 - Native Music: `crates/slot/src/music.rs`, `music_view.rs`,
-  `music_cover.rs`, `music_library.rs` and `music_m4a.rs`.
+  `music_cover.rs`, `music_library.rs`, `music_tags.rs` and `music_m4a.rs`.
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
+  **Music Settings + repeat (Nov 2026, pending Rust/device validation):**
+  press **Start** from any Music screen to open a full-width classic settings
+  page; Up/Down select rows, Left/Right/A change values, B/Start closes.
+  Rows: Music-only digital volume cap (default 70%, steps of 10 to 0-100),
+  default album browse view (Cover Flow/list), album sort (A-Z/newest tagged
+  release year first), and Repeat (off/all/one). **X** on Now Playing cycles
+  repeat; a native double-arrow indicator with off/all/1 state appears at the
+  top-right. Off plays the current album once; All wraps at the last track
+  of the current album; One repeats the current song. These preferences
+  persist independently at `Slot/Config/music.settings` with a temp-file
+  rename. The volume cap is applied to decoded PCM, including when the
+  normal device volume is raised; lowering it also clears buffered louder
+  samples. It is NOT a certified sound-pressure/dB limit: safe headphone
+  levels still depend on device, headphones and listening duration.
+  Album sorting uses a separate ordered list of stable album IDs, not
+  mutation/reindexing of playing albums or artwork. Release-year tags from
+  MP3 ID3v2 (TYER/TDRC/TDRL/TDOR), ID3v1 and M4A (standard Date/ReleaseDate)
+  are used; missing dates sort last and never use filesystem timestamps.
+  Existing physical play/pause, skip and seek controls are preserved.
+  Added unit tests for settings persistence, repeat order, volume cap,
+  release-year parsing, and stability of album IDs; **Docker/ARM64 tests
+  have not yet been executed**.
   **Album song list: original iPod Classic music-menu style (2026-11-22).**
   The earlier ClassiPod *Cover Flow selection panel* interpretation was
   rejected: no floating bordered panel, coloured gradient header, large
@@ -174,7 +196,12 @@
    scrolling, long title truncation, rose selection and slim scrollbar.
    Also check the existing GPU Cover Flow perspective, rack overlap,
    frame rate and artwork (without reflections). Keep album list via **X**.
-3. PSP replacement work can resume separately when requested.
+3. Validate the new **Music Settings + repeat** on device: Start/B
+   navigation, Now Playing X cycles off/all/one, album track-end repeat,
+   70% default digital cap (with headphones), A-Z vs newest release-year
+   sort including albums without date, and saved preferences across restart.
+   No parent-control PIN has been added: settings are editable by anyone.
+4. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,
 check the live `feature/psp-replaces-ps1` HEAD and the relevant source files,

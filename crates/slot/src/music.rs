@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use slot_input::{Action, Btn};
@@ -180,7 +180,7 @@ impl Playback {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Status {
     Loading,
     Playing,
@@ -223,6 +223,102 @@ struct Location {
     cursor: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RepeatMode { Off, All, One }
+
+impl RepeatMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self { Self::Off => "off", Self::All => "all", Self::One => "one" }
+    }
+    fn step(self, forward: bool) -> Self {
+        const MODES: [RepeatMode; 3] = [RepeatMode::Off, RepeatMode::All, RepeatMode::One];
+        let at = MODES.iter().position(|&mode| mode == self).unwrap_or(0);
+        MODES[(at + if forward { 1 } else { MODES.len() - 1 }) % MODES.len()]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AlbumSort { Az, Release }
+
+impl AlbumSort {
+    pub(crate) fn label(self) -> &'static str {
+        match self { Self::Az => "a-z", Self::Release => "newest first" }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MusicSettings {
+    max_volume: u8,
+    cover_flow: bool,
+    album_sort: AlbumSort,
+    repeat: RepeatMode,
+}
+
+impl Default for MusicSettings {
+    fn default() -> Self {
+        Self {
+            // Digital-gain limit for Music only, not a measured dB ceiling.
+            max_volume: 70,
+            cover_flow: true,
+            album_sort: AlbumSort::Az,
+            repeat: RepeatMode::Off,
+        }
+    }
+}
+
+impl MusicSettings {
+    fn path(root: &Path) -> PathBuf { root.join("Config/music.settings") }
+
+    fn load(root: &Path) -> Self {
+        let mut settings = Self::default();
+        if let Ok(content) = std::fs::read_to_string(Self::path(root)) {
+            for line in content.lines() {
+                let Some((key, value)) = line.split_once('=') else { continue };
+                match (key.trim(), value.trim()) {
+                    ("max_volume", level) => {
+                        if let Ok(value) = level.parse::<u8>() {
+                            if value <= 100 && value % 10 == 0 {
+                                settings.max_volume = value;
+                            }
+                        }
+                    }
+                    ("album_view", "list") => settings.cover_flow = false,
+                    ("album_view", "covers") => settings.cover_flow = true,
+                    ("album_sort", "release") => settings.album_sort = AlbumSort::Release,
+                    ("album_sort", "az") => settings.album_sort = AlbumSort::Az,
+                    ("repeat", "all") => settings.repeat = RepeatMode::All,
+                    ("repeat", "one") => settings.repeat = RepeatMode::One,
+                    ("repeat", "off") => settings.repeat = RepeatMode::Off,
+                    _ => {}
+                }
+            }
+        }
+        settings
+    }
+
+    fn save(self, root: &Path) {
+        let path = Self::path(root);
+        if let Some(parent) = path.parent() {
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                eprintln!("slot: music settings directory: {err}");
+                return;
+            }
+        }
+        let text = format!(
+            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\n",
+            self.max_volume,
+            if self.cover_flow { "covers" } else { "list" },
+            if self.album_sort == AlbumSort::Az { "az" } else { "release" },
+            self.repeat.label(),
+        );
+        let temp = path.with_extension("settings.tmp");
+        if let Err(err) = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &path)) {
+            eprintln!("slot: music settings save: {err}");
+            let _ = std::fs::remove_file(temp);
+        }
+    }
+}
+
 pub(crate) struct Music {
     library: Library,
     scan: Option<Scan>,
@@ -231,17 +327,27 @@ pub(crate) struct Music {
     discard_audio: bool,
     /// Cover Flow is the default root album browser. X toggles the former list.
     cover_flow: bool,
+    settings: MusicSettings,
+    settings_open: bool,
+    settings_row: usize,
+    settings_root: Option<PathBuf>,
+    /// Stable album identities: sorting never mutates the library itself.
+    album_order: Vec<usize>,
+    artist_album_order: Vec<Vec<usize>>,
 }
 
 impl Music {
     pub(crate) fn open(slot: &Path) -> Self {
         let mut music = Self::with_library(Library::default());
+        music.settings = MusicSettings::load(slot);
+        music.cover_flow = music.settings.cover_flow;
+        music.settings_root = Some(slot.to_path_buf());
         music.scan = Scan::start(slot.to_path_buf());
         music
     }
 
     fn with_library(library: Library) -> Self {
-        Self {
+        let mut music = Self {
             library,
             scan: None,
             browse: vec![Location {
@@ -251,7 +357,97 @@ impl Music {
             track: None,
             discard_audio: false,
             cover_flow: true,
+            settings: MusicSettings::default(),
+            settings_open: false,
+            settings_row: 0,
+            settings_root: None,
+            album_order: Vec::new(),
+            artist_album_order: Vec::new(),
+        };
+        music.sort_albums();
+        music
+    }
+
+    fn persist_settings(&self) {
+        if let Some(root) = &self.settings_root {
+            self.settings.save(root);
         }
+    }
+
+    /// Sort browser row IDs rather than moving albums. Playing album indexes
+    /// and previously loaded Cover Flow artwork retain their identities.
+    fn sort_albums(&mut self) {
+        let albums = &self.library.albums;
+        let mut order: Vec<usize> = (0..albums.len()).collect();
+        let sort = |a: &usize, b: &usize| {
+            let aa = &albums[*a];
+            let bb = &albums[*b];
+            let alpha = || aa.title.to_lowercase().cmp(&bb.title.to_lowercase())
+                .then_with(|| aa.artist.to_lowercase().cmp(&bb.artist.to_lowercase()));
+            match self.settings.album_sort {
+                AlbumSort::Az => alpha(),
+                AlbumSort::Release => bb.release_year.cmp(&aa.release_year)
+                    .then_with(alpha),
+            }
+        };
+        order.sort_by(sort);
+        self.artist_album_order = self.library.artists.iter().map(|artist| {
+            order.iter().copied().filter(|id| artist.albums.contains(id)).collect()
+        }).collect();
+        self.album_order = order;
+    }
+
+    fn album_at(&self, row: usize) -> Option<usize> {
+        match self.location().page {
+            Page::Albums => self.album_order.get(row).copied(),
+            Page::Artist(artist) => self.artist_album_order.get(artist)?.get(row).copied(),
+            Page::Artists | Page::Album(_) => None,
+        }
+    }
+
+    pub(crate) fn repeat_mode(&self) -> RepeatMode { self.settings.repeat }
+    fn effective_volume(&self, requested: u8) -> u8 {
+        requested.min(self.settings.max_volume)
+    }
+    pub(crate) fn music_settings_open(&self) -> bool { self.settings_open }
+    pub(crate) fn settings_cursor(&self) -> usize { self.settings_row }
+    pub(crate) fn settings_max_volume(&self) -> u8 { self.settings.max_volume }
+    pub(crate) fn settings_album_view(&self) -> &'static str {
+        if self.settings.cover_flow { "cover flow" } else { "list" }
+    }
+    pub(crate) fn settings_sort(&self) -> &'static str { self.settings.album_sort.label() }
+
+    fn change_setting(&mut self, forward: bool) {
+        match self.settings_row {
+            0 => {
+                let level = self.settings.max_volume;
+                self.settings.max_volume = if forward {
+                    level.saturating_add(10).min(100)
+                } else {
+                    level.saturating_sub(10)
+                };
+                if self.settings.max_volume < level { self.discard_audio = true; }
+            }
+            1 => {
+                self.settings.cover_flow = !self.settings.cover_flow;
+                self.cover_flow = self.settings.cover_flow;
+            }
+            2 => {
+                self.settings.album_sort = match self.settings.album_sort {
+                    AlbumSort::Az => AlbumSort::Release,
+                    AlbumSort::Release => AlbumSort::Az,
+                };
+                self.sort_albums();
+                for location in &mut self.browse {
+                    if matches!(location.page, Page::Albums | Page::Artist(_)) {
+                        location.cursor = 0;
+                    }
+                }
+            }
+            3 => self.settings.repeat = self.settings.repeat.step(forward),
+            _ => {}
+        }
+        self.persist_settings();
     }
 
     fn location(&self) -> &Location {
@@ -302,12 +498,12 @@ impl Music {
     pub(crate) fn row(&self, index: usize) -> (&str, Option<&str>) {
         match self.location().page {
             Page::Albums => {
-                let album = &self.library.albums[index];
+                let album = &self.library.albums[self.album_order[index]];
                 (&album.title, Some(&album.artist))
             }
             Page::Artists => (&self.library.artists[index].name, None),
             Page::Artist(artist) => {
-                let album = self.library.artists[artist].albums[index];
+                let album = self.artist_album_order[artist][index];
                 (&self.library.albums[album].title, None)
             }
             Page::Album(album) => (&self.library.albums[album].songs[index].title, None),
@@ -317,14 +513,7 @@ impl Music {
     /// Returns an album only for rows that actually represent albums.
     /// Artist-name and individual-track rows must not display album thumbnails.
     pub(crate) fn album_for_row(&self, index: usize) -> Option<&Album> {
-        match self.location().page {
-            Page::Albums => self.library.albums.get(index),
-            Page::Artist(artist) => {
-                let album = *self.library.artists.get(artist)?.albums.get(index)?;
-                self.library.albums.get(album)
-            }
-            Page::Artists | Page::Album(_) => None,
-        }
+        self.album_at(index).and_then(|id| self.library.albums.get(id))
     }
 
     pub(crate) fn cover_flow(&self) -> bool {
@@ -349,8 +538,8 @@ impl Music {
     fn selected_album(&self) -> Option<usize> {
         let cursor = self.cursor();
         match self.location().page {
-            Page::Albums => (cursor < self.library.albums.len()).then_some(cursor),
-            Page::Artist(artist) => self.library.artists[artist].albums.get(cursor).copied(),
+            Page::Albums => self.album_order.get(cursor).copied(),
+            Page::Artist(artist) => self.artist_album_order.get(artist)?.get(cursor).copied(),
             Page::Album(album) => Some(album),
             Page::Artists => None,
         }
@@ -386,10 +575,37 @@ impl Music {
         }
     }
 
+    fn advance_at_end(&mut self, index: usize) {
+        match self.settings.repeat {
+            RepeatMode::One => self.start(index),
+            RepeatMode::All if index + 1 == self.row_count() => self.start(0),
+            _ => self.switch(index, true),
+        }
+    }
+
     /// True when the browser should return to Slot's menu.
     pub(crate) fn input(&mut self, action: Action) -> bool {
-        if action == Action::QuickMenu {
-            return true;
+        if action == Action::QuickMenu { return true; }
+        if action == Action::GbaDown(Btn::Start) {
+            self.settings_open = !self.settings_open;
+            return false;
+        }
+        if self.settings_open {
+            match action {
+                Action::GbaDown(Btn::Up) => {
+                    self.settings_row = self.settings_row.saturating_sub(1);
+                }
+                Action::GbaDown(Btn::Down) => {
+                    self.settings_row = (self.settings_row + 1).min(3);
+                }
+                Action::GbaDown(Btn::A) | Action::GbaDown(Btn::Right) => {
+                    self.change_setting(true);
+                }
+                Action::GbaDown(Btn::Left) => self.change_setting(false),
+                Action::GbaDown(Btn::B) => self.settings_open = false,
+                _ => {}
+            }
+            return false;
         }
         if let Some(track) = &mut self.track {
             let index = track.index;
@@ -408,6 +624,10 @@ impl Music {
                 }
                 Action::GbaDown(Btn::L1) | Action::ShelfLeft => self.switch(index, false),
                 Action::GbaDown(Btn::R1) | Action::ShelfRight => self.switch(index, true),
+                Action::GbaDown(Btn::X) => {
+                    self.settings.repeat = self.settings.repeat.step(true);
+                    self.persist_settings();
+                }
                 Action::GbaDown(Btn::B) => {
                     self.track = None;
                     self.discard_audio = true;
@@ -421,6 +641,8 @@ impl Music {
             // between the Albums and Artists roots. X restores list browsing.
             Action::GbaDown(Btn::X) if self.is_root() && !self.viewing_artists() => {
                 self.cover_flow = !self.cover_flow;
+                self.settings.cover_flow = self.cover_flow;
+                self.persist_settings();
             }
             Action::GbaDown(Btn::Left) | Action::ShelfLeft if self.cover_flow() => {
                 self.select_row(self.cursor().saturating_sub(1));
@@ -475,6 +697,7 @@ impl Music {
         if let Some(library) = self.scan.as_ref().and_then(Scan::take) {
             self.library = library;
             self.scan = None;
+            self.sort_albums();
         }
         if std::mem::take(&mut self.discard_audio) {
             ring.discard();
@@ -482,6 +705,7 @@ impl Music {
         let Page::Album(album) = self.location().page else {
             return;
         };
+        let volume = self.effective_volume(level);
         let Some(track) = &mut self.track else { return };
         if track.status == Status::Loading {
             if ring.sample_rate() == 0 {
@@ -521,12 +745,12 @@ impl Music {
                 .playback
                 .as_mut()
                 .expect("playing track has a decoder")
-                .fill(ring, level);
+                .fill(ring, volume);
         }
         if track.ending && ring.queued_frames() == 0 {
             let index = track.index;
             track.status = Status::Finished;
-            self.switch(index, true);
+            self.advance_at_end(index);
         }
     }
 }
@@ -536,11 +760,159 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settings_persist_and_bad_values_do_not_override_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = MusicSettings::default();
+        assert_eq!(prefs.max_volume, 70);
+        prefs.max_volume = 40;
+        prefs.cover_flow = false;
+        prefs.album_sort = AlbumSort::Release;
+        prefs.repeat = RepeatMode::One;
+        prefs.save(dir.path());
+        let loaded = MusicSettings::load(dir.path());
+        assert_eq!(loaded.max_volume, 40);
+        assert!(!loaded.cover_flow);
+        assert_eq!(loaded.album_sort, AlbumSort::Release);
+        assert_eq!(loaded.repeat, RepeatMode::One);
+        std::fs::write(MusicSettings::path(dir.path()), "max_volume=255\\n").unwrap();
+        assert_eq!(MusicSettings::load(dir.path()).max_volume, 70);
+    }
+
+    #[test]
+    fn repeat_cycles_off_all_one_and_wraps_or_replays_only_when_selected() {
+        let make = |title: &str| Album {
+            title: title.to_string(), artist: "artist".into(),
+            release_year: None, songs: vec![Song {
+                path: PathBuf::from(format!("{title}.mp3")), title: "track".into(),
+                artist: "artist".into(), disc: 1, track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![make("A")], artists: Vec::new(),
+        });
+        music.open_page(Page::Album(0));
+        music.start(0);
+        assert_eq!(music.repeat_mode(), RepeatMode::Off);
+        music.advance_at_end(0);
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Loading);
+        // A single-track album with repeat off must *not* start over:
+        // advance_at_end leaves the previously finished track intact.
+        music.track.as_mut().unwrap().status = Status::Finished;
+        music.advance_at_end(0);
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Finished);
+        music.input(Action::GbaDown(Btn::X));
+        assert_eq!(music.repeat_mode(), RepeatMode::All);
+        music.advance_at_end(0);
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Loading);
+        music.input(Action::GbaDown(Btn::X));
+        assert_eq!(music.repeat_mode(), RepeatMode::One);
+        music.advance_at_end(0);
+        assert_eq!(music.track.as_ref().unwrap().index, 0);
+        music.input(Action::GbaDown(Btn::X));
+        assert_eq!(music.repeat_mode(), RepeatMode::Off);
+    }
+
+    #[test]
+    fn date_sort_orders_newest_first_with_missing_years_last_and_stable_album_ids() {
+        let mk = |title: &str, year| Album {
+            title: title.into(), artist: "artist".into(), release_year: year,
+            songs: vec![Song {
+                path: PathBuf::from(format!("{title}.mp3")),
+                title: "song".into(), artist: "artist".into(), disc: 1,
+                track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![mk("Alpha", None), mk("Beta", Some(2005)),
+                mk("Gamma", Some(2021))],
+            artists: Vec::new(),
+        });
+        assert_eq!(music.row(0).0, "Alpha");
+        music.settings_row = 2;
+        music.change_setting(true);
+        assert_eq!(music.row(0).0, "Gamma");
+        assert_eq!(music.row(1).0, "Beta");
+        assert_eq!(music.row(2).0, "Alpha");
+        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.playing_album().title, "Gamma");
+        // Changing sort cannot move or replace the album being played.
+        music.settings_row = 2;
+        music.change_setting(true);
+        assert_eq!(music.playing_album().title, "Gamma");
+    }
+
+    #[test]
+    fn music_settings_page_keeps_playback_and_changes_are_persistent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut music = Music::with_library(Library::default());
+        music.settings_root = Some(root.path().to_path_buf());
+        music.input(Action::GbaDown(Btn::Start));
+        assert!(music.music_settings_open());
+        assert_eq!(music.settings_max_volume(), 70);
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.settings_max_volume(), 60);
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.settings_album_view(), "list");
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.settings_sort(), "newest first");
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.repeat_mode(), RepeatMode::All);
+        music.input(Action::GbaDown(Btn::B));
+        assert!(!music.music_settings_open());
+
+        let loaded = MusicSettings::load(root.path());
+        assert_eq!(loaded.max_volume, 60);
+        assert_eq!(loaded.album_sort, AlbumSort::Release);
+        assert!(!loaded.cover_flow);
+        assert_eq!(loaded.repeat, RepeatMode::All);
+    }
+
+    #[test]
+    fn album_release_year_is_read_from_id3v23_and_v24_tags() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        std::fs::create_dir_all(&folder).unwrap();
+        for (version, filename, album, frame, value) in [
+            (3, "old.mp3", "Older Album", &b"TYER"[..], "1998"),
+            (4, "new.mp3", "Newer Album", &b"TDRC"[..], "2024-11-08"),
+        ] {
+            let frame: &[u8; 4] = frame.try_into().unwrap();
+            tagged_mp3(
+                &folder.join(filename), version,
+                &[(b"TALB", album), (b"TPE1", "Artist"), (frame, value)],
+            );
+        }
+        let library = Library::scan(root.path(), || false);
+        assert_eq!(library.albums.len(), 2);
+        assert_eq!(library.albums[0].release_year, Some(2024),
+            "alphabetical Newer Album precedes Older Album");
+        assert_eq!(library.albums[1].release_year, Some(1998));
+    }
+
+    #[test]
+    fn kid_volume_cap_is_enforced_on_top_of_requested_music_volume() {
+        let mut music = Music::with_library(Library::default());
+        assert_eq!(music.effective_volume(95), 70);
+        assert_eq!(music.effective_volume(30), 30);
+        music.settings_row = 0;
+        music.change_setting(false);
+        assert_eq!(music.effective_volume(95), 60);
+        music.change_setting(false);
+        assert!(music.discard_audio,
+            "lowering the cap must discard already-buffered louder samples");
+        assert_eq!(music.effective_volume(95), 50);
+    }
+
+    #[test]
     fn cover_rows_are_albums_only_in_root_and_artist_album_lists() {
         use crate::music_library::Artist;
         let album = Album {
             title: "alpha".into(),
             artist: "artist".into(),
+            release_year: None,
             songs: vec![Song {
                 path: std::path::PathBuf::from("alpha.mp3"),
                 title: "song".into(),
@@ -570,6 +942,7 @@ mod tests {
         let albums = (0..3).map(|i| Album {
             title: format!("album {i}"),
             artist: "artist".into(),
+            release_year: None,
             songs: vec![Song {
                 path: std::path::PathBuf::from(format!("{i}.mp3")),
                 title: "song".into(),

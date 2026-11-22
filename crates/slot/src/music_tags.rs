@@ -10,6 +10,8 @@ pub(crate) struct Tags {
     pub album_artist: Option<String>,
     pub disc: Option<u16>,
     pub track: Option<u16>,
+    /// Release year from ID3 or MP4 tags; no file-created-date substitute.
+    pub year: Option<u16>,
 }
 
 pub(crate) fn read(path: &Path) -> Tags {
@@ -44,6 +46,8 @@ fn read_m4a(path: &Path) -> Option<Tags> {
             Some(AlbumArtist) => tags.album_artist = clean(tag.value.to_string()),
             Some(DiscNumber) => tags.disc = number(&tag.value.to_string()),
             Some(TrackNumber) => tags.track = number(&tag.value.to_string()),
+            Some(ReleaseDate) | Some(Date) | Some(OriginalDate) =>
+                tags.year = tags.year.or_else(|| release_year(&tag.value.to_string())),
             _ => {}
         }
     }
@@ -157,6 +161,11 @@ fn frames(
                 | b"TPOS"
                 | b"TRK"
                 | b"TRCK"
+                | b"TYE"
+                | b"TYER"
+                | b"TDRC"
+                | b"TDRL"
+                | b"TDOR"
         );
         if !known || !readable || size > 4096 {
             if source.seek(SeekFrom::Current(size as i64)).is_err() {
@@ -195,6 +204,8 @@ fn frames(
             }
             b"TPA" | b"TPOS" => tags.disc = tags.disc.or_else(|| number(&value)),
             b"TRK" | b"TRCK" => tags.track = tags.track.or_else(|| number(&value)),
+            b"TYE" | b"TYER" | b"TDRC" | b"TDRL" | b"TDOR" =>
+                tags.year = tags.year.or_else(|| release_year(&value)),
             _ => {}
         }
         if tags.title.is_some()
@@ -203,6 +214,7 @@ fn frames(
             && tags.album_artist.is_some()
             && tags.disc.is_some()
             && tags.track.is_some()
+            && tags.year.is_some()
         {
             break;
         }
@@ -220,6 +232,7 @@ fn id3v1(file: &mut File, tags: &mut Tags) -> io::Result<()> {
             .take()
             .or_else(|| clean(latin1(&footer[33..63])));
         tags.album = tags.album.take().or_else(|| clean(latin1(&footer[63..93])));
+        tags.year = tags.year.or_else(|| release_year(&latin1(&footer[93..97])));
         if tags.track.is_none() && footer[125] == 0 && footer[126] != 0 {
             tags.track = Some(u16::from(footer[126]));
         }
@@ -270,6 +283,14 @@ fn clean(value: String) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
+/// Date fields may contain YYYY, YYYY-MM-DD or a timestamp. A year is
+/// usable only when explicitly tagged, never inferred from file metadata.
+fn release_year(value: &str) -> Option<u16> {
+    let year = value.trim().get(..4)?;
+    (year.bytes().all(|b| b.is_ascii_digit())).then(|| year.parse::<u16>().ok()).flatten()
+        .filter(|&year| (1000..=2100).contains(&year))
+}
+
 fn number(value: &str) -> Option<u16> {
     value
         .split('/')
@@ -293,4 +314,20 @@ fn undo_unsync(bytes: &mut Vec<u8>) {
         previous = Some(byte);
         !stuffed
     });
+}
+
+#[cfg(test)]
+mod release_date_tests {
+    use super::*;
+
+    #[test]
+    fn parses_tagged_release_years_without_guessing() {
+        assert_eq!(release_year("1999"), Some(1999));
+        assert_eq!(release_year("2022-09-17"), Some(2022));
+        assert_eq!(release_year(" 2015-01-02T00:00:00 "), Some(2015));
+        assert_eq!(release_year("unknown"), None);
+        assert_eq!(release_year(""), None);
+        assert_eq!(release_year("2050s"), Some(2050));
+        assert_eq!(release_year("0900"), None);
+    }
 }

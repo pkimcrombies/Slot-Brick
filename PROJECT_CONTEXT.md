@@ -41,7 +41,18 @@
 - Native Music: `crates/slot/src/music.rs`, `music_view.rs`,
   `music_cover.rs`, `music_library.rs` and `music_m4a.rs`.
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
-  Album detail has large artwork on the right fading toward warm white on the left.
+  **Album detail redesigned** after user reported the full-height artwork
+  backdrop was messy. Inspired by ClassiPod's
+  `cover_flow_album_selection_screen.dart` and
+  `cover_flow_album_song_list_tile.dart`: warm-white canvas, centered
+  556x354 bordered panel, 62px shared dusty-rose gradient header with
+  album/artist, 34px compact song rows (eight at a time), white-on-rose
+  selected row, small scrollbar and range caption. Actual ID3 track numbers
+  replace durations on the right because `music_library::Song` contains
+  no duration; never fabricate times. The album screen no longer decodes
+  backdrop art. Existing Cover Flow, Artists, Now Playing and physical input
+  paths remain unchanged; no Flutter/Hero transition was ported. Compile
+  and Brick Pro visual QA still required.
   Korean glyph fallback via `crates/slot/src/fonts.rs` and
   `crates/slot-ui/src/text.rs`; SD font path:
   `Slot/System/Fonts/.SlotHangul.ttf`. It is optional.
@@ -110,10 +121,11 @@
 
 1. Confirm latest **warm-white Music theme**, first-frame boot fade,
    sleep/wake and silent-shutdown changes on-device; fix reported defects first.
-2. Test the **ClassiPod Original-faithful GPU Cover Flow** on the actual
-   Brick Pro: perspective, rack overlap, mirrored reflection, frame rate,
-   cursor motion and artwork loading. Keep original list via **X**.
-   Compare to the actual ClassiPod source rather than a flat 2D mock-up.
+2. Verify the redesigned **ClassiPod-inspired album detail panel** on the
+   640x480 Brick Pro (gradient, compact rows, long title truncation,
+   scrollbar, Back/Play buttons), plus the Original-style GPU Cover Flow
+   perspective, rack overlap, mirrored reflection, frame rate and artwork.
+   Keep original album list via **X**.
 3. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,

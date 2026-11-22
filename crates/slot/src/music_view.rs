@@ -24,6 +24,17 @@ const LIST_TOP: f32 = 104.0;
 const ROW_H: f32 = 48.0;
 const ALBUM_COVER_SIDE: f32 = 40.0;
 const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
+// ClassiPod-inspired album-details panel: compact and deliberately separate
+// from the artwork-heavy Cover Flow and Now Playing views.
+const ALBUM_PANEL_X: f32 = 42.0;
+const ALBUM_PANEL_Y: f32 = 82.0;
+const ALBUM_PANEL_W: f32 = 556.0;
+const ALBUM_PANEL_H: f32 = 354.0;
+const ALBUM_HEADER_H: f32 = 62.0;
+const ALBUM_TRACK_ROW_H: f32 = 34.0;
+const ALBUM_VISIBLE_ROWS: usize = 8;
+const ALBUM_PANEL_INK: [u8; 3] = [0xff, 0xff, 0xff];
+const ALBUM_PANEL_MUTED_INK: [u8; 3] = [0xf4, 0xe8, 0xec];
 // ClassiPod-inspired composition, retaining Slot's native 640x480 layout,
 // typography, embedded artwork decoder and physical controls.
 const PLAYING_COVER_SIDE: f32 = 214.0;
@@ -102,8 +113,7 @@ pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
     cover: MusicCover,
     album_covers: [MusicCover; ROWS],
-    album_backdrop: MusicCover,
-    fade_texture: Option<TexId>,
+    album_gradient: Option<TexId>,
     flow_covers: [MusicCover; FLOW_SLOTS],
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
@@ -136,19 +146,11 @@ impl MusicView {
                 }
             }
         }
-        // The album track screen keeps its list, with the album's embedded art
-        // as a full-height background fading out into the warm-white left side.
-        let detail_art = if music.track.is_none() && music.showing_tracks() {
-            let album = music.playing_album();
-            album.songs.first().and_then(|song| {
-                self.album_backdrop.texture(&song.path, album, compositor)
-            })
-        } else {
-            None
-        };
-        let fade_texture = if detail_art.is_some() {
-            Some(*self.fade_texture.get_or_insert_with(|| {
-                compositor.create_texture(256, 1, &backdrop_fade_rgba())
+        // One 1x64 gradient texture, shared by the album heading and selected
+        // row. No background artwork decode or continuous GPU updates here.
+        let album_gradient = if music.track.is_none() && music.showing_tracks() {
+            Some(*self.album_gradient.get_or_insert_with(|| {
+                compositor.create_texture(1, 64, &album_gradient_rgba())
             }))
         } else {
             None
@@ -196,11 +198,10 @@ impl MusicView {
             draws: Vec::new(),
         };
         p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
-        if let (Some(art), Some(fade)) = (detail_art, fade_texture) {
-            p.album_backdrop(art, fade);
-        }
         if let Some(track) = &music.track {
             p.playing(music, track, cover);
+        } else if let Some(gradient) = album_gradient {
+            p.album_tracks(music, gradient);
         } else if let (Some(position), Some(placeholder)) = (flow, flow_placeholder) {
             p.cover_flow(music, &flow_art, flow_first, position, placeholder);
         } else {
@@ -219,26 +220,133 @@ struct Painter<'a> {
 }
 
 impl Painter<'_> {
-    fn album_backdrop(&mut self, (texture, pixels): (TexId, [u32; 2]), fade: TexId) {
-        // Cover-fit without distortion: keep the artwork's right edge aligned to
-        // the panel. The GPU clips any excess at the top or bottom.
-        let side = OUT_H as f32;
-        let cover_scale = (side / pixels[0] as f32).max(side / pixels[1] as f32);
-        let width = pixels[0] as f32 * cover_scale;
-        let height = pixels[1] as f32 * cover_scale;
-        self.draws.push(pixel_aligned_texture(
-            texture,
-            [OUT_W as f32 - width, (OUT_H as f32 - height) / 2.0],
-            [width, height],
-            self.scale,
-            1.0,
-        ));
-        // When cover-fit overflows left, hide it behind the warm-white reading area.
-        let left = OUT_W as f32 - side;
-        self.rect([0.0, 0.0], [left, side], MUSIC_BACKGROUND);
-        self.draws.push(pixel_aligned_texture(
-            fade, [left, 0.0], [side, side], self.scale, 1.0,
-        ));
+    /// A compact, navigable track list inspired by ClassiPod's
+    /// CoverFlowAlbumSelectionScreen. The light canvas no longer has giant
+    /// embedded artwork competing with names or selected rows.
+    fn album_tracks(&mut self, music: &Music, gradient: TexId) {
+        let album = music.playing_album();
+        let total = music.row_count();
+        let cursor = music.cursor();
+        let (first, end) = album_window(cursor, total);
+
+        // Slight drop shadow, a 1px outline and an opaque white reading panel.
+        // All coordinates are in Slot's 640x480 logical canvas.
+        self.rect(
+            [ALBUM_PANEL_X + 3.0, ALBUM_PANEL_Y + 4.0],
+            [ALBUM_PANEL_W, ALBUM_PANEL_H],
+            [0.24, 0.20, 0.20, 0.08],
+        );
+        self.rect(
+            [ALBUM_PANEL_X, ALBUM_PANEL_Y],
+            [ALBUM_PANEL_W, ALBUM_PANEL_H],
+            [0.79, 0.76, 0.76, 1.0],
+        );
+        self.rect(
+            [ALBUM_PANEL_X + 1.0, ALBUM_PANEL_Y + 1.0],
+            [ALBUM_PANEL_W - 2.0, ALBUM_PANEL_H - 2.0],
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        self.draws.push(Draw::Tex {
+            x: ALBUM_PANEL_X + 1.0,
+            y: ALBUM_PANEL_Y + 1.0,
+            w: ALBUM_PANEL_W - 2.0,
+            h: ALBUM_HEADER_H - 1.0,
+            tex: gradient,
+            alpha: 1.0,
+        });
+        self.text_with_room(
+            &album.title, 25, [ALBUM_PANEL_X + 15.0, ALBUM_PANEL_Y + 7.0],
+            ALBUM_PANEL_INK, (ALBUM_PANEL_W - 30.0) as u32,
+        );
+        self.text_with_room(
+            &album.artist, 17, [ALBUM_PANEL_X + 15.0, ALBUM_PANEL_Y + 38.0],
+            ALBUM_PANEL_MUTED_INK, (ALBUM_PANEL_W - 140.0) as u32,
+        );
+        self.text_right(
+            &format!("{total} tracks"), 15,
+            ALBUM_PANEL_X + ALBUM_PANEL_W - 15.0,
+            ALBUM_PANEL_Y + 39.0, ALBUM_PANEL_MUTED_INK,
+        );
+
+        // Each song is a single compact row, with the actual track number at
+        // the right. Duration is not yet present in Slot's Library/Song model.
+        // Never display fabricated track durations.
+        let list_y = ALBUM_PANEL_Y + ALBUM_HEADER_H;
+        for i in first..end {
+            let y = list_y + (i - first) as f32 * ALBUM_TRACK_ROW_H;
+            let selected = i == cursor;
+            if selected {
+                self.draws.push(Draw::Tex {
+                    x: ALBUM_PANEL_X + 1.0,
+                    y,
+                    w: ALBUM_PANEL_W - 2.0,
+                    h: ALBUM_TRACK_ROW_H,
+                    tex: gradient,
+                    alpha: 1.0,
+                });
+            } else {
+                self.rect(
+                    [ALBUM_PANEL_X + 13.0, y + ALBUM_TRACK_ROW_H - 1.0],
+                    [ALBUM_PANEL_W - 26.0, 1.0],
+                    [0.93, 0.92, 0.92, 1.0],
+                );
+            }
+            let ink = if selected { ALBUM_PANEL_INK } else { MUSIC_TEXT_INK };
+            let number_ink = if selected { ALBUM_PANEL_INK } else { MUSIC_MUTED_INK };
+            let song = &album.songs[i];
+            self.text_with_room(
+                &song.title,
+                20,
+                [ALBUM_PANEL_X + 16.0, y + 6.0],
+                ink,
+                (ALBUM_PANEL_W - 100.0) as u32,
+            );
+            self.text_right(
+                &format!("{:02}", song.track.map(usize::from).unwrap_or(i + 1)),
+                17,
+                ALBUM_PANEL_X + ALBUM_PANEL_W - 17.0,
+                y + 7.0,
+                number_ink,
+            );
+        }
+
+        // Small, native scrollbar and a quiet position caption. Both use only
+        // the visible song count and avoid a full widget/layout framework.
+        let track_area_h = ALBUM_TRACK_ROW_H * ALBUM_VISIBLE_ROWS as f32;
+        if total > ALBUM_VISIBLE_ROWS {
+            let rail_x = ALBUM_PANEL_X + ALBUM_PANEL_W - 4.0;
+            self.rect(
+                [rail_x, list_y + 2.0],
+                [2.0, track_area_h - 4.0],
+                [0.90, 0.88, 0.88, 1.0],
+            );
+            let thumb_h = track_area_h * ALBUM_VISIBLE_ROWS as f32 / total as f32;
+            let offset = first as f32 / (total - ALBUM_VISIBLE_ROWS) as f32;
+            self.rect(
+                [rail_x, list_y + 2.0 + offset * (track_area_h - 4.0 - thumb_h)],
+                [2.0, thumb_h],
+                [0.63, 0.35, 0.45, 1.0],
+            );
+        }
+        let caption = if total == 0 {
+            "no tracks".to_string()
+        } else {
+            format!("{}-{} of {total}", first + 1, end)
+        };
+        self.text_center(
+            &caption, 14,
+            ALBUM_PANEL_Y + ALBUM_PANEL_H - 17.0,
+            MUSIC_MUTED_INK, 180,
+        );
+        self.text_with_room(
+            "a play", 15, [ALBUM_PANEL_X + 2.0, 454.0],
+            MUSIC_MUTED_INK, 110,
+        );
+        self.text_right(
+            "b back", 15, ALBUM_PANEL_X + ALBUM_PANEL_W, 454.0,
+            MUSIC_MUTED_INK,
+        );
     }
 
     fn browser(&mut self, music: &Music, album_art: &[Option<(TexId, [u32; 2])>; ROWS]) {
@@ -532,15 +640,24 @@ impl Painter<'_> {
     }
 }
 
-/// A single 256-pixel warm-white-to-transparent overlay (one GPU draw per frame).
-/// Preserves legibility of dark text on the left, without rectangular bands.
-fn backdrop_fade_rgba() -> Vec<u8> {
-    (0..256).flat_map(|x| {
-        let t = x as f32 / 255.0;
-        let smooth = t * t * (3.0 - 2.0 * t);
-        let alpha = (0.04 + 0.96 * (1.0 - smooth)) * 255.0;
-        [248, 247, 244, alpha.round() as u8]
+/// A shared 1x64 gradient for the album's header and selected row.
+/// Artwork remains in Cover Flow/Now Playing, not underneath small text.
+fn album_gradient_rgba() -> Vec<u8> {
+    (0..64).flat_map(|y| {
+        let t = y as f32 / 63.0;
+        let mix = |top: f32, bottom: f32| ((1.0 - t) * top + t * bottom).round() as u8;
+        [mix(198.0, 151.0), mix(139.0, 78.0), mix(157.0, 109.0), 255]
     }).collect()
+}
+
+/// Keep the selected song visible without changing its index. Long albums
+/// scroll one compact row at a time after the initial eight songs.
+fn album_window(cursor: usize, count: usize) -> (usize, usize) {
+    if count == 0 {
+        return (0, 0);
+    }
+    let first = cursor.min(count - 1).saturating_sub(ALBUM_VISIBLE_ROWS - 1);
+    (first, (first + ALBUM_VISIBLE_ROWS).min(count))
 }
 
 /// ClassiPod Original spacing, adapted to the 640x480 Brick screen:
@@ -646,16 +763,35 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn album_backdrop_has_a_warm_white_left_and_soft_right_edge() {
-        let pixels = backdrop_fade_rgba();
-        assert_eq!(pixels.len(), 256 * 4);
-        assert_eq!(&pixels[0..3], &[248, 247, 244]);
-        assert_eq!(pixels[3], 255);
-        assert_eq!(&pixels[255 * 4..255 * 4 + 3], &[248, 247, 244]);
-        assert!(pixels[255 * 4 + 3] < 40);
-        for x in 1..256 {
-            assert!(pixels[(x - 1) * 4 + 3] >= pixels[x * 4 + 3]);
-        }
+    fn album_panel_fits_the_brick_without_covering_music_controls() {
+        assert_eq!((OUT_W, OUT_H), (640, 480));
+        let list_end = ALBUM_PANEL_Y + ALBUM_HEADER_H
+            + ALBUM_VISIBLE_ROWS as f32 * ALBUM_TRACK_ROW_H;
+        assert!(ALBUM_PANEL_X > 0.0);
+        assert!(ALBUM_PANEL_X + ALBUM_PANEL_W < OUT_W as f32);
+        assert!(list_end < ALBUM_PANEL_Y + ALBUM_PANEL_H - 10.0);
+        assert!(ALBUM_PANEL_Y + ALBUM_PANEL_H + 8.0 < OUT_H as f32);
+        assert_eq!(ALBUM_VISIBLE_ROWS, 8);
+    }
+
+    #[test]
+    fn album_window_is_stable_for_short_albums_and_scrolls_with_selection() {
+        assert_eq!(album_window(0, 0), (0, 0));
+        assert_eq!(album_window(0, 1), (0, 1));
+        assert_eq!(album_window(5, 6), (0, 6));
+        assert_eq!(album_window(7, 20), (0, 8));
+        assert_eq!(album_window(8, 20), (1, 9));
+        assert_eq!(album_window(19, 20), (12, 20));
+        assert_eq!(album_window(500, 20), (12, 20));
+    }
+
+    #[test]
+    fn album_header_and_selection_use_one_opaque_rose_gradient() {
+        let gradient = album_gradient_rgba();
+        assert_eq!(gradient.len(), 64 * 4);
+        assert_eq!(&gradient[..4], &[198, 139, 157, 255]);
+        assert_eq!(&gradient[63 * 4..], &[151, 78, 109, 255]);
+        assert!(gradient.chunks_exact(4).all(|p| p[3] == 255));
     }
 
     #[test]

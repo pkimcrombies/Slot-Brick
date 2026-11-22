@@ -8,8 +8,8 @@
 
 - Repository: `pkimcrombies/Slot-Brick` (Rust Slot OS port).
 - Active development branch: **`feature/psp-replaces-ps1`**. Do not modify `main`
-  unless explicitly asked. At this handoff the branch HEAD is `3daabadea1b111265d76ca98242a403faff8a600`;
-  always fetch the actual HEAD rather than trusting this SHA.
+  unless explicitly asked. Always fetch the current branch HEAD before edits;
+  do not assume an earlier conversation's commit SHA is still the tip.
 - Device: **TrimUI Brick Pro**, running native Slot OS from a 32 GB SD card.
   Primary working systems: GBA, GB, GBC, NES, SNES. PSP in the old PS1 slot
   is an **experimental, separate workstream**, not the current priority.
@@ -54,7 +54,10 @@
   Brick; preserve black fade, plus 70ms GPIO rumble on deliberate power-off
   if Rumble is enabled, *after saves are settled*. Auto/battery shutdown
   stays silent; exit-to-stock keeps its separate behaviour.
-  User device verification of this latest change is pending.
+  User device verification of this latest change is pending. The initial
+  quiet-shutdown installer failed in 3 new tests because the temporary
+  test root lacked `Config/` before `write_slot_state`; the subsequent fix
+  creates the standard Slot directories first. Do not bypass the tests.
 
 ## Test/build/install guardrails
 

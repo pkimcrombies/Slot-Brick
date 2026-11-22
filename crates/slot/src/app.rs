@@ -6651,6 +6651,8 @@ mod quiet_poweroff_tests {
     #[test]
     fn deliberate_shutdown_requests_a_confirmation_pulse() {
         let root = tempfile::tempdir().unwrap();
+        // Production App::boot creates Config first; mirror that order in tests.
+        crate::root::ensure(root.path());
         write_slot_state(root.path(), &SlotState {
             clock_set: true, ..SlotState::default()
         }).unwrap();
@@ -6675,6 +6677,8 @@ mod quiet_poweroff_tests {
     #[test]
     fn auto_shutdown_and_exit_to_stock_do_not_request_a_pulse() {
         let root = tempfile::tempdir().unwrap();
+        // Production App::boot creates Config first; mirror that order in tests.
+        crate::root::ensure(root.path());
         write_slot_state(root.path(), &SlotState {
             clock_set: true, ..SlotState::default()
         }).unwrap();
@@ -6696,6 +6700,8 @@ mod quiet_poweroff_tests {
     #[test]
     fn direct_power_hold_is_also_a_deliberate_shutdown() {
         let root = tempfile::tempdir().unwrap();
+        // Production App::boot creates Config first; mirror that order in tests.
+        crate::root::ensure(root.path());
         write_slot_state(root.path(), &SlotState {
             clock_set: true, ..SlotState::default()
         }).unwrap();

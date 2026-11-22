@@ -1004,9 +1004,11 @@ impl Frontend {
         sync_disc_faces(self.session.app_mut(), compositor, &mut self.clocks);
         sync_about(self.session.app_mut(), compositor, &mut self.about);
         sync_quick_clock(self.session.app_mut(), compositor, &mut self.quick_clock, self.quick_menu_scale);
-        if let Some(music) = self.session.app().music() {
-            let draws = self.music_view.render(music, compositor, self.quick_menu_scale);
-            self.session.app_mut().set_music_draws(draws);
+        if matches!(self.session.app().phase(), Phase::Music) {
+            if let Some(music) = self.session.app().music() {
+                let draws = self.music_view.render(music, compositor, self.quick_menu_scale);
+                self.session.app_mut().set_music_draws(draws);
+            }
         }
         sync_named_texts(self.session.app_mut(), compositor, &mut self.overlay_tex, self.quick_menu_scale);
         sync_overlay(self.session.app_mut(), compositor, &mut self.overlay_tex);
@@ -1173,12 +1175,34 @@ impl Frontend {
         let dt = self.last.elapsed().as_secs_f32();
         self.last = Instant::now();
         self.session.update(dt);
+        #[cfg(feature = "brick")]
+        self.sync_music_dim();
         // A second Power press may wake during the pre-suspend preparation.
         // That path does not go through resume_sleep().
         if was_doze && !matches!(self.session.app().phase(), Phase::Doze { .. })
             && !self.session.app().shutting_down() {
             self.power_fade.resume(Instant::now());
         }
+    }
+
+    /// Optional Music-only inactivity dim: preserve the user's actual
+    /// brightness, never turn the screen fully off, and avoid brightening
+    /// during the sleep-to-black animation.
+    #[cfg(feature = "brick")]
+    fn sync_music_dim(&mut self) {
+        if matches!(self.app().phase(), Phase::Doze { .. }) {
+            return;
+        }
+        let should_dim = if matches!(self.app().phase(), Phase::Music) {
+            self.app().music().is_some_and(|music| {
+                music.should_dim()
+                    && self.last_input.elapsed()
+                        >= Duration::from_secs(u64::from(music.dim_timeout_secs()))
+            })
+        } else {
+            false
+        };
+        self.session.app_mut().set_music_dimmed(should_dim);
     }
 
     /// Called from the Brick's Doze loop to draw a short fade even though
@@ -1211,6 +1235,7 @@ impl Frontend {
         let _ = input.poll(self.now()); // discard the kernel's queued wake key
         self.session.reset_sleep_input();
         self.session.app_mut().wake();
+        self.session.reopen_music_audio();
         self.power_fade.resume(Instant::now());
         self.last = Instant::now();
         self.wake_guard = Some(self.last + Duration::from_millis(750));

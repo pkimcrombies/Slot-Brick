@@ -281,6 +281,11 @@ pub enum Phase {
 pub struct App {
     music: Option<crate::music::Music>,
     music_draws: Vec<Draw>,
+    /// The Doze state can restore a Music session, not just a cartridge.
+    music_before_doze: bool,
+    /// Music-only physical backlight dim; never zero and never saved as
+    /// the user's normal brightness setting.
+    music_dimmed: bool,
     #[cfg(feature = "brick")]
     pub(crate) wifi: Option<crate::brick_wifi::WifiMenu>,
     #[cfg(feature = "brick")]
@@ -586,6 +591,8 @@ impl App {
             wifi_face: None,
             music: None,
             music_draws: Vec::new(),
+            music_before_doze: false,
+            music_dimmed: false,
             #[cfg(feature = "brick")]
             auto_check: Default::default(),
             update_face: None,
@@ -1226,6 +1233,19 @@ impl App {
     pub(crate) fn set_music_draws(&mut self, draws: Vec<Draw>) {
         self.music_draws = draws;
     }
+
+    /// Physical brightness only: music's inactivity dim never changes the
+    /// saved system brightness, and the display remains visibly on.
+    pub(crate) fn set_music_dimmed(&mut self, dimmed: bool) {
+        if self.music_dimmed == dimmed { return; }
+        self.music_dimmed = dimmed;
+        let level = if dimmed { (self.state.brightness / 2).max(1) }
+            else { self.state.brightness };
+        if let Some(power) = &mut self.power {
+            power.set_backlight(level);
+        }
+    }
+
 
     pub fn quick_value(&self, row: QuickRow) -> Option<QuickValue> {
         #[cfg(feature = "brick")]
@@ -4142,8 +4162,12 @@ impl App {
     }
 
     fn doze(&mut self) {
-        self.music = None;
-        self.music_draws.clear();
+        if matches!(self.phase, Phase::Doze { .. }) { return; }
+        self.music_before_doze = matches!(self.phase, Phase::Music) && self.music.is_some();
+        if !self.music_before_doze {
+            self.music = None;
+            self.music_draws.clear();
+        }
         #[cfg(feature = "brick")]
         {self.wifi=None;}
         if self.link_active() {
@@ -4158,9 +4182,6 @@ impl App {
         }
         if let Some(menu) = self.cart_menu.take() {
             self.preview_shell(&menu.stem, menu.before);
-        }
-        if matches!(self.phase, Phase::Doze { .. }) {
-            return;
         }
         self.state_writer.flush();
         self.flush_resume();
@@ -4206,13 +4227,24 @@ impl App {
     }
 
     pub(crate) fn wake(&mut self) {
-        let Phase::Doze { cart } = &mut self.phase else {
-            return;
+        let cart = match &mut self.phase {
+            Phase::Doze { cart } => cart.take(),
+            _ => return,
         };
-        self.phase = match cart.take() {
-            Some(cart) => Phase::Playing { cart },
-            None => Phase::Shelf,
+        let resume_music = std::mem::take(&mut self.music_before_doze)
+            && self.music.is_some();
+        self.phase = if resume_music {
+            Phase::Music
+        } else {
+            match cart {
+                Some(cart) => Phase::Playing { cart },
+                None => Phase::Shelf,
+            }
         };
+        // While the backlight is still closed, replace the dimmed hardware
+        // level with the normal user setting. on_open() then restores it
+        // cleanly without a brightness flash during the sleep fade.
+        self.set_music_dimmed(false);
         #[cfg(feature = "brick")]
         if let Some(leds) = &mut self.brick_leds {
             if let Err(e) = leds.wake() { eprintln!("slot: LEDs wake: {e}"); }
@@ -6765,6 +6797,55 @@ mod quiet_poweroff_tests {
         app.wake();
         assert_eq!(writes.lock().unwrap().last().copied(), Some(5),
             "waking must restore the configured brightness");
+    }
+
+    #[test]
+    fn sleeping_in_music_wakes_back_into_music_without_losing_the_session() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.music = Some(crate::music::Music::open(root.path()));
+        app.phase = Phase::Music;
+        app.apply(Action::LidClose);
+        assert!(matches!(app.phase(), Phase::Doze { cart: None }));
+        assert!(app.music.is_some(), "sleep must retain the music session");
+        app.apply(Action::LidOpen);
+        assert!(matches!(app.phase(), Phase::Music),
+            "Music must resume, not fall back to the launcher");
+        assert!(app.music.is_some());
+    }
+
+    #[test]
+    fn music_dim_is_nonzero_restored_after_sleep_and_keeps_saved_brightness() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            brightness: 6, clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let power = RecordingBacklight {
+            root: root.path().to_path_buf(),
+            writes: writes.clone(),
+        };
+        app.set_power(Power::new(Box::new(power), std::time::Duration::from_secs(180)));
+        app.music = Some(crate::music::Music::open(root.path()));
+        app.phase = Phase::Music;
+        app.set_music_dimmed(true);
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(3));
+        assert_eq!(app.brightness(), 6, "dimming must not change the saved setting");
+        app.apply(Action::LidClose);
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(3),
+            "dimmed panel stays illuminated through the sleep fade");
+        app.finish_doze_fade();
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(0));
+        app.apply(Action::LidOpen);
+        assert!(matches!(app.phase(), Phase::Music));
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(6),
+            "wake must restore normal brightness, not the dimmed level");
     }
 
     #[test]

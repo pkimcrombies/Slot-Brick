@@ -92,6 +92,21 @@ impl Session {
         self.sink.ring()
     }
 
+    /// A genuine kernel suspend can invalidate the ALSA handle. The paused
+    /// music decoder/session remains in App, but its sink is reopened after
+    /// wake before feeding more PCM into the ring.
+    #[cfg(feature = "brick")]
+    pub(crate) fn reopen_music_audio(&mut self) {
+        if !matches!(self.app.phase(), Phase::Music) { return; }
+        let rate = self.sink.ring().sample_rate();
+        if rate != 0 {
+            if let Err(err) = self.sink.open(rate) {
+                eprintln!("slot: music audio reopen after suspend: {err}");
+            }
+        }
+        self.music_active = false;
+    }
+
     pub fn rumble(&mut self, strength: u16) {
         if strength == self.motor {
             return;
@@ -257,7 +272,12 @@ impl Session {
     pub fn update(&mut self, dt: f32) {
         self.bridge_link(|app| app.update(dt));
         let level = self.app.output_volume();
-        if let Some(music) = self.app.music_mut() {
+        let music = if matches!(self.app.phase(), Phase::Music) {
+            self.app.music_mut()
+        } else {
+            None
+        };
+        if let Some(music) = music {
             let ring = self.sink.ring();
             if !self.music_active {
                 ring.set_idle(true);
@@ -267,6 +287,13 @@ impl Session {
             self.music_active = true;
         } else if std::mem::take(&mut self.music_active) {
             let ring = self.sink.ring();
+            if matches!(self.app.phase(), Phase::Doze { .. }) {
+                if let Some(music) = self.app.music_mut() {
+                    // Roll back the decoder's outstanding queued frames so
+                    // replay starts from the last audible position.
+                    music.prepare_suspend(&ring);
+                }
+            }
             ring.discard();
             ring.set_idle(false);
         }

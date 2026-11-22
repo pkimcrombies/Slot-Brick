@@ -54,7 +54,8 @@
   page; Up/Down select rows, Left/Right/A change values, B/Start closes.
   Rows: Music-only digital volume cap (default 70%, steps of 10 to 0-100),
   default album browse view (Cover Flow/list), album sort (A-Z/newest tagged
-  release date first), and Repeat (off/all/one). **X** on Now Playing cycles
+  release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
+  1 minute/2 minutes; default 1 minute). **X** on Now Playing cycles
   repeat; a native double-arrow indicator with off/all/1 state appears at the
   top-right. Off plays the current album once; All wraps at the last track
   of the current album; One repeats the current song. These preferences
@@ -69,9 +70,28 @@
   are used (full YYYY-MM-DD where available; year-only tags remain supported);
   missing dates sort last and never use filesystem timestamps.
   Existing physical play/pause, skip and seek controls are preserved.
-  Added unit tests for settings persistence, repeat order, volume cap,
-  release-date parsing, and stability of album IDs; **Docker/ARM64 tests
-  have not yet been executed**.
+  **Music sleep/resume + dim (2026-11-23, pending device validation):**
+  Physical backlight dimming is optional, applies only while Music is actively
+  playing and the settings screen is closed, and halves the normal brightness
+  step but never uses zero. Any input immediately restores brightness.
+  Dim timeout lives in `Config/music.settings`; no automatic screen-off is
+  introduced. Power still triggers the existing 300ms fade and actual kernel
+  suspend. Previously `App::doze()` destroyed Music and `wake()` returned to
+  the launcher; now a Doze-origin flag preserves the same Music object,
+  current browsing location, playing/paused status and track index through
+  suspend, and restores `Phase::Music` on wake. `Session::update` stops
+  feeding audio while Doze, rolls back unsounded PCM with
+  `Music::prepare_suspend(&Ring)`, and discards the ring for ALSA to release.
+  After true kernel wake, `Frontend::resume_sleep` reopens the AudioSink
+  at its prior sample rate before resuming PCM, so the song can continue
+  from the retained decoder position. The normal backlight level is
+  restored by `App::wake()` before `Power::on_open()`; no new daemon
+  or SD write is required to remember an ordinary suspend. True power loss
+  and deliberate poweroff do **not** have persistent music resume.
+  Added regression tests for settings persistence, repeat order, volume cap,
+  release-date parsing, stable album IDs, Music phase on wake, retained
+  selected track, and backlight restoration. **Rust, ARM64, and on-device
+  suspend/wake/audio tests have not yet been executed**.
   **Album song list: original iPod Classic music-menu style (2026-11-22).**
   The earlier ClassiPod *Cover Flow selection panel* interpretation was
   rejected: no floating bordered panel, coloured gradient header, large
@@ -165,6 +185,8 @@
   now assert the backlight remains lit while fade is pending; the separate
   `app.rs` mock test verifies turning it off when the fade completes.
   Non-Brick lid semantics, the 3.3s suspend delay and wake fade remain unchanged.
+  The new Music-resume behaviour must not alter ordinary game/shelf sleep,
+  sleep/power-off policies, or the music playback rate.
   Returning from game ejection **must not** add a black navigation fade;
   fix `85b0331` was confirmed smooth.
   First-frame boot fade must also work when Slot starts in `Phase::Inserting`
@@ -215,11 +237,18 @@
    scrolling, long title truncation, rose selection and slim scrollbar.
    Also check the existing GPU Cover Flow perspective, rack overlap,
    frame rate and artwork (without reflections). Keep album list via **X**.
-3. Validate the new **Music Settings + repeat** on device: Start/B
-   navigation, Now Playing X cycles off/all/one, album track-end repeat,
-   70% default digital cap (with headphones), A-Z vs newest release-date
-   sort including albums without date, and saved preferences across restart.
-   No parent-control PIN has been added: settings are editable by anyone.
+3. Validate **Music Settings, repeat, and the new dim timer** on device:
+   Start/B navigation; X cycles off/all/one on Now Playing; 70% default
+   volume cap; album sorts and saved preferences; Dim after Off/30sec/1min/2min
+   with default 1min and physical display remaining on. Confirm any button
+   restores normal brightness, settings screen never dims, and volume and
+   games are unaffected. No parental-control PIN is present.
+   Then test **Power from Now Playing** (while playing and paused):
+   the normal fade to full suspend, no music during actual suspend,
+   same Music screen/album/position on wake, automatic resume only if
+   previously playing, clean ALSA output and correct brightness. Test waking
+   early during the 3.3-second pre-suspend delay and subsequent game/shelf
+   sleep/wake regressions.
 4. Check Now Playing's **stronger diagonal artwork-adaptive
    background** on the Brick Pro: hue strongest at top-left, fading smoothly
    to subtle ivory at bottom-right. Check readability (including dusty-rose

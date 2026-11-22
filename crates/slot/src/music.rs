@@ -252,6 +252,7 @@ struct MusicSettings {
     cover_flow: bool,
     album_sort: AlbumSort,
     repeat: RepeatMode,
+    dim_timeout_secs: u16,
 }
 
 impl Default for MusicSettings {
@@ -262,6 +263,8 @@ impl Default for MusicSettings {
             cover_flow: true,
             album_sort: AlbumSort::Az,
             repeat: RepeatMode::Off,
+            // Keep the screen illuminated; gently dim after a minute.
+            dim_timeout_secs: 60,
         }
     }
 }
@@ -289,6 +292,13 @@ impl MusicSettings {
                     ("repeat", "all") => settings.repeat = RepeatMode::All,
                     ("repeat", "one") => settings.repeat = RepeatMode::One,
                     ("repeat", "off") => settings.repeat = RepeatMode::Off,
+                    ("dim_timeout", seconds) => {
+                        if let Ok(seconds) = seconds.parse::<u16>() {
+                            if [0, 30, 60, 120].contains(&seconds) {
+                                settings.dim_timeout_secs = seconds;
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -305,11 +315,12 @@ impl MusicSettings {
             }
         }
         let text = format!(
-            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\n",
+            "max_volume={}\nalbum_view={}\nalbum_sort={}\nrepeat={}\ndim_timeout={}\n",
             self.max_volume,
             if self.cover_flow { "covers" } else { "list" },
             if self.album_sort == AlbumSort::Az { "az" } else { "release" },
             self.repeat.label(),
+            self.dim_timeout_secs,
         );
         let temp = path.with_extension("settings.tmp");
         if let Err(err) = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &path)) {
@@ -416,6 +427,19 @@ impl Music {
         if self.settings.cover_flow { "cover flow" } else { "list" }
     }
     pub(crate) fn settings_sort(&self) -> &'static str { self.settings.album_sort.label() }
+    pub(crate) fn dim_timeout_secs(&self) -> u16 { self.settings.dim_timeout_secs }
+    pub(crate) fn settings_dim_timeout(&self) -> &'static str {
+        match self.settings.dim_timeout_secs {
+            0 => "off",
+            30 => "30 sec",
+            60 => "1 min",
+            120 => "2 min",
+            _ => "1 min",
+        }
+    }
+    pub(crate) fn should_dim(&self) -> bool {
+        self.playing() && !self.settings_open && self.settings.dim_timeout_secs > 0
+    }
 
     fn change_setting(&mut self, forward: bool) {
         match self.settings_row {
@@ -445,6 +469,15 @@ impl Music {
                 }
             }
             3 => self.settings.repeat = self.settings.repeat.step(forward),
+            4 => {
+                const VALUES: [u16; 4] = [0, 30, 60, 120];
+                let current = VALUES.iter()
+                    .position(|&value| value == self.settings.dim_timeout_secs)
+                    .unwrap_or(2);
+                let next = if forward { (current + 1) % VALUES.len() }
+                    else { (current + VALUES.len() - 1) % VALUES.len() };
+                self.settings.dim_timeout_secs = VALUES[next];
+            }
             _ => {}
         }
         self.persist_settings();
@@ -596,7 +629,7 @@ impl Music {
                     self.settings_row = self.settings_row.saturating_sub(1);
                 }
                 Action::GbaDown(Btn::Down) => {
-                    self.settings_row = (self.settings_row + 1).min(3);
+                    self.settings_row = (self.settings_row + 1).min(4);
                 }
                 Action::GbaDown(Btn::A) | Action::GbaDown(Btn::Right) => {
                     self.change_setting(true);
@@ -693,6 +726,23 @@ impl Music {
         false
     }
 
+    /// Stop queued audio when entering kernel suspend without losing track,
+    /// position, repeat mode, browsing location or play/pause status.
+    /// Seeking to the audible position subtracts the ring's queued frames;
+    /// on wake the same decoder continues feeding the freshly opened sink.
+    pub(crate) fn prepare_suspend(&mut self, ring: &Ring) {
+        if let Some(track) = self.track.as_mut() {
+            if let Some(playback) = track.playback.as_mut() {
+                // Rewind the decoder over any not-yet-audible buffered audio.
+                // The returned status is unchanged; paused stays paused.
+                let _ = playback.seek_by(0, ring);
+            }
+            track.ending = false;
+        }
+        self.discard_audio = true;
+        ring.discard();
+    }
+
     pub(crate) fn update_audio(&mut self, ring: &Ring, level: u8) {
         if let Some(library) = self.scan.as_ref().and_then(Scan::take) {
             self.library = library;
@@ -768,12 +818,14 @@ mod tests {
         prefs.cover_flow = false;
         prefs.album_sort = AlbumSort::Release;
         prefs.repeat = RepeatMode::One;
+        prefs.dim_timeout_secs = 120;
         prefs.save(dir.path());
         let loaded = MusicSettings::load(dir.path());
         assert_eq!(loaded.max_volume, 40);
         assert!(!loaded.cover_flow);
         assert_eq!(loaded.album_sort, AlbumSort::Release);
         assert_eq!(loaded.repeat, RepeatMode::One);
+        assert_eq!(loaded.dim_timeout_secs, 120);
         std::fs::write(MusicSettings::path(dir.path()), "max_volume=255\\n").unwrap();
         assert_eq!(MusicSettings::load(dir.path()).max_volume, 70);
     }
@@ -865,6 +917,9 @@ mod tests {
         music.input(Action::GbaDown(Btn::Down));
         music.input(Action::GbaDown(Btn::A));
         assert_eq!(music.repeat_mode(), RepeatMode::All);
+        music.input(Action::GbaDown(Btn::Down));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.settings_dim_timeout(), "2 min");
         music.input(Action::GbaDown(Btn::B));
         assert!(!music.music_settings_open());
 
@@ -873,6 +928,7 @@ mod tests {
         assert_eq!(loaded.album_sort, AlbumSort::Release);
         assert!(!loaded.cover_flow);
         assert_eq!(loaded.repeat, RepeatMode::All);
+        assert_eq!(loaded.dim_timeout_secs, 120);
     }
 
     #[test]
@@ -895,6 +951,46 @@ mod tests {
         assert_eq!(library.albums[0].release_date, Some(20241108),
             "alphabetical Newer Album precedes Older Album");
         assert_eq!(library.albums[1].release_date, Some(19980000));
+    }
+
+    #[test]
+    fn dim_timeout_cycles_off_30_60_120_and_never_turns_off_screen() {
+        let mut music = Music::with_library(Library::default());
+        assert_eq!(music.settings_dim_timeout(), "1 min");
+        music.settings_row = 4;
+        music.change_setting(true);
+        assert_eq!(music.dim_timeout_secs(), 120);
+        music.change_setting(true);
+        assert_eq!(music.dim_timeout_secs(), 0);
+        assert_eq!(music.settings_dim_timeout(), "off");
+        music.change_setting(true);
+        assert_eq!(music.dim_timeout_secs(), 30);
+        music.change_setting(false);
+        assert_eq!(music.dim_timeout_secs(), 0);
+        assert!(!music.should_dim());
+    }
+
+    #[test]
+    fn sleep_does_not_change_playback_status_or_selected_track() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        std::fs::create_dir_all(&folder).unwrap();
+        silent_mp3(&folder.join("01.mp3"), 2);
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::Y));
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        ring.set_idle(true);
+        music.update_audio(&ring, 40);
+        let index = music.track.as_ref().unwrap().index;
+        let before = music.track.as_ref().unwrap().status;
+        music.prepare_suspend(&ring);
+        assert_eq!(music.track.as_ref().unwrap().index, index);
+        assert_eq!(music.track.as_ref().unwrap().status, before);
+        assert_eq!(ring.queued_frames(), 0);
+        assert!(music.discard_audio);
+        music.update_audio(&ring, 40);
+        assert_eq!(music.track.as_ref().unwrap().index, index);
     }
 
     #[test]

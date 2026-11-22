@@ -639,17 +639,18 @@ impl Painter<'_> {
             music.settings_album_view(),
             music.settings_sort(),
             music.repeat_mode().label(),
+            music.settings_dim_timeout(),
         ];
-        let labels = ["volume limit", "album view", "sort albums", "repeat"];
+        let labels = ["volume limit", "album view", "sort albums", "repeat", "dim after"];
         for (index, (label, value)) in labels.iter().zip(values).enumerate() {
-            let y = 120.0 + index as f32 * 66.0;
+            let y = 112.0 + index as f32 * 58.0;
             let selected = music.settings_cursor() == index;
             if selected {
                 let rose = MUSIC_SELECTION_INK.map(|n| n as f32 / 255.0);
-                self.rect([0.0, y], [OUT_W as f32, 52.0],
+                self.rect([0.0, y], [OUT_W as f32, 47.0],
                     [rose[0], rose[1], rose[2], 1.0]);
             } else {
-                self.rect([EDGE, y + 51.0], [OUT_W as f32 - EDGE * 2.0, 1.0],
+                self.rect([EDGE, y + 47.0], [OUT_W as f32 - EDGE * 2.0, 1.0],
                     ALBUM_ROW_SEPARATOR);
             }
             let ink = if selected { ALBUM_WHITE_INK } else { MUSIC_TEXT_INK };
@@ -657,8 +658,12 @@ impl Painter<'_> {
             self.text_with_room(value, 21, [346.0, y + 13.0], ink, 250);
         }
         self.text_with_room(
-            "Music limit only; safe loudness also depends on headphones",
-            14, [EDGE, 428.0], MUSIC_MUTED_INK, 580,
+            "Screen stays on; a button restores brightness",
+            14, [EDGE, 419.0], MUSIC_MUTED_INK, 580,
+        );
+        self.text_with_room(
+            "Volume cap is not a certified safe headphone level",
+            14, [EDGE, 440.0], MUSIC_MUTED_INK, 580,
         );
     }
 
@@ -1006,6 +1011,13 @@ mod album_thumbnail_layout_tests {
             ALBUM_LIST_TOP + 6.0 * ALBUM_TRACK_ROW_H);
         assert_eq!(album_row_y(9, 3),
             ALBUM_LIST_TOP + 6.0 * ALBUM_TRACK_ROW_H);
+    }
+
+    #[test]
+    fn music_settings_five_rows_fit_above_the_footer() {
+        let bottom = 112.0 + 4.0 * 58.0 + 47.0;
+        assert!(bottom < 419.0, "dim after row must not overlap its caption");
+        assert!(440.0 + 18.0 < OUT_H as f32, "safety caption stays on screen");
     }
 
     #[test]

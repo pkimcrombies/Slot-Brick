@@ -711,7 +711,10 @@ impl Music {
 
     fn shuffle_next(&mut self, album: usize, index: usize, forward: bool, wrap: bool) {
         let count = self.library.albums[album].songs.len();
-        if count <= 1 { return; }
+        if count <= 1 {
+            if wrap && count == 1 { self.start_album(album, index); }
+            return;
+        }
         if self.shuffle_album != Some(album) || self.shuffle_order.len() != count {
             self.begin_shuffle_from(album, index);
         }
@@ -1021,6 +1024,7 @@ mod tests {
         prefs.cover_flow = false;
         prefs.album_sort = AlbumSort::Release;
         prefs.repeat = RepeatMode::One;
+        prefs.shuffle = true;
         prefs.dim_timeout_secs = 120;
         prefs.dim_brightness = 2;
         prefs.save(dir.path());
@@ -1029,6 +1033,7 @@ mod tests {
         assert!(!loaded.cover_flow);
         assert_eq!(loaded.album_sort, AlbumSort::Release);
         assert_eq!(loaded.repeat, RepeatMode::One);
+        assert!(loaded.shuffle);
         assert_eq!(loaded.dim_timeout_secs, 120);
         assert_eq!(loaded.dim_brightness, 2);
         // Existing music.settings files without the new key use level 1.
@@ -1038,6 +1043,7 @@ mod tests {
         ).unwrap();
         let invalid = MusicSettings::load(dir.path());
         assert_eq!(invalid.max_volume, 70);
+        assert!(!invalid.shuffle, "legacy settings default to shuffle off");
         assert_eq!(invalid.dim_brightness, 1);
         std::fs::write(MusicSettings::path(dir.path()), "dim_brightness=10\n").unwrap();
         assert_eq!(MusicSettings::load(dir.path()).dim_brightness, 1);
@@ -1075,6 +1081,103 @@ mod tests {
         assert_eq!(music.track.as_ref().unwrap().index, 0);
         music.input(Action::GbaDown(Btn::X));
         assert_eq!(music.repeat_mode(), RepeatMode::Off);
+    }
+
+    #[test]
+    fn shuffle_plays_every_album_track_once_and_previous_follows_the_actual_order() {
+        let songs = (0..7).map(|index| Song {
+            path: PathBuf::from(format!("{index}.mp3")),
+            title: format!("Track {index}"),
+            artist: "artist".into(), disc: 1, track: Some(index as u16 + 1),
+        }).collect();
+        let mut music = Music::with_library(Library {
+            albums: vec![Album {
+                title: "Test".into(), artist: "artist".into(),
+                release_date: None, songs,
+            }],
+            artists: vec![],
+        });
+        music.open_page(Page::Album(0));
+        music.start(2);
+        assert!(!music.shuffle_enabled());
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.shuffle_enabled());
+        assert_eq!(music.playing_position(), Some((2, 7)),
+            "enabling shuffle must not interrupt the current track");
+        assert_eq!(music.shuffle_order.len(), 7);
+        assert_eq!(music.shuffle_order[0], 2);
+        let mut order = music.shuffle_order.clone();
+        order.sort_unstable();
+        assert_eq!(order, (0..7).collect::<Vec<_>>(),
+            "shuffle order is a permutation with no repeated track");
+        let chosen_order = music.shuffle_order.clone();
+        for expected in chosen_order.iter().skip(1) {
+            music.input(Action::GbaDown(Btn::Right));
+            assert_eq!(music.playing_position(), Some((*expected, 7)));
+        }
+        let last = *chosen_order.last().unwrap();
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.playing_position(), Some((last, 7)),
+            "shuffle next must stop at the album boundary when Repeat is Off");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.playing_position(), Some((chosen_order[5], 7)),
+            "Previous follows actual shuffled history");
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(!music.shuffle_enabled());
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.playing_position(), Some((chosen_order[5] + 1, 7))
+            .filter(|&(index, _)| index < 7)
+            .or(Some((chosen_order[5], 7))),
+            "disabling shuffle restores sequential next track");
+    }
+
+    #[test]
+    fn shuffle_repeat_one_and_all_obey_album_boundaries() {
+        let songs = (0..3).map(|index| Song {
+            path: PathBuf::from(format!("{index}.mp3")),
+            title: format!("{index}"), artist: "artist".into(),
+            disc: 1, track: Some(index as u16 + 1),
+        }).collect();
+        let mut music = Music::with_library(Library {
+            albums: vec![Album {
+                title: "Album".into(), artist: "artist".into(),
+                release_date: None, songs,
+            }], artists: vec![],
+        });
+        music.open_page(Page::Album(0));
+        music.start(0);
+        music.input(Action::GbaDown(Btn::Y));
+        music.settings.repeat = RepeatMode::One;
+        music.advance_at_end(0);
+        assert_eq!(music.playing_position(), Some((0, 3)),
+            "Repeat One replays this song, regardless of shuffle");
+        music.settings.repeat = RepeatMode::All;
+        let order = music.shuffle_order.clone();
+        for index in order.iter().skip(1) {
+            let current = music.track.as_ref().unwrap().index;
+            music.advance_at_end(current);
+            assert_eq!(music.track.as_ref().unwrap().index, *index);
+        }
+        let last = music.track.as_ref().unwrap().index;
+        music.advance_at_end(last);
+        assert_eq!(music.playing_position().unwrap().1, 3);
+        assert_ne!(music.track.as_ref().unwrap().index, last,
+            "Repeat All begins a reshuffled cycle without repeating the last song");
+    }
+
+    #[test]
+    fn shuffle_toggle_works_with_empty_now_playing_and_persists() {
+        let root = tempfile::tempdir().unwrap();
+        let mut music = Music::with_library(Library::default());
+        music.settings_root = Some(root.path().to_path_buf());
+        music.now_playing_view = true;
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.shuffle_enabled());
+        assert!(music.showing_now_playing());
+        assert!(MusicSettings::load(root.path()).shuffle);
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(!music.shuffle_enabled());
+        assert!(!MusicSettings::load(root.path()).shuffle);
     }
 
     #[test]

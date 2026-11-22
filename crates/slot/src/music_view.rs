@@ -53,6 +53,9 @@ const PLAYING_COVER_Y: f32 = 113.0;
 const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
+// Bottom-right repeat mode stays clear of elapsed/total time and progress.
+const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - 78.0;
+const REPEAT_BADGE_Y: f32 = OUT_H as f32 - 46.0;
 const FLOW_SLOTS: usize = 7;
 // ClassiPod Original: 400 ms ease-out-sine, a 0.95 radian Y rotation,
 // 22% side scale reduction, and perspective coefficient 0.35 / cover size.
@@ -406,9 +409,6 @@ impl Painter<'_> {
     fn browser(&mut self, music: &Music, album_art: &[Option<(TexId, [u32; 2])>; ROWS]) {
         if music.is_root() {
             self.music_tabs(if music.viewing_artists() { 2 } else { 1 });
-            if !music.viewing_artists() {
-                self.text_right("x covers", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
-            }
         } else {
             self.heading(music.label());
         }
@@ -470,7 +470,6 @@ impl Painter<'_> {
         // Match the Artists tab: selected navigation labels are charcoal,
         // while inactive labels stay muted. Rose is for row selection.
         self.music_tabs(1);
-        self.text_right("x list", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
 
         let mut order = [0usize, 1, 2, 3, 4, 5, 6];
         order.sort_by(|&a, &b| {
@@ -518,8 +517,7 @@ impl Painter<'_> {
     /// requiring a new font or rasterized asset. Off is muted; active modes
     /// use Slot's dusty rose, with text for accessible state distinction.
     fn repeat_badge(&mut self, mode: RepeatMode) {
-        let x = OUT_W as f32 - EDGE - 154.0;
-        let y = TITLE_TOP + 1.0;
+        let (x, y) = (REPEAT_BADGE_X, REPEAT_BADGE_Y);
         let ink = if mode == RepeatMode::Off { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
         let colour = [
             ink[0] as f32 / 255.0, ink[1] as f32 / 255.0,
@@ -539,9 +537,7 @@ impl Painter<'_> {
             self.rect([x + dx, y + dy], [w, h], colour);
         }
         let label = if mode == RepeatMode::One { "1" } else { mode.label() };
-        self.text_with_room(label, 18, [x + 35.0, y + 1.0], ink, 55);
-        self.text_with_room("x repeat", 14, [x + 93.0, y + 3.0],
-            MUSIC_MUTED_INK, 92);
+        self.text_with_room(label, 18, [x + 33.0, y + 1.0], ink, 44);
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>) {
@@ -600,9 +596,8 @@ impl Painter<'_> {
             state, 15, [PLAYING_INFO_X, 306.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
 
-        // The transport remains physical-button driven (A, B, left/right,
-        // L1/R1). Put the seek indicator at the bottom instead of adding
-        // faux touch controls or changing playback behaviour.
+        // The progress line is informational only, not a seek control.
+        // Left/Right change tracks; L1/R1 switch Music sections.
         let width = OUT_W as f32 - 2.0 * EDGE;
         self.rect([EDGE, PLAYING_PROGRESS_Y], [width, 4.0], MUSIC_PROGRESS_TRACK);
         if let Some((elapsed, total)) = track.time() {
@@ -633,10 +628,6 @@ impl Painter<'_> {
     /// directions change a selected row, B returns to playback/browser.
     fn settings(&mut self, music: &Music) {
         self.heading("music settings");
-        self.text_with_room(
-            "start / b back", 15, [EDGE, TITLE_TOP + 36.0],
-            MUSIC_MUTED_INK, 220,
-        );
         let volume = format!("{}%", music.settings_max_volume());
         let dim_brightness = format!("{}/{}", music.dim_brightness(), BRIGHTNESS_MAX);
         let values = [
@@ -696,7 +687,7 @@ impl Painter<'_> {
         self.music_tabs(0);
         self.text("nothing playing", 25, [EDGE, 177.0]);
         self.text_ink(
-            "press b or r1 to browse albums", 18, [EDGE, 218.0], MUSIC_MUTED_INK,
+            "choose an album to start listening", 18, [EDGE, 218.0], MUSIC_MUTED_INK,
         );
     }
 
@@ -992,6 +983,16 @@ mod album_thumbnail_layout_tests {
         );
         assert_eq!(view.ready_album_tint(first), Some([210, 95, 60]));
         assert_eq!(view.ready_album_tint(other), None);
+    }
+
+    #[test]
+    fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
+        assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
+            "repeat must sit below the progress bar and timestamps");
+        assert!(REPEAT_BADGE_X + 77.0 <= OUT_W as f32 - EDGE,
+            "repeat icon and state must stay inside the right margin");
+        assert!(REPEAT_BADGE_Y + 28.0 < OUT_H as f32,
+            "repeat icon must stay on screen");
     }
 
     #[test]

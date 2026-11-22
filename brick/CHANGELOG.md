@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Fixed: empty Now Playing no longer changes to Albums when pressing D-pad Right or A. Use L1/R1 to switch Music sections; B remains Back.
 - Music controls: L1/R1 cycle Now Playing, Albums and Artists; D-pad Left/Right switch tracks instead of seeking. Removed on-screen button hints and moved the repeat indicator to the bottom-right.
 - Music has a Now Playing section alongside Albums and Artists. Press B to browse without stopping the song, and return from Albums with L1. Music also shows the same clock, battery, Wi-Fi and update indicators as the shelf.
 - Music Settings → Dim brightness: choose the screen backlight level (1–9) used after the music dim timer, independently of normal brightness. Defaults to the lowest nonzero level.

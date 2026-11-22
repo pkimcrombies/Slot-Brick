@@ -5,10 +5,12 @@ use std::ptr::NonNull;
 use slot_input::{Action, Btn};
 
 use crate::audio::{volume, Ring};
-use crate::music_library::{Library, Scan, Song};
+use crate::music_library::{Album, Library, Scan, Song};
+use crate::music_m4a::{is_m4a, M4aDecoder};
 use crate::resample::Resampler;
 
 const CHUNK: usize = 512;
+const SEEK_SECONDS: i32 = 10;
 
 unsafe extern "C" {
     fn slot_mp3_open(
@@ -18,21 +20,44 @@ unsafe extern "C" {
         duration: *mut u64,
     ) -> *mut c_void;
     fn slot_mp3_read(mp3: *mut c_void, samples: *mut i16, frames: u32) -> u32;
+    fn slot_mp3_seek(mp3: *mut c_void, frame: u64, position: *mut u64) -> i32;
     fn slot_mp3_close(mp3: *mut c_void);
 }
 
+enum MusicDecoder {
+    Mp3(Mp3),
+    M4a(Box<M4aDecoder>),
+}
+
+struct Mp3(NonNull<c_void>);
+
+// The MP3 handle owns its file and decoder with no thread affinity. Calls require exclusive access.
+unsafe impl Send for Mp3 {}
+
+impl Drop for Mp3 {
+    fn drop(&mut self) {
+        unsafe { slot_mp3_close(self.0.as_ptr()) };
+    }
+}
+
 struct Decoder {
-    raw: NonNull<c_void>,
+    decoder: MusicDecoder,
     rate: u32,
     channels: usize,
     duration: u64,
 }
 
-// The handle owns a file and decoder with no thread affinity. Calls require exclusive access.
-unsafe impl Send for Decoder {}
-
 impl Decoder {
     fn open(path: &Path) -> Option<Self> {
+        if is_m4a(path) {
+            let m4a = Box::new(M4aDecoder::open(path)?);
+            return Some(Self {
+                rate: m4a.rate,
+                channels: m4a.channels,
+                duration: m4a.duration,
+                decoder: MusicDecoder::M4a(m4a),
+            });
+        }
         #[cfg(unix)]
         let path = {
             use std::os::unix::ffi::OsStrExt;
@@ -58,7 +83,7 @@ impl Decoder {
             )
         })?;
         let decoder = Self {
-            raw,
+            decoder: MusicDecoder::Mp3(Mp3(raw)),
             rate,
             channels: channels as usize,
             duration,
@@ -67,8 +92,12 @@ impl Decoder {
     }
 
     fn read_stereo(&mut self, samples: &mut [i16; CHUNK * 2]) -> usize {
-        let frames = unsafe { slot_mp3_read(self.raw.as_ptr(), samples.as_mut_ptr(), CHUNK as u32) }
-            as usize;
+        let frames = match &mut self.decoder {
+            MusicDecoder::Mp3(raw) => unsafe {
+                slot_mp3_read(raw.0.as_ptr(), samples.as_mut_ptr(), CHUNK as u32) as usize
+            },
+            MusicDecoder::M4a(decoder) => decoder.read(&mut samples[..CHUNK * self.channels]),
+        };
         if self.channels == 1 {
             for i in (0..frames).rev() {
                 let sample = samples[i];
@@ -77,17 +106,24 @@ impl Decoder {
         }
         frames
     }
-}
 
-impl Drop for Decoder {
-    fn drop(&mut self) {
-        unsafe { slot_mp3_close(self.raw.as_ptr()) };
+    /// Seek to a source frame, returning the actual position and whether the stream ended.
+    fn seek(&mut self, frame: u64) -> Option<(u64, bool)> {
+        match &mut self.decoder {
+            MusicDecoder::Mp3(raw) => {
+                let mut position = 0;
+                let result = unsafe { slot_mp3_seek(raw.0.as_ptr(), frame, &mut position) };
+                (result >= 0).then_some((position, result == 0))
+            }
+            MusicDecoder::M4a(decoder) => decoder.seek(frame).map(|position| (position, false)),
+        }
     }
 }
 
 struct Playback {
     decoder: Decoder,
     resampler: Resampler,
+    output_rate: u32,
     submitted: u64,
     output: Vec<i16>,
 }
@@ -98,9 +134,30 @@ impl Playback {
         Some(Self {
             resampler: Resampler::new(f64::from(decoder.rate), f64::from(output_rate)),
             decoder,
+            output_rate,
             submitted: 0,
             output: Vec::new(),
         })
+    }
+
+    fn seek_by(&mut self, seconds: i32, ring: &Ring) -> Option<bool> {
+        let source_rate = u64::from(self.decoder.rate);
+        let queued = ring.queued_frames() as u64 * source_rate / u64::from(self.output_rate);
+        let current = self.submitted.saturating_sub(queued);
+        let target = current.saturating_add_signed(i64::from(seconds) * source_rate as i64);
+        let duration = self.decoder.duration;
+        let (position, at_end) = if duration != 0 && target >= duration {
+            (duration, true)
+        } else {
+            self.decoder.seek(target)?
+        };
+        if at_end && duration == 0 {
+            self.decoder.duration = position;
+        }
+        ring.discard();
+        self.submitted = position;
+        self.resampler = Resampler::new(f64::from(self.decoder.rate), f64::from(self.output_rate));
+        Some(at_end)
     }
 
     fn fill(&mut self, ring: &Ring, level: u8) -> bool {
@@ -138,6 +195,7 @@ pub(crate) struct Track {
     pub(crate) status: Status,
     playback: Option<Playback>,
     ending: bool,
+    seek_seconds: i32,
 }
 
 impl Track {
@@ -258,10 +316,14 @@ impl Music {
     }
 
     pub(crate) fn song(&self, track: &Track) -> &Song {
+        &self.playing_album().songs[track.index]
+    }
+
+    pub(crate) fn playing_album(&self) -> &Album {
         let Page::Album(album) = self.location().page else {
             unreachable!("playback has an album open")
         };
-        &self.library.albums[album].songs[track.index]
+        &self.library.albums[album]
     }
 
     fn selected_album(&self) -> Option<usize> {
@@ -274,10 +336,9 @@ impl Music {
         }
     }
 
-    pub(crate) fn can_play_album(&self) -> bool {
-        self.selected_album().is_some()
+    pub(crate) fn viewing_artists(&self) -> bool {
+        matches!(self.location().page, Page::Artists)
     }
-
     pub(crate) fn playing(&self) -> bool {
         self.track
             .as_ref()
@@ -291,6 +352,7 @@ impl Music {
             status: Status::Loading,
             playback: None,
             ending: false,
+            seek_seconds: 0,
         });
         self.discard_audio = true;
     }
@@ -318,12 +380,14 @@ impl Music {
                     Status::Finished | Status::Unreadable | Status::NoAudio => self.start(index),
                     Status::Loading => {}
                 },
-                Action::GbaDown(Btn::L1 | Btn::Left) | Action::ShelfLeft => {
-                    self.switch(index, false)
+                Action::GbaDown(Btn::Left) => {
+                    track.seek_seconds = track.seek_seconds.saturating_sub(SEEK_SECONDS);
                 }
-                Action::GbaDown(Btn::R1 | Btn::Right) | Action::ShelfRight => {
-                    self.switch(index, true)
+                Action::GbaDown(Btn::Right) => {
+                    track.seek_seconds = track.seek_seconds.saturating_add(SEEK_SECONDS);
                 }
+                Action::GbaDown(Btn::L1) | Action::ShelfLeft => self.switch(index, false),
+                Action::GbaDown(Btn::R1) | Action::ShelfRight => self.switch(index, true),
                 Action::GbaDown(Btn::B) => {
                     self.track = None;
                     self.discard_audio = true;
@@ -337,15 +401,18 @@ impl Music {
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
-            Action::GbaDown(Btn::L1 | Btn::R1) if self.is_root() => {
-                self.browse[0] = Location {
-                    page: if matches!(self.location().page, Page::Albums) {
-                        Page::Artists
-                    } else {
-                        Page::Albums
-                    },
-                    cursor: 0,
+            Action::GbaDown(btn @ (Btn::L1 | Btn::R1 | Btn::Left | Btn::Right)) if self.is_root() => {
+                let artists = match btn {
+                    Btn::Left => false,
+                    Btn::Right => true,
+                    _ => !self.viewing_artists(),
                 };
+                if artists != self.viewing_artists() {
+                    self.browse[0] = Location {
+                        page: if artists { Page::Artists } else { Page::Albums },
+                        cursor: 0,
+                    };
+                }
             }
             Action::GbaDown(Btn::A) if self.row_count() > 0 => match self.location().page {
                 Page::Album(_) => self.start(self.cursor()),
@@ -397,6 +464,21 @@ impl Music {
             } else {
                 Status::Unreadable
             };
+        }
+        let seek = std::mem::take(&mut track.seek_seconds);
+        if seek != 0 {
+            if let Some(at_end) = track
+                .playback
+                .as_mut()
+                .and_then(|playback| playback.seek_by(seek, ring))
+            {
+                track.ending = false;
+                if at_end {
+                    track.status = Status::Finished;
+                } else if track.status == Status::Finished {
+                    track.status = Status::Paused;
+                }
+            }
         }
         if track.status != Status::Playing {
             return;
@@ -462,6 +544,56 @@ mod tests {
 
     fn syncsafe(len: usize) -> [u8; 4] {
         [21, 14, 7, 0].map(|shift| ((len >> shift) & 127) as u8)
+    }
+
+    #[test]
+    fn m4a_files_use_itunes_tags_and_decode_mono_aac_and_stereo_alac() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        fs::create_dir(&folder).unwrap();
+        // Synthetic 440 Hz tones with distinct track and album artist tags.
+        for (name, bytes, channels) in [
+            ("one.M4A", include_bytes!("../tests/fixtures/music/aac.m4a").as_slice(), 1),
+            ("two.m4a", include_bytes!("../tests/fixtures/music/alac.m4a").as_slice(), 2),
+        ] {
+            let path = folder.join(name);
+            fs::write(&path, bytes).unwrap();
+            let mut decoder = Decoder::open(&path).expect("supported m4a");
+            assert_eq!((decoder.rate, decoder.channels), (44_100, channels));
+            assert!(decoder.duration > 0);
+            let mut samples = [0; CHUNK * 2];
+            let mut has_audio = false;
+            let mut total = 0;
+            loop {
+                let frames = decoder.read_stereo(&mut samples);
+                if frames == 0 {
+                    break;
+                }
+                total += frames;
+                assert!(total < 44_100);
+                has_audio |= samples[..2 * frames].iter().any(|&sample| sample != 0);
+                if channels == 1 {
+                    assert!(samples[..2 * frames].chunks_exact(2).all(|pair| pair[0] == pair[1]));
+                }
+            }
+            assert!(has_audio && total > CHUNK);
+            let (position, ended) = decoder.seek(4_600).expect("m4a forward seek");
+            assert!(!ended && position > 0 && position <= 4_600);
+            assert!(decoder.read_stereo(&mut samples) > 0);
+            assert_eq!(decoder.seek(0), Some((0, false)));
+            assert!(decoder.read_stereo(&mut samples) > 0);
+        }
+
+        let library = Library::scan(root.path(), || false);
+        assert_eq!(library.albums.len(), 1);
+        assert_eq!(library.artists[0].name, "Album Artist");
+        let album = &library.albums[0];
+        assert_eq!(album.title, "Fixture Album");
+        assert_eq!(album.songs.len(), 2);
+        for song in &album.songs {
+            assert_eq!((song.title.as_str(), song.artist.as_str()), ("Fixture Track", "Guest Artist"));
+            assert_eq!((song.disc, song.track), (2, Some(3)));
+        }
     }
 
     #[test]
@@ -535,6 +667,10 @@ mod tests {
             "albums with the same title use the album artist to distinguish them"
         );
         assert_eq!(music.row(1), ("Mixtape", Some("Various Artists")));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.label(), "artists");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.label(), "albums");
         music.input(Action::GbaDown(Btn::R1));
         assert_eq!(music.label(), "artists");
         assert_eq!(music.row_count(), 2);
@@ -620,6 +756,56 @@ mod tests {
         assert!(!music.input(Action::GbaDown(Btn::B)));
         assert!(music.is_root());
         assert!(music.input(Action::GbaDown(Btn::B)));
+    }
+
+    #[test]
+    fn dpad_seeks_without_changing_tracks_and_keeps_paused_audio_paused() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Music");
+        fs::create_dir(&folder).unwrap();
+        let first = folder.join("01.mp3");
+        silent_mp3(&first, 2);
+        fs::write(&first, fs::read(&first).unwrap().repeat(100)).unwrap();
+        silent_mp3(&folder.join("02.mp3"), 2);
+
+        let mut music = test_music(root.path());
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        music.input(Action::GbaDown(Btn::Y));
+        music.update_audio(&ring, 80);
+        music.input(Action::GbaDown(Btn::Right));
+        music.update_audio(&ring, 80);
+        let track = music.track.as_ref().unwrap();
+        assert_eq!(track.index, 0);
+        assert!((9.9..10.2).contains(&track.time().unwrap().0));
+
+        music.input(Action::GbaDown(Btn::A));
+        music.input(Action::GbaDown(Btn::Left));
+        music.update_audio(&ring, 80);
+        let track = music.track.as_ref().unwrap();
+        assert_eq!(track.index, 0);
+        assert!(!music.playing());
+        assert_eq!(track.time().unwrap().0, 0.0);
+        assert_eq!(ring.queued_frames(), 0);
+
+        for _ in 0..4 {
+            music.input(Action::GbaDown(Btn::Right));
+            music.update_audio(&ring, 80);
+        }
+        let track = music.track.as_ref().unwrap();
+        assert_eq!(track.index, 0);
+        assert!(matches!(track.status, Status::Finished));
+        let (elapsed, total) = track.time().unwrap();
+        assert_eq!(Some(elapsed), total);
+
+        music.input(Action::GbaDown(Btn::Left));
+        music.update_audio(&ring, 80);
+        let track = music.track.as_ref().unwrap();
+        assert!(matches!(track.status, Status::Paused));
+        assert!((elapsed - track.time().unwrap().0 - 10.0).abs() < 0.001);
+        music.input(Action::GbaDown(Btn::R1));
+        music.update_audio(&ring, 80);
+        assert_eq!(music.track.as_ref().unwrap().index, 1);
     }
 
     #[test]

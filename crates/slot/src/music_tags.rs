@@ -13,6 +13,9 @@ pub(crate) struct Tags {
 }
 
 pub(crate) fn read(path: &Path) -> Tags {
+    if crate::music_m4a::is_m4a(path) {
+        return read_m4a(path).unwrap_or_default();
+    }
     let mut tags = Tags::default();
     if let Ok(mut file) = File::open(path) {
         let _ = id3v2(&mut file, &mut tags);
@@ -27,15 +30,40 @@ pub(crate) fn read(path: &Path) -> Tags {
     tags
 }
 
-fn id3v2(file: &mut File, tags: &mut Tags) -> Option<()> {
-    let mut header = [0; 10];
-    file.read_exact(&mut header).ok()?;
+fn read_m4a(path: &Path) -> Option<Tags> {
+    use symphonia::core::meta::StandardTagKey::*;
+
+    let mut format = crate::music_m4a::format(path)?;
+    let metadata = format.metadata();
+    let mut tags = Tags::default();
+    for tag in metadata.current()?.tags() {
+        match tag.std_key {
+            Some(TrackTitle) => tags.title = clean(tag.value.to_string()),
+            Some(Artist) => tags.artist = clean(tag.value.to_string()),
+            Some(Album) => tags.album = clean(tag.value.to_string()),
+            Some(AlbumArtist) => tags.album_artist = clean(tag.value.to_string()),
+            Some(DiscNumber) => tags.disc = number(&tag.value.to_string()),
+            Some(TrackNumber) => tags.track = number(&tag.value.to_string()),
+            _ => {}
+        }
+    }
+    Some(tags)
+}
+pub(crate) fn id3v2_size(header: &[u8; 10]) -> Option<usize> {
     let version = header[3];
     let flags = header[5];
     if &header[..3] != b"ID3" || !matches!(version, 2..=4) || (version == 2 && flags & 0x40 != 0) {
         return None;
     }
-    let size = syncsafe(&header[6..])? as usize;
+    Some(syncsafe(&header[6..])? as usize)
+}
+
+fn id3v2(file: &mut File, tags: &mut Tags) -> Option<()> {
+    let mut header = [0; 10];
+    file.read_exact(&mut header).ok()?;
+    let size = id3v2_size(&header)?;
+    let version = header[3];
+    let flags = header[5];
     if size as u64 > file.metadata().ok()?.len().saturating_sub(10) {
         return None;
     }

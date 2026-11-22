@@ -4,8 +4,6 @@ pub use fontdue::Font;
 use fontdue::FontSettings;
 
 const LABEL_TTF: &[u8] = include_bytes!("../assets/label.ttf");
-// Open Sans Regular from googlefonts/opensans at bd7e376. Licensed by label.ttf.OFL.txt.
-const MENU_TTF: &[u8] = include_bytes!("../assets/menu.ttf");
 
 pub struct Layout {
     pub lines: Vec<String>,
@@ -18,6 +16,29 @@ impl Layout {
         self.px *= scale;
         self.tracking *= scale;
         self
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Case {
+    Upper,
+    Lower,
+}
+
+impl Case {
+    pub(crate) fn fit_line(
+        self,
+        font: &Font,
+        text: &str,
+        width: f32,
+        max_px: f32,
+        min_px: f32,
+    ) -> Layout {
+        let text = match self {
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+        };
+        fit_cased(font, &text, width, f32::INFINITY, 1, max_px, min_px)
     }
 }
 
@@ -47,17 +68,11 @@ pub fn label_font() -> Option<&'static Font> {
     FOR_NOW.with(|f| f.get()).or_else(|| CHOSEN.get()).or_else(built_in)
 }
 
-pub fn menu_font() -> Option<&'static Font> {
-    static MENU: OnceLock<Option<Font>> = OnceLock::new();
-    FOR_NOW.with(|f| f.get()).or_else(|| CHOSEN.get()).or_else(|| {
-        MENU.get_or_init(|| Font::from_bytes(MENU_TTF, FontSettings::default()).ok()).as_ref()
-    }).or_else(built_in)
-}
-
 pub(crate) fn menu_line(font: &Font, text: &str, width: f32, px: f32) -> Layout {
-    let mut lines = wrap(font, text, px, 0.0, width, true);
+    let tracking = tracking_for(px);
+    let mut lines = wrap(font, text, px, tracking, width, true);
     lines.truncate(1);
-    Layout { lines, px, tracking: 0.0 }
+    Layout { lines, px, tracking }
 }
 
 /// `draw`, with its text in `font` (the Font row names each font in itself).

@@ -26,6 +26,18 @@ unsigned slot_mp3_read(drmp3 *mp3, drmp3_int16 *samples, unsigned frames) {
     return (unsigned)drmp3_read_pcm_frames_s16(mp3, frames, samples);
 }
 
+/* Positions here count audible frames, excluding the encoder's leading delay. */
+int slot_mp3_seek(drmp3 *mp3, drmp3_uint64 frame, drmp3_uint64 *position) {
+    drmp3_uint64 current = mp3->currentPCMFrame;
+    current = current > mp3->delayInPCMFrames ? current - mp3->delayInPCMFrames : 0;
+    if (frame < current) {
+        if (!drmp3_seek_to_pcm_frame(mp3, 0)) return -1;
+        current = 0;
+    }
+    *position = current + drmp3_read_pcm_frames_s16(mp3, frame - current, NULL);
+    return *position == frame;
+}
+
 void slot_mp3_close(drmp3 *mp3) {
     drmp3_uninit(mp3);
     free(mp3);

@@ -1,9 +1,8 @@
 use crate::draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
-use crate::menu_style::{draw_menu_cursor, draw_menu_hints, menu_hint_face_scaled, MENU_BACKGROUND,
-    MENU_MUTED_INK, MENU_ROSE_INK, MENU_TEXT_INK};
+use crate::menu_style::{MENU_BACKGROUND, MENU_SELECTION_INK};
 use crate::plate::{UndoFace, LEGEND_Y};
 use crate::power_menu::{MENU_H, MENU_INK, MENU_PAD, MENU_PX};
-use crate::text;
+use crate::text::{self, Case};
 
 /// The Brick Pro: set once at startup, it adds the Brick Pro's own rows (the stick lights).
 static BRICK_PRO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -686,48 +685,52 @@ impl QuickValue {
     }
 }
 
-pub const QUICK_PITCH: f32 = 52.0;
-pub const QUICK_TOP: f32 = 108.0;
+pub const QUICK_PITCH: f32 = 48.0;
+pub const QUICK_TOP: f32 = quick_top(QuickRow::MAIN.len());
 
-/// Row spacing for a page of `rows`: QUICK_PITCH, or tighter for a page that would
-/// otherwise run into the legend (the Brick's main menu).
+/// Row spacing for a page of `rows`, with room for the system overlay below it.
 pub const fn quick_pitch(rows: usize) -> f32 {
-    let fit = ((QUICK_SPLIT - QUICK_TOP - 6.0) / rows as f32) as u32 as f32;
+    let fit = ((QUICK_SPLIT - OUT_H as f32 / 2.0) * 2.0 / rows as f32) as u32 as f32;
     if fit < QUICK_PITCH { fit } else { QUICK_PITCH }
 }
-pub const QUICK_EDGE: f32 = 70.0;
-const HEADER_EDGE: f32 = QUICK_EDGE - 20.0;
-const HEADER_TOP: f32 = 42.0;
-const QUICK_PX: f32 = 26.0;
+pub const fn quick_top(rows: usize) -> f32 {
+    (OUT_H as f32 - quick_pitch(rows) * rows as f32) / 2.0
+}
+
+pub const QUICK_EDGE: f32 = 32.0;
+pub const QUICK_VALUE_EDGE: f32 = (OUT_W * 54 / 100) as f32;
+pub const QUICK_LIST_PX: f32 = 26.0;
 const CARET_PX: f32 = 24.0;
 pub const QUICK_SPLIT: f32 = LEGEND_Y - 2.0;
 pub const QUICK_TEXT_H: u32 = MENU_H;
+const DIM_INK: [u8; 3] = [0x9a, 0x9a, 0xa4];
 
 pub fn quick_label_face(row: QuickRow) -> UndoFace {
-    quick_label_face_scaled(row, false, [1.0, 1.0]).0
+    menu_row_face_scaled(row.label(), false, [1.0, 1.0]).0
 }
 
 pub fn quick_value_face(text: &str, lit: bool) -> UndoFace {
     quick_value_face_scaled(text, lit, [1.0, 1.0]).0
 }
 
-pub fn quick_label_face_scaled(row: QuickRow, active: bool, scale: [f32; 2]) -> (UndoFace, u32) {
-    quick_text_face(row.label(), if active { MENU_ROSE_INK } else { MENU_TEXT_INK }, scale)
+pub fn menu_row_face_scaled(label: &str, selected: bool, scale: [f32; 2]) -> (UndoFace, u32) {
+    let room = QUICK_VALUE_EDGE - QUICK_EDGE - 24.0;
+    quick_text_face(label, room, 20.0, if selected { MENU_SELECTION_INK } else { MENU_INK }, scale)
 }
 
 pub fn quick_value_face_scaled(text: &str, lit: bool, scale: [f32; 2]) -> (UndoFace, u32) {
-    quick_text_face(text, if lit { MENU_ROSE_INK } else { MENU_MUTED_INK }, scale)
+    quick_text_face(text, OUT_W as f32, QUICK_LIST_PX, if lit { MENU_SELECTION_INK } else { DIM_INK }, scale)
 }
 
-fn quick_text_face(label: &str, colour: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
-    let Some(font) = text::menu_font() else {
+fn quick_text_face(label: &str, room: f32, min_px: f32, colour: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFace, u32) {
+    let Some(font) = text::label_font() else {
         return (UndoFace {
             rgba: Vec::new(),
             w: 0,
             h: 0,
         }, 0);
     };
-    let layout = text::menu_line(font, &label.to_lowercase(), OUT_W as f32, QUICK_PX);
+    let layout = Case::Lower.fit_line(font, label, room, QUICK_LIST_PX, min_px);
     let set = layout
         .lines
         .iter()
@@ -737,20 +740,13 @@ fn quick_text_face(label: &str, colour: [u8; 3], [sx, sy]: [f32; 2]) -> (UndoFac
     let w = (width as f32 * sx).round() as u32;
     let h = (MENU_H as f32 * sy).round() as u32;
     let mut rgba = vec![0u8; (w * h * 4) as usize];
-    text::in_font(font, || text::draw_centred(&mut rgba, w, h, &layout.scaled(sy), colour));
+    text::draw_centred(&mut rgba, w, h, &layout.scaled(sy), colour);
     (UndoFace { rgba, w, h }, width)
 }
 
-/// The least space kept between a row's label and its value.
-const VALUE_GAP: f32 = 28.0;
-
-/// The widest value face that fits beside this label.
-pub fn quick_value_room(label_w: u32) -> u32 {
-    let pad = MENU_PAD as f32;
-    let right = OUT_W as f32 - QUICK_EDGE;
-    let label_end = QUICK_EDGE + label_w as f32 - 2.0 * pad;
-    let room = right + 2.0 * pad - label_end - VALUE_GAP;
-    room.max(0.0) as u32
+/// Maximum width of a value face, including its two transparent text margins.
+pub const fn quick_value_room() -> u32 {
+    OUT_W - QUICK_EDGE as u32 - QUICK_VALUE_EDGE as u32 + 2 * MENU_PAD
 }
 
 pub fn quick_caret_face(right: bool) -> UndoFace {
@@ -794,34 +790,11 @@ pub fn quick_caret_face_scaled(right: bool, [sx, sy]: [f32; 2]) -> (UndoFace, u3
     (UndoFace { rgba, w, h }, width)
 }
 
-pub fn quick_legend_faces() -> [UndoFace; 4] {
-    quick_legend_faces_scaled([1.0, 1.0]).map(|(face, _)| face)
-}
-
-pub fn quick_legend_faces_scaled(scale: [f32; 2]) -> [(UndoFace, u32); 4] {
-    [
-        menu_hint_face_scaled("B", "back", scale),
-        menu_hint_face_scaled("‹ ›", "change", scale),
-        menu_hint_face_scaled("A", "open", scale),
-        menu_hint_face_scaled("A", "reset", scale),
-    ]
-}
-
 pub struct QuickMenuFaces {
     pub scale: [f32; 2],
     pub labels: Vec<[(TexId, u32, u32); 2]>,
     pub values: Vec<[(TexId, u32, u32); 2]>,
-    pub open: (TexId, u32, u32),
-    pub root: (TexId, u32, u32),
-    pub headings: Vec<Option<QuickHeading>>,
-    /// Back, Change, Open, Reset.
-    pub legend: [(TexId, u32); 4],
-}
-
-#[derive(Clone, Copy)]
-pub struct QuickHeading {
-    pub crumb: (TexId, u32, u32),
-    pub title: (TexId, u32, u32),
+    pub clock_back: (TexId, u32),
 }
 
 pub struct QuickMenu<'a> {
@@ -845,8 +818,6 @@ impl QuickMenu<'_> {
             h: OUT_H as f32,
             colour: MENU_BACKGROUND,
         });
-        let pitch = quick_pitch(self.row.page().len());
-        draw_menu_cursor(out, HEADER_EDGE, row_top(self.row) + pitch / 2.0);
         let Some(faces) = self.faces else {
             return;
         };
@@ -855,20 +826,15 @@ impl QuickMenu<'_> {
                 out.push(pixel_aligned_texture(tex, [x, y], [w as f32, h as f32], faces.scale, alpha));
             }
         };
-        if let Some(heading) = self.row.parent().and_then(|row| faces.headings.get(row.index())).copied().flatten() {
-            let (_, crumb_w, crumb_h) = heading.crumb;
-            let (_, _, title_h) = heading.title;
-            draw(heading.crumb, HEADER_EDGE, HEADER_TOP + (title_h as f32 - crumb_h as f32) / 2.0 + 3.0, 1.0);
-            draw(heading.title, HEADER_EDGE + crumb_w as f32 + 9.0, HEADER_TOP, 1.0);
-        } else {
-            draw(faces.root, HEADER_EDGE, HEADER_TOP, 1.0);
-        }
-        let (right, pad) = (OUT_W as f32 - QUICK_EDGE, MENU_PAD as f32);
-        for &row in self.row.page() {
-            let y = row_top(row) + (pitch - MENU_H as f32) / 2.0;
+        let page = self.row.page();
+        let pitch = quick_pitch(page.len());
+        let top = quick_top(page.len());
+        let pad = MENU_PAD as f32;
+        for (index, &row) in page.iter().enumerate() {
+            let y = top + index as f32 * pitch + (pitch - MENU_H as f32) / 2.0;
             let lit = row == self.row;
-            let alpha = if self.disabled[row.index()] { DISABLED_ALPHA } else { 1.0 };
             if let Some(labels) = faces.labels.get(row.index()) {
+                let alpha = if self.disabled[row.index()] { DISABLED_ALPHA } else { 1.0 };
                 draw(labels[lit as usize], QUICK_EDGE - pad, y, alpha);
             }
             let value = match row {
@@ -878,28 +844,11 @@ impl QuickMenu<'_> {
                     .and_then(|v| faces.values.get(v.index()))
                     .map(|v| v[lit as usize]),
             };
-            if let Some((tex, w, h)) = value {
-                draw((tex, w, h), right + pad - w as f32, y, alpha);
-            } else if row.opens() {
-                draw(faces.open, right + pad - faces.open.1 as f32, y, alpha);
+            if let Some(face) = value {
+                draw(face, QUICK_VALUE_EDGE - pad, y, 1.0);
             }
         }
-        let [back, change, open, reset] = faces.legend;
-        let other = match self.row {
-            QuickRow::ResetSettings => reset,
-            row if row.opens() => open,
-            _ => change,
-        };
-        let done = self.values[self.row.index()] == Some(QuickValue::ResetDone);
-        let only_back = self.disabled[self.row.index()] || done || self.row.info();
-        let hints: &[(TexId, u32)] = if only_back { &[back] } else { &[back, other] };
-        draw_menu_hints(out, hints, HEADER_EDGE, faces.scale);
     }
-}
-
-fn row_top(row: QuickRow) -> f32 {
-    let pitch = quick_pitch(row.page().len());
-    QUICK_TOP + pitch * row.position() as f32
 }
 
 const DISABLED_ALPHA: f32 = 0.35;

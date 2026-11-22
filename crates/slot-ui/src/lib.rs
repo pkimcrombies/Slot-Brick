@@ -1,5 +1,5 @@
 mod art;
-pub use art::{cover, label_fit};
+pub use art::{cover, cover_rgba, label_fit};
 mod backdrop;
 mod banner;
 mod barcode;
@@ -66,7 +66,10 @@ pub use label_grid::{
     label_grid_legend_faces, LabelGridView, GRID_COLS, GRID_ROWS, PAGE,
 };
 pub use draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
-pub use menu_style::{draw_menu_cursor, draw_menu_hints, menu_hint_face_scaled, menu_text_face, MENU_BACKGROUND, MENU_MUTED_INK, MENU_ROSE_INK, MENU_TEXT_INK};
+pub use menu_style::{
+    menu_hint_face_scaled, menu_text_face, MENU_BACKGROUND, MENU_MUTED_INK, MENU_SELECTION_INK,
+    MENU_TEXT_INK, SHELF_PINK,
+};
 pub use footer::{draw_footer, draw_footer_note, draw_status_bar, Printed, WIFI_PX};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, ALARM_BAND_H, HUD_ICON_PX,
@@ -87,9 +90,10 @@ pub use plate::{
 pub use polaroids::{photo_face, PhotoFace, Polaroids, DOT, LEGEND, PHOTO_H, PHOTO_W};
 pub use power_menu::{menu_face, swap_ab_text, PauseChoice, PowerChoice, MENU_PAD};
 pub use quick_menu::{
-    quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, quick_value_room, QuickMenu,
-    quick_caret_face_scaled, quick_label_face_scaled, quick_legend_faces_scaled, quick_value_face_scaled, QuickHeading, QUICK_TEXT_H,
-    QuickMenuFaces, QuickRow, QuickValue, quick_pitch, set_brick_pro, QUICK_EDGE, QUICK_PITCH, QUICK_SPLIT, QUICK_TOP,
+    menu_row_face_scaled, quick_caret_face, quick_caret_face_scaled, quick_label_face, quick_value_face,
+    quick_value_face_scaled, quick_value_room, QuickMenu, QuickMenuFaces, QuickRow, QuickValue,
+    quick_pitch, quick_top, set_brick_pro, QUICK_EDGE, QUICK_LIST_PX, QUICK_PITCH, QUICK_SPLIT,
+    QUICK_TEXT_H, QUICK_TOP, QUICK_VALUE_EDGE,
 };
 pub use rebuild::{rebuild_count_face, rebuild_title_face, RebuildScreen};
 pub use refusal::Refusal;

@@ -74,11 +74,12 @@ fn b_home_and_resume_each_go_back_to_the_game() {
 }
 
 #[test]
-fn the_menu_covers_the_game_in_the_case_materials() {
+fn the_menu_covers_the_game_with_a_black_background() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let mut a = app_playing_in(d.path(), "Emerald");
     let face = TexId::from_raw(970);
-    a.set_pause_menu_faces(vec![(face, 100, 40); PauseChoice::ALL.len()]);
+    let pink = TexId::from_raw(971);
+    a.set_pause_menu_faces(vec![[(face, 100, 40), (pink, 100, 40)]; PauseChoice::ALL.len()]);
     a.apply(Action::QuickMenu);
 
     let mut out = Vec::new();
@@ -86,17 +87,35 @@ fn the_menu_covers_the_game_in_the_case_materials() {
 
     let ground = out
         .iter()
-        .position(|d| matches!(d, Draw::Rect { colour, .. } if *colour == slot_ui::opening()));
+        .rposition(|d| matches!(d, Draw::Rect { colour, .. } if *colour == slot_ui::MENU_BACKGROUND));
     let ground = ground.expect("the menu drew no ground");
-    let rows = out[ground..]
+    let rows: Vec<_> = out[ground..]
         .iter()
-        .filter(|d| matches!(d, Draw::Tex { tex, .. } if *tex == face))
-        .count();
+        .filter_map(|d| match *d {
+            Draw::Tex { tex, x, .. } if tex == face || tex == pink => Some((tex, x)),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        rows,
+        rows.len(),
         PauseChoice::ALL.len(),
         "a row is missing over the ground"
     );
+    assert_eq!(rows[0].0, pink);
+    assert!(rows[1..].iter().all(|&(tex, _)| tex == face));
+    assert!(rows.iter().all(|&(_, x)| x + slot_ui::MENU_PAD as f32 == slot_ui::QUICK_EDGE));
+    assert!(!out[ground + 1..].iter().any(|draw| matches!(draw, Draw::Rect { colour, .. } if *colour == slot_ui::edge())));
+}
+
+#[test]
+fn pause_labels_are_lowercase_and_rasterized_at_display_scale() {
+    let (normal, logical) = slot_ui::menu_row_face_scaled("QUIT GAME", false, [1.0, 1.0]);
+    assert_ne!(normal.rgba, slot_ui::menu_face("quit game").rgba);
+
+    let (native, native_logical) = slot_ui::menu_row_face_scaled("QUIT GAME", false, [1.6, 1.6]);
+    assert_eq!(native_logical, logical);
+    assert_eq!(native.w, (logical as f32 * 1.6).round() as u32);
+    assert_eq!(native.h, (normal.h as f32 * 1.6).round() as u32);
 }
 
 #[test]

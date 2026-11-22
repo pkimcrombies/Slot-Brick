@@ -19,16 +19,27 @@ fn ink_columns(f: &UndoFace) -> (u32, u32) {
 }
 
 #[test]
-fn menu_labels_values_and_hints_are_measured_in_lowercase() {
-    let font = slot_ui::text::menu_font().unwrap();
-    let label = slot_ui::text::line_width(font, "sort by", 26.0, 0.0).ceil() as u32;
-    let value = slot_ui::text::line_width(font, "by console", 26.0, 0.0).ceil() as u32;
+fn menu_labels_and_values_use_the_smaller_lowercase_font() {
+    let font = slot_ui::text::label_font().unwrap();
+    let px = slot_ui::QUICK_LIST_PX;
+    let tracking = (px * 0.1).round();
+    let label = slot_ui::text::line_width(font, "sort by", px, tracking).ceil() as u32;
+    let value = slot_ui::text::line_width(font, "by console", px, tracking).ceil() as u32;
     assert_eq!(quick_label_face(QuickRow::LibrarySort).w, label + 2 * MENU_PAD);
     assert_eq!(quick_value_face("By Console", true).w, value + 2 * MENU_PAD);
+}
 
-    let back = slot_ui::text::line_width(font, "B back", 17.0, 0.0).ceil() as u32;
-    let hint_w = slot_ui::quick_legend_faces_scaled([1.6, 1.6])[0].1;
-    assert_eq!(hint_w, back + 4);
+#[test]
+fn music_and_quick_menu_measure_labels_with_the_same_font_and_spacing() {
+    let quick = quick_label_face(QuickRow::LibrarySort);
+    let (_, [width, _]) = slot_ui::menu_text_face(
+        "Sort By",
+        slot_ui::QUICK_LIST_PX as u32,
+        300,
+        [1.0, 1.0],
+        slot_ui::MENU_TEXT_INK,
+    );
+    assert_eq!(width - 4, quick.w - 2 * MENU_PAD);
 }
 
 #[test]
@@ -219,7 +230,7 @@ fn a_picker_for_a_set_clock_starts_at_the_local_time_and_its_offset() {
 }
 
 #[test]
-fn a_value_is_grey_until_its_row_is_in_hand() {
+fn the_selected_text_uses_the_darker_menu_pink() {
     let inkiest = |lit| {
         let f = quick_value_face("4×", lit);
         f.rgba
@@ -228,8 +239,10 @@ fn a_value_is_grey_until_its_row_is_in_hand() {
             .map(|p| [p[0], p[1], p[2]])
             .expect("an empty face")
     };
-    assert_eq!(inkiest(true), slot_ui::MENU_ROSE_INK);
-    assert_eq!(inkiest(false), slot_ui::MENU_MUTED_INK);
+    assert_eq!(inkiest(true), slot_ui::MENU_SELECTION_INK);
+    assert_eq!(inkiest(false), [0x9a, 0x9a, 0xa4]);
+    let (label, _) = slot_ui::menu_row_face_scaled("resume", true, [1.0, 1.0]);
+    assert!(label.rgba.chunks_exact(4).any(|p| p[..3] == slot_ui::MENU_SELECTION_INK && p[3] == 255));
 }
 
 #[test]
@@ -245,12 +258,10 @@ fn the_arrows_are_faces_the_height_of_a_value() {
 }
 
 #[test]
-fn a_long_label_leaves_less_room_for_its_value() {
-    use slot_ui::{quick_label_face, quick_value_room};
-    let label = quick_label_face(QuickRow::GbaOverlay).w;
-    let room = quick_value_room(label);
-    assert!(room > 200);
-    assert!(quick_value_room(quick_label_face(QuickRow::GbcOverlay).w) < room);
+fn built_in_values_fit_in_their_column() {
+    for value in QuickValue::ALL {
+        assert!(quick_value_face(value.text(), true).w <= slot_ui::quick_value_room(), "{value:?}");
+    }
 }
 
 #[test]

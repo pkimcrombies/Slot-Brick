@@ -8,8 +8,7 @@ use slot::app::{App, Phase};
 use slot_input::{Action, Btn};
 use slot_store::{read_slot_state, write_slot_state, Platform, Shader, SlotState};
 use slot_ui::{
-    Draw, Icon, QuickMenuFaces, QuickRow, QuickValue, TexId, MENU_PAD, OUT_W, QUICK_EDGE,
-    QUICK_TOP,
+    Draw, Icon, QuickMenuFaces, QuickRow, QuickValue, TexId, MENU_PAD, QUICK_EDGE, QUICK_VALUE_EDGE,
 };
 use tempfile::TempDir;
 
@@ -577,21 +576,18 @@ fn fake_faces_at(a: &mut App, scale: [f32; 2]) {
             .map(|i| [(id(100 + i), 200, 40), (id(1000 + i), 200, 40)])
             .collect(),
         values: (0..QuickValue::ALL.len())
-            .map(|i| [(id(200 + i), 60, 40), (id(210 + i), 60, 40)])
+            .map(|i| [(id(2000 + i), 60, 40), (id(3000 + i), 60, 40)])
             .collect(),
-        open: (id(300), 30, 40),
-        root: (id(410), 100, 40),
-        headings: Vec::new(),
-        legend: [(id(400), 70), (id(401), 110), (id(402), 80), (id(403), 80)],
+        clock_back: (id(400), 70),
     });
     a.set_quick_clock_faces((id(500), 150, 40), (id(501), 150, 40));
 }
 
 fn value(v: QuickValue, lit: bool) -> usize {
     if lit {
-        210 + v.index()
+        3000 + v.index()
     } else {
-        200 + v.index()
+        2000 + v.index()
     }
 }
 
@@ -615,13 +611,13 @@ fn drawn(out: &[Draw], id: usize) -> bool {
 }
 
 #[test]
-fn menu_labels_and_hints_land_on_display_pixels() {
+fn menu_labels_land_on_display_pixels() {
     let (_d, mut a, _) = on_carousel();
     let scale = [1.6, 1.6];
     fake_faces_at(&mut a, scale);
     a.apply(Action::QuickMenu);
     let out = frame(&a);
-    for id in [1000 + QuickRow::MAIN[0].index(), 400] {
+    for id in [1000 + QuickRow::MAIN[0].index(), 100 + QuickRow::MAIN[1].index()] {
         let [x, y, w, h] = placed(&out, id).unwrap();
         for pixels in [x * scale[0], y * scale[1], w * scale[0], h * scale[1]] {
             assert!((pixels - pixels.round()).abs() < 0.001, "{id}: {pixels}");
@@ -630,18 +626,14 @@ fn menu_labels_and_hints_land_on_display_pixels() {
 }
 
 #[test]
-fn the_legend_says_change_on_a_value_row_and_open_on_a_row_that_opens() {
+fn home_menu_leaves_the_footer_empty() {
     let (_d, mut a, _) = on_carousel();
     fake_faces(&mut a);
     a.apply(Action::QuickMenu);
     for row in QuickRow::MAIN {
         assert_eq!(a.quick_menu(), Some(row));
         let out = frame(&a);
-        // Cart Art, RetroAchievements and Update are greyed out with no Wi-Fi, as here: only BACK.
-        let usable = !matches!(row, QuickRow::CartArt | QuickRow::Achievements | QuickRow::Update);
-        assert!(drawn(&out, 400), "no B BACK on {row:?}");
-        assert_eq!(drawn(&out, 401), !row.opens(), "CHANGE on {row:?}");
-        assert_eq!(drawn(&out, 402), row.opens() && usable, "OPEN on {row:?}");
+        assert!(!drawn(&out, 400), "a button hint was drawn on {row:?}");
         press(&mut a, Btn::Down);
     }
 }
@@ -659,7 +651,7 @@ fn cart_art_and_retroachievements_do_nothing_while_wifi_is_off() {
 }
 
 #[test]
-fn the_selected_setting_uses_its_focused_value() {
+fn only_the_selected_rows_value_is_lit() {
     let (_d, mut a, _) = on_carousel();
     fake_faces(&mut a);
     open_at(&mut a, QuickRow::FastForward);
@@ -687,49 +679,34 @@ fn the_selected_setting_uses_its_focused_value() {
 }
 
 #[test]
-fn a_small_rose_cursor_marks_the_selected_row() {
+fn selecting_a_home_row_switches_its_text_without_drawing_a_bar() {
     let (_d, mut a, _) = on_carousel();
     fake_faces(&mut a);
     a.apply(Action::QuickMenu);
     for row in QuickRow::MAIN {
-        let bars: Vec<_> = frame(&a)
-            .into_iter()
-            .filter_map(|d| match d {
-                Draw::Rect { x, y, w, h, colour }
-                    if colour == [228.0 / 255.0, 205.0 / 255.0, 203.0 / 255.0, 1.0] =>
-                {
-                    Some([x, y, w, h])
-                }
-                _ => None,
-            })
-            .collect();
-        let pitch = slot_ui::quick_pitch(QuickRow::MAIN.len());
-        let top = QUICK_TOP + pitch * row.position() as f32;
-        assert_eq!(
-            bars,
-            vec![[QUICK_EDGE - 20.0, top + (pitch - 14.0) / 2.0, 3.0, 14.0]],
-            "{row:?}"
-        );
+        let out = frame(&a);
+        assert!(drawn(&out, 1000 + row.index()), "{row:?} has no selected text");
+        assert!(!drawn(&out, 100 + row.index()), "{row:?} drew its unselected text");
+        assert!(!out.iter().any(|draw| matches!(draw, Draw::Rect { colour, .. } if *colour == slot_ui::edge())));
         press(&mut a, Btn::Down);
     }
 }
 
 #[test]
-fn labels_and_values_keep_their_alignment_when_selected() {
+fn labels_and_values_each_have_a_fixed_left_edge() {
     let (_d, mut a, _) = on_carousel();
     fake_faces(&mut a);
     open_at(&mut a, QuickRow::FastForward);
     let out = frame(&a);
-    let right = OUT_W as f32 - QUICK_EDGE;
     for row in QuickRow::GAME {
         let base = if row == QuickRow::FastForward { 1000 } else { 100 };
         let [x, ..] = placed(&out, base + row.index()).expect("a label was not drawn");
         assert_eq!(x + MENU_PAD as f32, QUICK_EDGE, "{row:?}'s label");
     }
-    let [x, _, w, _] = placed(&out, value(QuickValue::On, false)).expect("rumble's value");
-    assert_eq!(x + w - MENU_PAD as f32, right, "an unselected value");
-    let [x, _, w, _] = placed(&out, value(QuickValue::Speed6, true)).expect("the selected value");
-    assert_eq!(x + w - MENU_PAD as f32, right, "the selected value");
+    let [x, ..] = placed(&out, value(QuickValue::On, false)).expect("rumble's value");
+    assert_eq!(x + MENU_PAD as f32, QUICK_VALUE_EDGE, "an unselected value");
+    let [selected_x, ..] = placed(&out, value(QuickValue::Speed6, true)).expect("selected value");
+    assert_eq!(selected_x, x, "selection moved the value");
 }
 
 #[test]

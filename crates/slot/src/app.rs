@@ -314,7 +314,7 @@ pub struct App {
     power_menu: Option<usize>,
     power_menu_faces: Vec<(TexId, u32, u32)>,
     pause_menu: Option<usize>,
-    pause_menu_faces: Vec<(TexId, u32, u32)>,
+    pause_menu_faces: Vec<[(TexId, u32, u32); 2]>,
     /// PauseChoice::Buttons drills into this one-row screen rather than closing the menu.
     pause_buttons: bool,
     /// Swap A/B's own row: off's face, then on's.
@@ -3242,12 +3242,13 @@ impl App {
 
     /// Share the Android Original NES pink across the carousel and its transitions.
     fn draw_shelf_background(out: &mut Vec<Draw>) {
+        let [r, g, b] = slot_ui::SHELF_PINK.map(|value| f32::from(value) / 255.0);
         out.push(Draw::Rect {
             x: 0.0,
             y: 0.0,
             w: OUT_W as f32,
             h: OUT_H as f32,
-            colour: [228.0 / 255.0, 205.0 / 255.0, 203.0 / 255.0, 1.0],
+            colour: [r, g, b, 1.0],
         });
     }
 
@@ -3342,7 +3343,7 @@ impl App {
 
     fn draw_scene(&self, out: &mut Vec<Draw>) {
         if let Some(index) = self.power_menu {
-            draw_menu_screen(&self.power_menu_faces, index, out);
+            draw_menu_screen(&self.power_menu_faces, index, slot_ui::opening(), [1.0, 1.0], out);
             return;
         }
         if self.shutting_down() {
@@ -3386,7 +3387,7 @@ impl App {
                     .quick_menu_faces
                     .as_ref()
                     .filter(|_| *from_menu)
-                    .map(|f| f.legend[0]);
+                    .map(|f| f.clock_back);
                 picker.draw(line, hint, back, out);
                 return;
             }
@@ -3509,17 +3510,18 @@ impl App {
             self.draw_game_menu(menu, out);
         }
         if let Some(index) = self.pause_menu() {
+            let scale = self.quick_menu_faces.as_ref().map_or([1.0, 1.0], |faces| faces.scale);
             if self.pause_buttons {
-                if let Some(face) = self.pause_buttons_faces.get(self.swap_ab() as usize) {
-                    draw_menu_screen(std::slice::from_ref(face), 0, out);
+                if let Some(&face) = self.pause_buttons_faces.get(self.swap_ab() as usize) {
+                    draw_pause_menu(&[[face, face]], 0, scale, out);
                 }
+            } else if self.platform == Platform::Psp {
+                let faces: Vec<_> = Self::PSP_PAUSE_ROWS.iter()
+                    .filter_map(|&row| self.pause_menu_faces.get(row).copied())
+                    .collect();
+                draw_pause_menu(&faces, index, scale, out);
             } else {
-                if self.platform == Platform::Psp {
-                    let faces: Vec<_> = Self::PSP_PAUSE_ROWS.iter().filter_map(|&i| self.pause_menu_faces.get(i).copied()).collect();
-                    draw_menu_screen(&faces, index, out);
-                } else {
-                    draw_menu_screen(&self.pause_menu_faces, index, out);
-                }
+                draw_pause_menu(&self.pause_menu_faces, index, scale, out);
             }
         }
         self.hud.draw(self.now(), out);
@@ -3615,7 +3617,7 @@ impl App {
         self.power_menu_faces = faces;
     }
 
-    pub fn set_pause_menu_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
+    pub fn set_pause_menu_faces(&mut self, faces: Vec<[(TexId, u32, u32); 2]>) {
         self.pause_menu_faces = faces;
     }
 
@@ -5985,21 +5987,56 @@ fn centred_top(rows: usize) -> f32 {
     (OUT_H as f32 - POWER_MENU_PITCH * rows as f32) / 2.0
 }
 
-fn draw_menu_screen(faces: &[(TexId, u32, u32)], index: usize, out: &mut Vec<Draw>) {
+fn draw_pause_menu(
+    faces: &[[(TexId, u32, u32); 2]],
+    selected: usize,
+    scale: [f32; 2],
+    out: &mut Vec<Draw>,
+) {
     out.push(Draw::Rect {
         x: 0.0,
         y: 0.0,
         w: OUT_W as f32,
         h: OUT_H as f32,
-        colour: slot_ui::opening(),
+        colour: slot_ui::MENU_BACKGROUND,
     });
-    draw_menu_rows(faces, Some(index), centred_top(faces.len()), out);
+    let pitch = slot_ui::quick_pitch(faces.len());
+    let top = slot_ui::quick_top(faces.len());
+    for (index, row) in faces.iter().enumerate() {
+        let (tex, w, h) = row[usize::from(index == selected)];
+        out.push(slot_ui::pixel_aligned_texture(
+            tex,
+            [slot_ui::QUICK_EDGE - slot_ui::MENU_PAD as f32,
+             top + pitch * index as f32 + (pitch - h as f32) / 2.0],
+            [w as f32, h as f32],
+            scale,
+            1.0,
+        ));
+    }
+}
+
+fn draw_menu_screen(
+    faces: &[(TexId, u32, u32)],
+    index: usize,
+    background: [f32; 4],
+    scale: [f32; 2],
+    out: &mut Vec<Draw>,
+) {
+    out.push(Draw::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: OUT_W as f32,
+        h: OUT_H as f32,
+        colour: background,
+    });
+    draw_menu_rows(faces, Some(index), centred_top(faces.len()), scale, out);
 }
 
 fn draw_menu_rows(
     faces: &[(TexId, u32, u32)],
     index: Option<usize>,
     top: f32,
+    scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
     let row_w = faces.iter().map(|(_,w,_)|*w).max().unwrap_or(0) as f32;
@@ -6015,14 +6052,13 @@ fn draw_menu_rows(
                 colour: slot_ui::edge(),
             });
         }
-        out.push(Draw::Tex {
-            x,
-            y: y + (POWER_MENU_PITCH - h as f32) / 2.0,
-            w: w as f32,
-            h: h as f32,
+        out.push(slot_ui::pixel_aligned_texture(
             tex,
-            alpha: 1.0,
-        });
+            [x, y + (POWER_MENU_PITCH - h as f32) / 2.0],
+            [w as f32, h as f32],
+            scale,
+            1.0,
+        ));
     }
 }
 

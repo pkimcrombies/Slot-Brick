@@ -54,9 +54,8 @@ impl Library {
                     continue;
                 }
                 if !kind.is_file()
-                    || !path
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
+                    || !(crate::music_m4a::is_m4a(&path)
+                        || path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("mp3")))
                 {
                     continue;
                 }

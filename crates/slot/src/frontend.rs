@@ -9,12 +9,12 @@ use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, badge_face, bezel_face, cart_shadow, chip_face, chip_shadow_face,
     date_time_text, gb_cart_shadow, hhmm, hint_face, icon_face, menu_face, photo_face,
-    quick_caret_face, quick_label_face, quick_label_face_scaled,
-    quick_legend_faces_scaled, quick_value_face_scaled, rebuild_count_face,
+    menu_hint_face_scaled, menu_row_face_scaled, quick_caret_face, quick_value_face_scaled,
+    rebuild_count_face,
     rebuild_title_face, set_clock_hint_face, socket_face, sticker_face, title_face, toast_face,
     wallpaper_face, word_face, word_face_ink_scaled, GbShell, Icon, LinkBadge, PauseChoice, PowerChoice, QuickMenuFaces,
     QuickRow, QuickValue, RebuildScreen, StatusIcon, StickerFields, Toast, UndoFace, ALERT_PX, BOLT_PX,
-    HUD_ICON_PX, HUD_INK, LEGEND, MENU_MUTED_INK, MENU_TEXT_INK, QUICK_TEXT_H,
+    HUD_ICON_PX, HUD_INK, LEGEND, QUICK_TEXT_H,
 };
 
 use crate::app::{App, LinkRow, Phase};
@@ -142,7 +142,7 @@ impl Scroll {
         x.clamp(0.0, span) as u32
     }
 
-    /// The piece `at` along, with the same margin as a complete value and a fade at clipped edges.
+    /// The piece `at` along, faded at a clipped edge and keeping the face's text margins.
     fn piece(&self, at: u32) -> Vec<u8> {
         let (w, h, room) = (self.whole.w, self.whole.h, self.room);
         let pad = (slot_ui::MENU_PAD as f32 * self.scale_x).round() as u32;
@@ -194,6 +194,7 @@ fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut Overla
     if app.quick_menu().is_none() {
         return;
     }
+    let room = slot_ui::quick_value_room();
     let lit_row = app.quick_menu();
     for row in QuickRow::ALL {
         let Some(i) = row.named() else {
@@ -211,8 +212,6 @@ fn sync_named_texts(app: &mut App, compositor: &mut Compositor, tex: &mut Overla
                 Some(font) => slot_ui::text::in_font(font, draw),
                 None => draw(),
             };
-            let label_w = quick_label_face(row).w;
-            let room = slot_ui::quick_value_room(label_w);
             let (dim, dim_w) = in_own(&mut || shortened_value_face(&text, room, scale));
             let (whole, whole_w) = in_own(&mut || quick_value_face_scaled(&text, true, scale));
             let (lit, lit_w, scroll) = if whole_w > room {
@@ -565,61 +564,35 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_power_menu_faces(menu);
+        let scale = if cfg!(feature = "brick") { compositor.ui_scale() } else { [1.0, 1.0] };
+        let mut up = |(face, width): (UndoFace, u32)| {
+            (compositor.create_texture(face.w, face.h, &face.rgba), width, QUICK_TEXT_H)
+        };
         let pause = PauseChoice::ALL
             .iter()
-            .map(|c| {
-                let f = menu_face(c.text());
-                (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
-            })
+            .map(|choice| [false, true].map(|lit| up(menu_row_face_scaled(choice.text(), lit, scale))))
             .collect();
         self.session.app_mut().set_pause_menu_faces(pause);
         let buttons = [false, true]
             .into_iter()
-            .map(|on| {
-                let f = menu_face(slot_ui::swap_ab_text(on));
-                (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
-            })
+            .map(|on| up(menu_row_face_scaled(slot_ui::swap_ab_text(on), true, scale)))
             .collect();
         self.session.app_mut().set_pause_buttons_faces(buttons);
-        let scale = if cfg!(feature = "brick") { compositor.ui_scale() } else { [1.0, 1.0] };
         self.quick_menu_scale = scale;
-        let mut up = |(face, width): (UndoFace, u32)| {
-            (compositor.create_texture(face.w, face.h, &face.rgba), width, QUICK_TEXT_H)
-        };
         let labels = QuickRow::ALL
             .iter()
-            .map(|r| [false, true].map(|active| up(quick_label_face_scaled(*r, active, scale))))
+            .map(|row| [false, true].map(|lit| up(menu_row_face_scaled(row.label(), lit, scale))))
             .collect();
         let values = QuickValue::ALL
             .iter()
             .map(|v| [false, true].map(|lit| up(quick_value_face_scaled(v.text(), lit, scale))))
             .collect();
-        let open = up(quick_value_face_scaled("›", false, scale));
-        let legend = quick_legend_faces_scaled(scale).map(|f| {
-            let (tex, w, _) = up(f);
-            (tex, w)
-        });
-        let mut heading = |label: &str, px, ink| {
-            let (face, [w, h]) = slot_ui::menu_text_face(label, px, slot_ui::OUT_W - 100, scale, ink);
-            (compositor.create_texture(face.w, face.h, &face.rgba), w, h)
-        };
-        let root = heading("menu", 32, MENU_TEXT_INK);
-        let headings = QuickRow::ALL.iter().map(|row| {
-            row.child()?;
-            let parent = row.parent().map_or("menu", QuickRow::label);
-            Some(slot_ui::QuickHeading {
-                crumb: heading(&format!("{parent} /"), 20, MENU_MUTED_INK),
-                title: heading(row.label(), 32, MENU_TEXT_INK),
-            })
-        }).collect();
+        let (tex, width, _) = up(menu_hint_face_scaled("B", "back", scale));
         self.session.app_mut().set_quick_menu_faces(QuickMenuFaces {
             scale,
             labels,
             values,
-            open,
-            root,
-            headings,
-            legend,
+            clock_back: (tex, width),
         });
         crate::boot_times::mark("  power and quick menus");
         self.upload_cart_menu_faces(compositor);

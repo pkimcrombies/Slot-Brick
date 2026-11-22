@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music Back navigation: B from Now Playing opens the current song's album track list with the active track selected; B again goes to Albums. B never exits Music—use HOME/Menu to leave the app.
 - Fixed: empty Now Playing no longer changes to Albums when pressing D-pad Right or A. Use L1/R1 to switch Music sections; B remains Back.
 - Music controls: L1/R1 cycle Now Playing, Albums and Artists; D-pad Left/Right switch tracks instead of seeking. Removed on-screen button hints and moved the repeat indicator to the bottom-right.
 - Music has a Now Playing section alongside Albums and Artists. Press B to browse without stopping the song, and return from Albums with L1. Music also shows the same clock, battery, Wi-Fi and update indicators as the shelf.

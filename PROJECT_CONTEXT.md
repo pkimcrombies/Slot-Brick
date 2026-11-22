@@ -95,7 +95,7 @@
   repeat; the indicator at bottom-right (28×28, below progress and time)
   now loads the exact UXWing Repeat Off/All/One transparent PNG icons from
   `Slot/System/music-icons/repeat-{off,all,one}.png`, cached as three GPU
-  textures and tinted muted-ink/rose. The installer downloads and verifies
+  textures and tinted neutral grey for Off (#888888), black for All/One (#000000). The installer downloads and verifies
   the three assets once, for offline runtime use; an internal glyph fallback
   remains for older cards without icons. The three UXWing pages are
   https://uxwing.com/music-player-no-repeat-symbol-icon/,
@@ -258,6 +258,13 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 repeat colour refinement:** repeat Off is neutral grey
+  `#888888`, All and One are solid black `#000000`, matching the HUD.
+  Only the texture tint/fallback colours changed; retain 28x28 at (588,432).
+  A unit regression test checks all three ink values.
+  No change to on-disk UXWing files, input or playback controls.
+
 
 - **2026-11-23 Music margin/icon refinement:** Shared Shelf HUD left
   clock at x=24, while Music used `QUICK_EDGE=32`. Exposed the

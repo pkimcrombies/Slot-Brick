@@ -235,6 +235,17 @@
 
 ## Test/build/install guardrails
 
+- **Installer validation 2026-11-23:** first pinned Music/Now Playing
+  install at `197e134` ran 266 Music/Brick simulation unit tests:
+  257 passed, 8 ignored, 1 failed in
+  `music::tests::date_sort_orders_newest_first_with_missing_years_last_and_stable_album_ids`.
+  The test opened an album then incorrectly called `playing_album()`
+  before starting a track. Since Now Playing is independent of browsing,
+  browsing must use `browsed_album()`; a second A starts the track.
+  Test corrected in `c0b28c8`. The original installer correctly aborted
+  before replacing the SD launcher. A fresh pinned installer is required;
+  **Rust tests and ARM64 build for the corrected commit remain unverified**.
+
 - Prior Docker image: `slot-brick-psp-tools`, target volumes
   `slot-psp-sim` and `slot-psp-arm64`; Cargo home typically
   `/src/.docker-cache/music-cargo`. Installer scripts have the exact invocations.

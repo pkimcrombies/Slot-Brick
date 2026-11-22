@@ -34,6 +34,8 @@ pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
     cover: MusicCover,
     album_covers: [MusicCover; ROWS],
+    album_backdrop: MusicCover,
+    fade_texture: Option<TexId>,
 }
 
 impl MusicView {
@@ -59,6 +61,23 @@ impl MusicView {
                 }
             }
         }
+        // The album track screen keeps its list, with the album's embedded art
+        // as a full-height background fading out into the black left side.
+        let detail_art = if music.track.is_none() && music.showing_tracks() {
+            let album = music.playing_album();
+            album.songs.first().and_then(|song| {
+                self.album_backdrop.texture(&song.path, album, compositor)
+            })
+        } else {
+            None
+        };
+        let fade_texture = if detail_art.is_some() {
+            Some(*self.fade_texture.get_or_insert_with(|| {
+                compositor.create_texture(256, 1, &backdrop_fade_rgba())
+            }))
+        } else {
+            None
+        };
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -67,6 +86,9 @@ impl MusicView {
             draws: Vec::new(),
         };
         p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MENU_BACKGROUND);
+        if let (Some(art), Some(fade)) = (detail_art, fade_texture) {
+            p.album_backdrop(art, fade);
+        }
         if let Some(track) = &music.track {
             p.playing(music, track, cover);
         } else {
@@ -85,6 +107,28 @@ struct Painter<'a> {
 }
 
 impl Painter<'_> {
+    fn album_backdrop(&mut self, (texture, pixels): (TexId, [u32; 2]), fade: TexId) {
+        // Cover-fit without distortion: keep the artwork's right edge aligned to
+        // the panel. The GPU clips any excess at the top or bottom.
+        let side = OUT_H as f32;
+        let cover_scale = (side / pixels[0] as f32).max(side / pixels[1] as f32);
+        let width = pixels[0] as f32 * cover_scale;
+        let height = pixels[1] as f32 * cover_scale;
+        self.draws.push(pixel_aligned_texture(
+            texture,
+            [OUT_W as f32 - width, (OUT_H as f32 - height) / 2.0],
+            [width, height],
+            self.scale,
+            1.0,
+        ));
+        // When cover-fit overflows left, hide it behind the black reading area.
+        let left = OUT_W as f32 - side;
+        self.rect([0.0, 0.0], [left, side], MENU_BACKGROUND);
+        self.draws.push(pixel_aligned_texture(
+            fade, [left, 0.0], [side, side], self.scale, 1.0,
+        ));
+    }
+
     fn browser(&mut self, music: &Music, album_art: &[Option<(TexId, [u32; 2])>; ROWS]) {
         if music.is_root() {
             let (albums, artists) = if music.viewing_artists() {
@@ -251,6 +295,17 @@ impl Painter<'_> {
     }
 }
 
+/// A single 256-pixel black-to-transparent overlay (one GPU draw per frame).
+/// Preserves legibility of the left-aligned text without rectangular bands.
+fn backdrop_fade_rgba() -> Vec<u8> {
+    (0..256).flat_map(|x| {
+        let t = x as f32 / 255.0;
+        let smooth = t * t * (3.0 - 2.0 * t);
+        let alpha = (0.10 + 0.90 * (1.0 - smooth)) * 255.0;
+        [0, 0, 0, alpha.round() as u8]
+    }).collect()
+}
+
 fn timestamp(seconds: f64) -> String {
     let seconds = seconds as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -265,5 +320,16 @@ mod album_thumbnail_layout_tests {
         assert!(ALBUM_COVER_SIDE <= ROW_H);
         assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
         assert!(ALBUM_TEXT_X < OUT_W as f32 - EDGE);
+    }
+
+    #[test]
+    fn album_backdrop_has_an_opaque_left_and_soft_right_edge() {
+        let pixels = backdrop_fade_rgba();
+        assert_eq!(pixels.len(), 256 * 4);
+        assert_eq!(pixels[3], 255);
+        assert!(pixels[255 * 4 + 3] < 40);
+        for x in 1..256 {
+            assert!(pixels[(x - 1) * 4 + 3] >= pixels[x * 4 + 3]);
+        }
     }
 }

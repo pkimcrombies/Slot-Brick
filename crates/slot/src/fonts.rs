@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 /// The built-in font's name.
 pub const BUILT_IN: &str = "Slot";
 const CHOICE: &str = "Config/font.txt";
+/// Hidden from the font picker: supplement, never replace, Slot's chosen font.
+const HANGUL_FALLBACK: &str = "System/Fonts/.SlotHangul.ttf";
 /// Where fonts are found: those that come with Slot, then the player's.
 const DIRS: [&str; 2] = ["System/Fonts", "Fonts"];
 
@@ -94,9 +96,20 @@ static RUNNING: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// At startup, before anything is drawn: the chosen font, if it is not the built-in one. A
 /// font gone missing, or one that is not a font, leaves the built-in one, and says so.
 pub fn load_chosen(root: &Path) -> String {
+    load_hangul_fallback(root);
     let name = load(root);
     let _ = RUNNING.set(name.clone());
     name
+}
+
+fn load_hangul_fallback(root: &Path) {
+    let path = root.join(HANGUL_FALLBACK);
+    let Ok(bytes) = fs::read(&path) else {
+        return; // Optional: regular Slot text still works when no font was installed.
+    };
+    if !slot_ui::text::set_fallback_font(&bytes) {
+        eprintln!("slot: font: invalid Korean fallback: {}", path.display());
+    }
 }
 
 fn load(root: &Path) -> String {

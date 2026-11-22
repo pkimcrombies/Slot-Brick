@@ -44,6 +44,14 @@ impl Case {
 
 /// The font picked under HOME → System → Font, set once at startup before anything is drawn.
 static CHOSEN: OnceLock<Font> = OnceLock::new();
+/// Optional glyph fallback, loaded from Slot/System/Fonts/.SlotHangul.ttf.
+static HANGUL_FALLBACK: OnceLock<Font> = OnceLock::new();
+
+/// Set a supplementary font for characters missing from the selected UI font.
+pub fn set_fallback_font(bytes: &[u8]) -> bool {
+    Font::from_bytes(bytes, FontSettings::default())
+        .is_ok_and(|font| HANGUL_FALLBACK.set(font).is_ok())
+}
 
 /// Slot's own font (Open Sans Bold): the default, and where a chosen font lacks a character.
 fn built_in() -> Option<&'static Font> {
@@ -91,10 +99,17 @@ pub fn leak_font(bytes: &[u8]) -> Option<&'static Font> {
 /// The font `ch` is drawn in: `font`, or the built-in one where `font` has no such character,
 /// so a name never shows an empty box.
 pub fn font_for(font: &Font, ch: char) -> &Font {
-    match font.lookup_glyph_index(ch) {
-        0 if !ch.is_whitespace() => built_in().unwrap_or(font),
-        _ => font,
+    if ch.is_whitespace() || font.lookup_glyph_index(ch) != 0 {
+        return font;
     }
+    if let Some(fallback) = HANGUL_FALLBACK.get() {
+        if fallback.lookup_glyph_index(ch) != 0 {
+            return fallback;
+        }
+    }
+    built_in()
+        .filter(|fallback| fallback.lookup_glyph_index(ch) != 0)
+        .unwrap_or(font)
 }
 
 pub fn fit(

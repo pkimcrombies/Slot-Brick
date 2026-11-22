@@ -804,22 +804,14 @@ impl Music {
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
-            // In list mode, horizontal D-pad navigation retains the older
-            // direct Albums/Artists toggle. The shoulders always cycle all
-            // three sections, including Now Playing.
-            Action::GbaDown(Btn::Left) if self.is_root() => {
-                if self.viewing_artists() {
-                    self.browse[0] = Location { page: Page::Albums, cursor: 0 };
-                } else {
-                    self.now_playing_view = true;
-                }
+            // Keep the old D-pad behaviour in list mode: Left from Artists
+            // returns to Albums and Right from Albums opens Artists.
+            // Only L1/R1 cycle all three top-level Music sections.
+            Action::GbaDown(Btn::Left) if self.is_root() && self.viewing_artists() => {
+                self.browse[0] = Location { page: Page::Albums, cursor: 0 };
             }
-            Action::GbaDown(Btn::Right) if self.is_root() => {
-                if !self.viewing_artists() {
-                    self.browse[0] = Location { page: Page::Artists, cursor: 0 };
-                } else {
-                    self.now_playing_view = true;
-                }
+            Action::GbaDown(Btn::Right) if self.is_root() && !self.viewing_artists() => {
+                self.browse[0] = Location { page: Page::Artists, cursor: 0 };
             }
             Action::GbaDown(Btn::A) if self.row_count() > 0 => match self.location().page {
                 Page::Album(_) => self.start(self.cursor()),

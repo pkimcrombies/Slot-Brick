@@ -766,11 +766,11 @@ impl Music {
                     _ => {}
                 }
             } else {
-                match action {
-                    Action::GbaDown(Btn::B | Btn::Right | Btn::A) => {
-                        self.now_playing_view = false;
-                    }
-                    _ => {}
+                // Without a track, the D-pad (and A) must not change
+                // Music sections. Only L1/R1 navigate the tabs; B remains
+                // the explicit Back action to restore the browser.
+                if action == Action::GbaDown(Btn::B) {
+                    self.now_playing_view = false;
                 }
             }
             return false;
@@ -1389,6 +1389,33 @@ mod tests {
         music.input(Action::GbaDown(Btn::B));
         assert_eq!(music.cursor(), 1);
         assert_eq!(music.label(), "artists");
+    }
+
+    #[test]
+    fn empty_now_playing_ignores_dpad_and_a_and_only_shoulders_switch_sections() {
+        let root = tempfile::tempdir().unwrap();
+        let mut music = Music::open(root.path());
+        assert!(music.showing_now_playing());
+        assert!(music.track.is_none());
+        for action in [
+            Action::GbaDown(Btn::Left),
+            Action::GbaDown(Btn::Right),
+            Action::GbaDown(Btn::Up),
+            Action::GbaDown(Btn::Down),
+            Action::ShelfLeft,
+            Action::ShelfRight,
+            Action::GbaDown(Btn::A),
+        ] {
+            assert!(!music.input(action));
+            assert!(music.showing_now_playing(), "{action:?} left empty Now Playing");
+            assert!(music.track.is_none());
+        }
+        music.input(Action::GbaDown(Btn::R1));
+        assert!(!music.showing_now_playing());
+        assert_eq!(music.label(), "albums");
+        music.input(Action::GbaDown(Btn::L1));
+        assert!(music.showing_now_playing());
+        assert!(music.track.is_none());
     }
 
     #[test]

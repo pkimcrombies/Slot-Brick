@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music repeat indicator: black for Repeat All/One, neutral grey when Repeat Off, retaining the 28px bottom-right icon.
 - Music UI: aligned its 24px left inset with the Shelf clock and reduced the bottom-right UXWing repeat icon to 28px.
 - Music repeat icons now use the three UXWing Off/All/One PNG symbols, tinted to the Music palette and drawn bottom-right. The guarded installer places them under Slot/System/music-icons for offline use.
 - Music Back navigation: B from Now Playing opens the current song's album track list with the active track selected; B again goes to Albums. B never exits Music—use HOME/Menu to leave the app.

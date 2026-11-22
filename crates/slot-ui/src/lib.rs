@@ -70,7 +70,7 @@ pub use menu_style::{
     menu_hint_face_scaled, menu_text_face, MENU_BACKGROUND, MENU_MUTED_INK, MENU_SELECTION_INK,
     MENU_TEXT_INK, SHELF_PINK,
 };
-pub use footer::{draw_footer, draw_footer_note, draw_status_bar, Printed, WIFI_PX};
+pub use footer::{draw_footer, draw_footer_note, draw_status_bar, Printed, STATUS_MARGIN, WIFI_PX};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, ALARM_BAND_H, HUD_ICON_PX,
     HUD_INK, HUD_MS, LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,

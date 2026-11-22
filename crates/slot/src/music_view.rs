@@ -13,6 +13,9 @@ use crate::music_cover::{MusicCover, THUMBNAIL};
 // less stark than pure white. System menus and the launcher keep their
 // original dark palette; never change global MENU_* constants.
 const MUSIC_BACKGROUND: [f32; 4] = [245.0 / 255.0, 241.0 / 255.0, 234.0 / 255.0, 1.0];
+// A few flat colour bands are enough for a smooth vertical blend at 640x480;
+// no extra artwork textures, shaders, or per-frame image analysis.
+const PLAYING_BACKGROUND_BANDS: usize = 32;
 const MUSIC_TEXT_INK: [u8; 3] = [0x24, 0x24, 0x24];
 const MUSIC_MUTED_INK: [u8; 3] = [0x74, 0x6e, 0x6b];
 const MUSIC_SELECTION_INK: [u8; 3] = [0xa0, 0x50, 0x69];
@@ -135,37 +138,46 @@ impl MusicView {
             .find_map(|cached| cached.ready_for(first_track))
     }
 
+    fn ready_album_tint(&self, first_track: &Path) -> Option<[u8; 3]> {
+        self.flow_covers.iter().chain(self.album_covers.iter())
+            .find_map(|cached| cached.tint_for(first_track))
+    }
+
     pub(crate) fn render(
         &mut self,
         music: &Music,
         compositor: &mut Compositor,
         scale: [f32; 2],
     ) -> Vec<Draw> {
-        let cover = music.track.as_ref().and_then(|track| {
+        // Both the artwork and its extracted hue are keyed to the same
+        // album request. Colour extraction ran in the background decoder,
+        // not on the render thread, and the existing GPU cover is reused.
+        let (cover, accent) = if let Some(track) = music.track.as_ref() {
             let album = music.playing_album();
-            // Browser and Cover Flow already decoded this album's art into GPU
-            // textures. Reuse the handle directly: no second ID3 parse, JPEG
-            // decode, GPU upload or even a frame of placeholder artwork.
             let first_path = album.songs.first().map(|song| song.path.as_path());
             let ready = first_path.and_then(|path| self.ready_album_art(path));
             if let Some(art) = ready {
-                return Some(art);
+                (Some(art), first_path.and_then(|path| self.ready_album_tint(path)))
+            } else {
+                // A fast press before Cover Flow finishes decoding must use
+                // that same in-flight worker, including its sampled colour.
+                let pending = first_path.and_then(|path| {
+                    self.flow_covers.iter_mut().chain(self.album_covers.iter_mut())
+                        .find(|cached| cached.requested_for(path))
+                        .map(|cached| {
+                            let art = cached.texture(path, album, compositor);
+                            (art, cached.tint_for(path))
+                        })
+                });
+                pending.unwrap_or_else(|| {
+                    let path = &music.song(track).path;
+                    let art = self.cover.texture(path, album, compositor);
+                    (art, self.cover.tint_for(path))
+                })
             }
-
-            // If the user pressed Play before the thumbnail finished, poll
-            // that in-flight decoder rather than launching another worker.
-            // Some(None) means the existing decoder is still pending (or has
-            // no album artwork); None means no matching request was started.
-            let pending = first_path.and_then(|path| {
-                self.flow_covers.iter_mut().chain(self.album_covers.iter_mut())
-                    .find(|cached| cached.requested_for(path))
-                    .map(|cached| cached.texture(path, album, compositor))
-            });
-            match pending {
-                Some(art) => art,
-                None => self.cover.texture(&music.song(track).path, album, compositor),
-            }
-        });
+        } else {
+            (None, None)
+        };
         // Reuse a fixed number of cover decoders and GPU textures as the list scrolls.
         // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
         let first = music.cursor().saturating_sub(ROWS - 1);
@@ -221,7 +233,11 @@ impl MusicView {
             scale,
             draws: Vec::new(),
         };
-        p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
+        if music.track.is_some() && !music.music_settings_open() {
+            p.playing_background(accent);
+        } else {
+            p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
+        }
         if music.music_settings_open() {
             p.settings(music);
         } else if let Some(track) = &music.track {
@@ -448,6 +464,27 @@ impl Painter<'_> {
         self.place(face, (OUT_W as f32 - face.size[0] as f32) / 2.0, y);
     }
 
+    /// A subdued colour wash inspired by the playing album. The same
+    /// dark text palette remains readable because every band is mixed
+    /// predominantly with warm ivory. Plain artwork uses plain ivory.
+    fn playing_background(&mut self, accent: Option<[u8; 3]>) {
+        let Some(accent) = accent else {
+            self.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
+            return;
+        };
+        let bands = PLAYING_BACKGROUND_BANDS as f32;
+        for index in 0..PLAYING_BACKGROUND_BANDS {
+            let top = index as f32 * OUT_H as f32 / bands;
+            let bottom = (index + 1) as f32 * OUT_H as f32 / bands;
+            let progress = (index as f32 + 0.5) / bands;
+            self.rect(
+                [0.0, top],
+                [OUT_W as f32, bottom - top],
+                playing_background_colour(accent, progress),
+            );
+        }
+    }
+
     /// Two small, opposing arrows form a native repeat glyph without
     /// requiring a new font or rasterized asset. Off is muted; active modes
     /// use Slot's dusty rose, with text for accessible state distinction.
@@ -671,6 +708,20 @@ impl Painter<'_> {
     }
 }
 
+/// A perceptually quiet album-colour wash: strongest behind the header
+/// and artwork, easing back into the familiar ivory towards playback controls.
+fn playing_background_colour(accent: [u8; 3], progress: f32) -> [f32; 4] {
+    let progress = progress.clamp(0.0, 1.0);
+    let strength = 0.06 + 0.26 * (1.0 - progress).powi(2);
+    let mut result = MUSIC_BACKGROUND;
+    for channel in 0..3 {
+        let hue = f32::from(accent[channel]) / 255.0;
+        result[channel] = MUSIC_BACKGROUND[channel] * (1.0 - strength)
+            + hue * strength;
+    }
+    result
+}
+
 /// Position a track row within the visible full-width list.
 fn album_row_y(index: usize, first: usize) -> f32 {
     ALBUM_LIST_TOP + (index - first) as f32 * ALBUM_TRACK_ROW_H
@@ -808,6 +859,39 @@ mod album_thumbnail_layout_tests {
         view.album_covers[0] = MusicCover::loaded_for_test(first, tex, [256, 128]);
         assert_eq!(view.ready_album_art(first), Some((tex, [256, 128])));
         assert_eq!(view.ready_album_art(other), None);
+    }
+
+    #[test]
+    fn now_playing_background_follows_album_hue_and_stays_legible() {
+        let red = playing_background_colour([220, 45, 50], 0.0);
+        let blue = playing_background_colour([34, 90, 215], 0.0);
+        let blue_bottom = playing_background_colour([34, 90, 215], 1.0);
+        assert!(red[0] > red[2], "red covers should tint red");
+        assert!(blue[2] > blue[0], "blue covers should tint blue");
+        assert!(blue[0] < blue_bottom[0], "the wash fades towards ivory");
+        assert!(blue[0] > 0.65, "dark song text must remain legible");
+        assert!(blue_bottom[0] < MUSIC_BACKGROUND[0]);
+        assert_eq!(red[3], 1.0);
+        assert_eq!(PLAYING_BACKGROUND_BANDS, 32);
+    }
+
+    #[test]
+    fn colour_lookup_reuses_correct_cover_flow_and_album_list_cache() {
+        let mut view = MusicView::default();
+        let first = Path::new("Music/Blue/01.mp3");
+        let other = Path::new("Music/Red/01.mp3");
+        assert_eq!(view.ready_album_tint(first), None);
+        view.flow_covers[3] = MusicCover::tinted_for_test(
+            first, TexId::from_raw(33), [256, 256], [45, 99, 201],
+        );
+        assert_eq!(view.ready_album_tint(first), Some([45, 99, 201]));
+        assert_eq!(view.ready_album_tint(other), None);
+        view.flow_covers[3] = MusicCover::default();
+        view.album_covers[1] = MusicCover::tinted_for_test(
+            first, TexId::from_raw(34), [256, 192], [210, 95, 60],
+        );
+        assert_eq!(view.ready_album_tint(first), Some([210, 95, 60]));
+        assert_eq!(view.ready_album_tint(other), None);
     }
 
     #[test]

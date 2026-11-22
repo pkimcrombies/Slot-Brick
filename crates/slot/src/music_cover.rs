@@ -21,6 +21,8 @@ struct Cover {
     rgba: Vec<u8>,
     w: u32,
     h: u32,
+    /// Representative artwork colour, calculated off the render thread.
+    tint: Option<[u8; 3]>,
 }
 
 #[derive(Default)]
@@ -28,6 +30,7 @@ pub(crate) struct MusicCover {
     track: Option<PathBuf>,
     size: Option<[u32; 2]>,
     texture: Option<TexId>,
+    tint: Option<[u8; 3]>,
     loading: Option<Load>,
 }
 
@@ -49,6 +52,16 @@ impl MusicCover {
         }
     }
 
+    /// Return only this request's decoded artwork colour. GPU texture slots
+    /// are reused across albums, so a stale colour must never leak through.
+    pub(crate) fn tint_for(&self, track: &Path) -> Option<[u8; 3]> {
+        if self.track.as_deref() == Some(track) && self.size.is_some() {
+            self.tint
+        } else {
+            None
+        }
+    }
+
     /// Recognize an already requested album cover even when its decoder is
     /// still working. Now Playing can poll that worker without decoding twice.
     pub(crate) fn requested_for(&self, track: &Path) -> bool {
@@ -61,8 +74,16 @@ impl MusicCover {
             track: Some(track.to_path_buf()),
             size: Some(size),
             texture: Some(tex),
+            tint: None,
             loading: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tinted_for_test(track: &Path, tex: TexId, size: [u32; 2], tint: [u8; 3]) -> Self {
+        let mut cover = Self::loaded_for_test(track, tex, size);
+        cover.tint = Some(tint);
+        cover
     }
 
     /// Upload on the render thread, with at most one reader active. A late cover
@@ -87,13 +108,14 @@ impl MusicCover {
             self.loading = None;
             if expected {
                 if let Some(cover) = received {
-                    let Cover { rgba, w, h } = cover;
+                    let Cover { rgba, w, h, tint } = cover;
                     if let Some(tex) = self.texture {
                         compositor.update_texture(tex, w, h, &rgba);
                     } else {
                         self.texture = Some(compositor.create_texture(w, h, &rgba));
                     }
                     self.size = Some([w, h]);
+                    self.tint = tint;
                 }
             } else {
                 self.track = None;
@@ -102,6 +124,7 @@ impl MusicCover {
         if self.track.as_deref() != Some(track) {
             self.track = Some(track.to_path_buf());
             self.size = None;
+            self.tint = None;
             self.loading = Load::start(track, album);
         }
         self.texture.zip(self.size)
@@ -175,7 +198,60 @@ fn thumbnail(data: &[u8]) -> Option<Cover> {
     let tw = (w * THUMBNAIL / long).max(1);
     let th = (h * THUMBNAIL / long).max(1);
     let rgba = slot_ui::cover_rgba(&rgba, w, h, tw, th)?;
-    Some(Cover { rgba, w: tw, h: th })
+    let tint = dominant_cover_colour(&rgba);
+    Some(Cover { rgba, w: tw, h: th, tint })
+}
+
+/// Pick a representative chromatic hue using a tiny fixed histogram rather
+/// than averaging opposing colours into grey. Sampling 1/16 pixels is enough
+/// for the soft background tint; this runs in the existing decode worker.
+fn dominant_cover_colour(rgba: &[u8]) -> Option<[u8; 3]> {
+    #[derive(Clone, Copy, Default)]
+    struct Bin {
+        weight: u64,
+        red: u64,
+        green: u64,
+        blue: u64,
+        samples: u32,
+    }
+
+    const BINS: usize = 18;
+    let mut bins = [Bin::default(); BINS];
+    for pixel in rgba.chunks_exact(4).step_by(16) {
+        if pixel[3] < 128 { continue; }
+        let [r, g, b] = [pixel[0], pixel[1], pixel[2]];
+        let high = r.max(g).max(b);
+        let low = r.min(g).min(b);
+        let chroma = high - low;
+        // Ignore near-black, near-grey and white pixels. Black/white covers
+        // fall back to warm ivory rather than an unpleasant muddy wash.
+        if chroma < 22 || high < 45 { continue; }
+
+        let c = f32::from(chroma);
+        let hue = if high == r {
+            ((f32::from(g) - f32::from(b)) / c).rem_euclid(6.0)
+        } else if high == g {
+            (f32::from(b) - f32::from(r)) / c + 2.0
+        } else {
+            (f32::from(r) - f32::from(g)) / c + 4.0
+        };
+        let bin = ((hue * BINS as f32 / 6.0) as usize).min(BINS - 1);
+        // A bright, colourful region should beat a sea of muted grey.
+        let weight = u64::from(chroma) * u64::from(high);
+        let bucket = &mut bins[bin];
+        bucket.weight += weight;
+        bucket.red += u64::from(r) * weight;
+        bucket.green += u64::from(g) * weight;
+        bucket.blue += u64::from(b) * weight;
+        bucket.samples += 1;
+    }
+    let dominant = bins.iter().filter(|bin| bin.samples >= 2)
+        .max_by_key(|bin| bin.weight)?;
+    Some([
+        (dominant.red / dominant.weight) as u8,
+        (dominant.green / dominant.weight) as u8,
+        (dominant.blue / dominant.weight) as u8,
+    ])
 }
 
 fn jpeg_rgba(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
@@ -225,6 +301,35 @@ mod tests {
         cover.size = None;
         assert_eq!(cover.ready_for(&path), None);
         assert!(!cover.requested_for(&path));
+    }
+
+    #[test]
+    fn artwork_colour_is_extracted_once_and_never_leaks_between_albums() {
+        let solid = |pixel: [u8; 4]| pixel.repeat(16 * 16);
+        let blue = [36, 92, 205, 255];
+        let red = [205, 58, 61, 255];
+        assert_eq!(dominant_cover_colour(&solid(blue)), Some([36, 92, 205]));
+        assert_eq!(dominant_cover_colour(&solid(red)), Some([205, 58, 61]));
+        assert_eq!(dominant_cover_colour(&solid([20, 20, 20, 255])), None);
+        assert_eq!(dominant_cover_colour(&solid([255, 255, 255, 255])), None);
+        assert_eq!(dominant_cover_colour(&solid([50, 200, 90, 0])), None);
+
+        let first = Path::new("Music/First/01.mp3");
+        let second = Path::new("Music/Second/01.mp3");
+        let cover = MusicCover::tinted_for_test(
+            first, TexId::from_raw(4), [256, 256], [36, 92, 205],
+        );
+        assert_eq!(cover.tint_for(first), Some([36, 92, 205]));
+        assert_eq!(cover.tint_for(second), None, "no stale artwork colour");
+    }
+
+    #[test]
+    fn colour_extraction_ignores_neutral_background_in_favour_of_cover_hue() {
+        let mut rgba = [32, 32, 32, 255].repeat(256);
+        for pixel in rgba.chunks_exact_mut(4).step_by(16).take(8) {
+            pixel.copy_from_slice(&[214, 88, 62, 255]);
+        }
+        assert_eq!(dominant_cover_colour(&rgba), Some([214, 88, 62]));
     }
 
     #[test]

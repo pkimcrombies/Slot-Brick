@@ -94,6 +94,19 @@
   Now Playing's own asynchronous decoder. The existing seven Cover Flow +
   six list slots remain bounded; no unbounded texture map. Texture-key
   regression tests cover both browsing modes and stale/different albums.
+  **Dynamic album-colour Now Playing background (2026-11-23):**
+  `music_cover.rs` samples one pixel out of 16 from the existing downscaled
+  RGBA thumbnail on the **decoder worker**, bins chromatic hues and retains
+  a representative RGB tint alongside the cover's GPU texture in each
+  bounded `MusicCover` slot. `music_view.rs` reuses that tint immediately
+  from Cover Flow or album-list caches, or as soon as pending artwork is
+  decoded. Only Now Playing receives 32 lightweight bands forming a soft
+  top-to-bottom hue-to-ivory wash; Music Settings, Cover Flow, Albums and
+  Artists retain plain `#F5F1EA`. Near-monochrome/missing artwork falls
+  back to ivory. This does **not** reload art, add a second decoder,
+  retain an unbounded palette map, or alter text colours. Check both warm
+  and cool colourful covers, black-and-white covers, transitions between
+  albums and text readability on the actual Brick Pro.
   This is **reuse of visible/in-flight GPU artwork**, not a persistent
   all-albums or disk cache: artwork not yet requested must still load.
   Verify first-frame appearance, subsequent songs from the same album, and
@@ -202,7 +215,11 @@
    70% default digital cap (with headphones), A-Z vs newest release-date
    sort including albums without date, and saved preferences across restart.
    No parent-control PIN has been added: settings are editable by anyone.
-4. PSP replacement work can resume separately when requested.
+4. Check Now Playing's new **artwork-adaptive background** on the
+   Brick Pro: representative hue and soft ivory gradient, readable charcoal
+   text, no tint when artwork is monochrome/missing, no incorrect tint when
+   swapping albums, no new image-load delay.
+5. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,
 check the live `feature/psp-replaces-ps1` HEAD and the relevant source files,

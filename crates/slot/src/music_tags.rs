@@ -11,7 +11,7 @@ pub(crate) struct Tags {
     pub disc: Option<u16>,
     pub track: Option<u16>,
     /// Release year from ID3 or MP4 tags; no file-created-date substitute.
-    pub year: Option<u16>,
+    pub release_date: Option<u32>,
 }
 
 pub(crate) fn read(path: &Path) -> Tags {
@@ -47,7 +47,7 @@ fn read_m4a(path: &Path) -> Option<Tags> {
             Some(DiscNumber) => tags.disc = number(&tag.value.to_string()),
             Some(TrackNumber) => tags.track = number(&tag.value.to_string()),
             Some(ReleaseDate) | Some(Date) | Some(OriginalDate) =>
-                tags.year = tags.year.or_else(|| release_year(&tag.value.to_string())),
+                tags.release_date = tags.release_date.or_else(|| release_date(&tag.value.to_string())),
             _ => {}
         }
     }
@@ -205,7 +205,7 @@ fn frames(
             b"TPA" | b"TPOS" => tags.disc = tags.disc.or_else(|| number(&value)),
             b"TRK" | b"TRCK" => tags.track = tags.track.or_else(|| number(&value)),
             b"TYE" | b"TYER" | b"TDRC" | b"TDRL" | b"TDOR" =>
-                tags.year = tags.year.or_else(|| release_year(&value)),
+                tags.release_date = tags.release_date.or_else(|| release_date(&value)),
             _ => {}
         }
         if tags.title.is_some()
@@ -214,7 +214,7 @@ fn frames(
             && tags.album_artist.is_some()
             && tags.disc.is_some()
             && tags.track.is_some()
-            && tags.year.is_some()
+            && tags.release_date.is_some()
         {
             break;
         }
@@ -232,7 +232,7 @@ fn id3v1(file: &mut File, tags: &mut Tags) -> io::Result<()> {
             .take()
             .or_else(|| clean(latin1(&footer[33..63])));
         tags.album = tags.album.take().or_else(|| clean(latin1(&footer[63..93])));
-        tags.year = tags.year.or_else(|| release_year(&latin1(&footer[93..97])));
+        tags.release_date = tags.release_date.or_else(|| release_date(&latin1(&footer[93..97])));
         if tags.track.is_none() && footer[125] == 0 && footer[126] != 0 {
             tags.track = Some(u16::from(footer[126]));
         }
@@ -283,12 +283,38 @@ fn clean(value: String) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-/// Date fields may contain YYYY, YYYY-MM-DD or a timestamp. A year is
-/// usable only when explicitly tagged, never inferred from file metadata.
-fn release_year(value: &str) -> Option<u16> {
-    let year = value.trim().get(..4)?;
-    (year.bytes().all(|b| b.is_ascii_digit())).then(|| year.parse::<u16>().ok()).flatten()
-        .filter(|&year| (1000..=2100).contains(&year))
+/// A YYYY, YYYY-MM or YYYY-MM-DD release tag is sortable without
+/// inventing missing month/day values. YYYY stores as YYYY0000 so that
+/// fully specified dates within the same year sort ahead of year-only tags.
+fn release_date(text: &str) -> Option<u32> {
+    let value = text.trim();
+    let year = value.get(..4)?;
+    if !year.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+    let year: u32 = year.parse().ok()?;
+    if !(1000..=2100).contains(&year) { return None; }
+
+    let part = |start: usize| -> Option<u32> {
+        let end = start + 2;
+        let digits = value.get(start..end)?;
+        (digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse::<u32>().ok()).flatten()
+    };
+
+    let month = if value.as_bytes().get(4) == Some(&b'-') {
+        part(5)?
+    } else {
+        0
+    };
+    if month > 12 || (month == 0 && value.len() > 4) { return None; }
+    let day = if month != 0 && value.as_bytes().get(7) == Some(&b'-') {
+        part(8)?
+    } else {
+        0
+    };
+    if day > 31 || (day == 0 && value.as_bytes().get(7) == Some(&b'-')) {
+        return None;
+    }
+    Some(year * 10_000 + month * 100 + day)
 }
 
 fn number(value: &str) -> Option<u16> {
@@ -322,12 +348,14 @@ mod release_date_tests {
 
     #[test]
     fn parses_tagged_release_years_without_guessing() {
-        assert_eq!(release_year("1999"), Some(1999));
-        assert_eq!(release_year("2022-09-17"), Some(2022));
-        assert_eq!(release_year(" 2015-01-02T00:00:00 "), Some(2015));
-        assert_eq!(release_year("unknown"), None);
-        assert_eq!(release_year(""), None);
-        assert_eq!(release_year("2050s"), Some(2050));
-        assert_eq!(release_year("0900"), None);
+        assert_eq!(release_date("1999"), Some(19990000));
+        assert_eq!(release_date("2022-09-17"), Some(20220917));
+        assert_eq!(release_date(" 2015-01-02T00:00:00 "), Some(20150102));
+        assert_eq!(release_date("2022-02"), Some(20220200));
+        assert_eq!(release_date("unknown"), None);
+        assert_eq!(release_date(""), None);
+        assert_eq!(release_date("2022-15-01"), None);
+        assert_eq!(release_date("2050s"), None);
+        assert_eq!(release_date("0900"), None);
     }
 }

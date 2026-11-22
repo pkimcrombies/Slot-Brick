@@ -17,8 +17,8 @@ pub(crate) struct Song {
 pub(crate) struct Album {
     pub title: String,
     pub artist: String,
-    /// Earliest tagged release year among this album's songs (if known).
-    pub release_year: Option<u16>,
+    /// Earliest tagged album release date among its songs (YYYYMMDD, if known).
+    pub release_date: Option<u32>,
     pub songs: Vec<Song>,
 }
 
@@ -92,11 +92,11 @@ impl Library {
                     .or_insert_with(|| Album {
                         title: album_title,
                         artist: album_artist,
-                        release_year: None,
+                        release_date: None,
                         songs: Vec::new(),
                     });
-                if let Some(year) = tags.year {
-                    album.release_year = Some(album.release_year.map_or(year, |old| old.min(year)));
+                if let Some(year) = tags.release_date {
+                    album.release_date = Some(album.release_date.map_or(year, |old| old.min(year)));
                 }
                 album.songs.push(Song {
                     path,

@@ -386,7 +386,7 @@ impl Music {
                 .then_with(|| aa.artist.to_lowercase().cmp(&bb.artist.to_lowercase()));
             match self.settings.album_sort {
                 AlbumSort::Az => alpha(),
-                AlbumSort::Release => bb.release_year.cmp(&aa.release_year)
+                AlbumSort::Release => bb.release_date.cmp(&aa.release_date)
                     .then_with(alpha),
             }
         };
@@ -782,7 +782,7 @@ mod tests {
     fn repeat_cycles_off_all_one_and_wraps_or_replays_only_when_selected() {
         let make = |title: &str| Album {
             title: title.to_string(), artist: "artist".into(),
-            release_year: None, songs: vec![Song {
+            release_date: None, songs: vec![Song {
                 path: PathBuf::from(format!("{title}.mp3")), title: "track".into(),
                 artist: "artist".into(), disc: 1, track: Some(1),
             }],
@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn date_sort_orders_newest_first_with_missing_years_last_and_stable_album_ids() {
         let mk = |title: &str, year| Album {
-            title: title.into(), artist: "artist".into(), release_year: year,
+            title: title.into(), artist: "artist".into(), release_date: year,
             songs: vec![Song {
                 path: PathBuf::from(format!("{title}.mp3")),
                 title: "song".into(), artist: "artist".into(), disc: 1,
@@ -823,16 +823,21 @@ mod tests {
             }],
         };
         let mut music = Music::with_library(Library {
-            albums: vec![mk("Alpha", None), mk("Beta", Some(2005)),
-                mk("Gamma", Some(2021))],
+            albums: vec![
+                mk("Alpha", None),
+                mk("Beta", Some(20211012)),
+                mk("Gamma", Some(20211104)),
+                mk("Delta", Some(20050301)),
+            ],
             artists: Vec::new(),
         });
         assert_eq!(music.row(0).0, "Alpha");
         music.settings_row = 2;
         music.change_setting(true);
-        assert_eq!(music.row(0).0, "Gamma");
-        assert_eq!(music.row(1).0, "Beta");
-        assert_eq!(music.row(2).0, "Alpha");
+        assert_eq!(music.row(0).0, "Gamma", "newest full date first");
+        assert_eq!(music.row(1).0, "Beta", "same year, earlier month follows");
+        assert_eq!(music.row(2).0, "Delta");
+        assert_eq!(music.row(3).0, "Alpha", "unknown date last");
         music.input(Action::GbaDown(Btn::A));
         assert_eq!(music.playing_album().title, "Gamma");
         // Changing sort cannot move or replace the album being played.
@@ -871,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn album_release_year_is_read_from_id3v23_and_v24_tags() {
+    fn album_release_date_is_read_from_id3v23_and_v24_tags() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Music");
         std::fs::create_dir_all(&folder).unwrap();
@@ -887,9 +892,9 @@ mod tests {
         }
         let library = Library::scan(root.path(), || false);
         assert_eq!(library.albums.len(), 2);
-        assert_eq!(library.albums[0].release_year, Some(2024),
+        assert_eq!(library.albums[0].release_date, Some(20241108),
             "alphabetical Newer Album precedes Older Album");
-        assert_eq!(library.albums[1].release_year, Some(1998));
+        assert_eq!(library.albums[1].release_date, Some(19980000));
     }
 
     #[test]
@@ -912,7 +917,7 @@ mod tests {
         let album = Album {
             title: "alpha".into(),
             artist: "artist".into(),
-            release_year: None,
+            release_date: None,
             songs: vec![Song {
                 path: std::path::PathBuf::from("alpha.mp3"),
                 title: "song".into(),
@@ -942,7 +947,7 @@ mod tests {
         let albums = (0..3).map(|i| Album {
             title: format!("album {i}"),
             artist: "artist".into(),
-            release_year: None,
+            release_date: None,
             songs: vec![Song {
                 path: std::path::PathBuf::from(format!("{i}.mp3")),
                 title: "song".into(),

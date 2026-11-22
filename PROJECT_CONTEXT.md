@@ -54,7 +54,7 @@
   page; Up/Down select rows, Left/Right/A change values, B/Start closes.
   Rows: Music-only digital volume cap (default 70%, steps of 10 to 0-100),
   default album browse view (Cover Flow/list), album sort (A-Z/newest tagged
-  release year first), and Repeat (off/all/one). **X** on Now Playing cycles
+  release date first), and Repeat (off/all/one). **X** on Now Playing cycles
   repeat; a native double-arrow indicator with off/all/1 state appears at the
   top-right. Off plays the current album once; All wraps at the last track
   of the current album; One repeats the current song. These preferences
@@ -64,12 +64,13 @@
   samples. It is NOT a certified sound-pressure/dB limit: safe headphone
   levels still depend on device, headphones and listening duration.
   Album sorting uses a separate ordered list of stable album IDs, not
-  mutation/reindexing of playing albums or artwork. Release-year tags from
+  mutation/reindexing of playing albums or artwork. Release-date tags from
   MP3 ID3v2 (TYER/TDRC/TDRL/TDOR), ID3v1 and M4A (standard Date/ReleaseDate)
-  are used; missing dates sort last and never use filesystem timestamps.
+  are used (full YYYY-MM-DD where available; year-only tags remain supported);
+  missing dates sort last and never use filesystem timestamps.
   Existing physical play/pause, skip and seek controls are preserved.
   Added unit tests for settings persistence, repeat order, volume cap,
-  release-year parsing, and stability of album IDs; **Docker/ARM64 tests
+  release-date parsing, and stability of album IDs; **Docker/ARM64 tests
   have not yet been executed**.
   **Album song list: original iPod Classic music-menu style (2026-11-22).**
   The earlier ClassiPod *Cover Flow selection panel* interpretation was
@@ -198,7 +199,7 @@
    frame rate and artwork (without reflections). Keep album list via **X**.
 3. Validate the new **Music Settings + repeat** on device: Start/B
    navigation, Now Playing X cycles off/all/one, album track-end repeat,
-   70% default digital cap (with headphones), A-Z vs newest release-year
+   70% default digital cap (with headphones), A-Z vs newest release-date
    sort including albums without date, and saved preferences across restart.
    No parent-control PIN has been added: settings are editable by anyone.
 4. PSP replacement work can resume separately when requested.

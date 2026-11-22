@@ -55,8 +55,11 @@ const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 const PLAYING_PROGRESS_Y: f32 = 372.0;
 // Bottom-right repeat mode stays clear of elapsed/total time and progress.
 const REPEAT_ICON_SIDE: u32 = 32;
+const REPEAT_ICON_BOTTOM_MARGIN: f32 = 20.0;
 const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
-const REPEAT_BADGE_Y: f32 = OUT_H as f32 - EDGE - REPEAT_ICON_SIDE as f32;
+// The progress bar is at y=372 and time labels begin at y=392. Position
+// the icon at y=428 so it clears the labels rather than sharing their row.
+const REPEAT_BADGE_Y: f32 = OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN - REPEAT_ICON_SIDE as f32;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
@@ -1075,7 +1078,8 @@ mod album_thumbnail_layout_tests {
         assert_eq!(REPEAT_ICON_SIDE, 32);
         assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE,
             "repeat icon must stay inside right margin");
-        assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - EDGE,
+        assert_eq!(REPEAT_BADGE_Y, 428.0, "repeat icon sits below the time labels");
+        assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN,
             "repeat icon must stay inside bottom margin");
         assert_eq!(REPEAT_ICON_FILES, ["repeat-off.png", "repeat-all.png", "repeat-one.png"]);
     }

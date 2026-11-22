@@ -78,11 +78,11 @@ const ROW: [&str; 7] = [
 fn down_crosses_to_the_next_letter() {
     let mut s = shelf_of(&ROW);
     assert_eq!(s.index, 0);
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert_eq!(s.carts[s.index].stem, "Apotris");
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert_eq!(s.carts[s.index].stem, "Metroid");
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert_eq!(s.carts[s.index].stem, "Zelda");
 }
 
@@ -90,9 +90,9 @@ fn down_crosses_to_the_next_letter() {
 fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
     let mut s = shelf_of(&ROW);
     s.select(4);
-    s.jump_prev_letter();
+    s.jump_letter(-1, false);
     assert_eq!(s.carts[s.index].stem, "Metroid", "it left the Ms too early");
-    s.jump_prev_letter();
+    s.jump_letter(-1, false);
     assert_eq!(s.carts[s.index].stem, "Apotris");
 }
 
@@ -100,14 +100,14 @@ fn up_lands_on_the_start_of_the_letter_before_leaving_it() {
 fn the_letters_wrap_at_both_ends() {
     let mut s = shelf_of(&ROW);
     s.select(5);
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert_eq!(
         s.carts[s.index].stem, "1943",
         "the end did not loop forward"
     );
 
     s.select(0);
-    s.jump_prev_letter();
+    s.jump_letter(-1, false);
     assert_eq!(
         s.carts[s.index].stem, "Zelda",
         "the start did not loop back"
@@ -119,7 +119,7 @@ fn a_wrap_travels_the_way_the_press_asked() {
     let mut s = shelf_of(&ROW);
     s.select(5);
     let before = s.scroll_target();
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert!(
         s.scroll_target() > before,
         "Down at the end turned round instead of carrying on forwards"
@@ -127,7 +127,7 @@ fn a_wrap_travels_the_way_the_press_asked() {
 
     s.select(0);
     let before = s.scroll_target();
-    s.jump_prev_letter();
+    s.jump_letter(-1, false);
     assert!(
         s.scroll_target() < before,
         "Up at the start turned round instead of carrying on backwards"
@@ -137,11 +137,26 @@ fn a_wrap_travels_the_way_the_press_asked() {
 #[test]
 fn a_row_of_one_letter_stays_put() {
     let mut s = shelf_of(&["Metroid", "Mario Kart"]);
-    s.jump_next_letter();
+    s.jump_letter(1, false);
     assert_eq!(
         s.carts[s.index].stem, "Metroid",
         "it moved within one letter"
     );
-    s.jump_prev_letter();
+    s.jump_letter(-1, false);
     assert_eq!(s.carts[s.index].stem, "Metroid");
+}
+
+#[test]
+fn grouped_letter_jumps_stop_at_a_new_console_with_the_same_initial() {
+    let mut s = shelf_of(&["Apotris", "Arcade", "Advance Wars"]);
+    s.carts[0].platform = Platform::Gb;
+    s.carts[1].platform = Platform::Gbc;
+    s.jump_letter(1, true);
+    assert_eq!(s.carts[s.index].platform, Platform::Gbc);
+    s.jump_letter(1, true);
+    assert_eq!(s.carts[s.index].platform, Platform::Gba);
+    s.jump_letter(1, true);
+    assert_eq!(s.carts[s.index].platform, Platform::Gb);
+    s.jump_letter(-1, true);
+    assert_eq!(s.carts[s.index].platform, Platform::Gba);
 }

@@ -1013,10 +1013,8 @@ impl App {
         self.shelf.release_hold();
         self.play_held = None;
         let before = self.shelf().index;
-        match dir > 0 {
-            true => self.shelf_mut().jump_next_letter(),
-            false => self.shelf_mut().jump_prev_letter(),
-        }
+        let by_console = self.state.library_sort == slot_store::LibrarySort::Console;
+        self.shelf.jump_letter(dir, by_console);
         if !show_letter {
             if self.slot_letter.take().is_some() {
                 self.shelf_platform = slot_ui::Printed::default();
@@ -1040,18 +1038,18 @@ impl App {
         self.name_pending = true;
     }
 
-    /// SELECT on the shelf: the next order (A–Z, last played, most played), named in the slot.
-    fn cycle_sort(&mut self) {
-        let all = slot_store::LibrarySort::ALL;
-        let at = all.iter().position(|v| *v == self.state.library_sort).unwrap_or(0);
-        self.state.library_sort = all[(at + 1) % all.len()];
+    fn toggle_sort(&mut self, show_name: bool) {
+        use slot_store::LibrarySort::{Az, Console};
+        self.state.library_sort = match self.state.library_sort {
+            Az => Console,
+            Console => Az,
+        };
         self.persist();
         self.arrange();
         self.slot_letter = None;
-        self.slot_word = Some(match self.state.library_sort {
-            slot_store::LibrarySort::Az => "A–Z",
-            slot_store::LibrarySort::Recent => "LAST PLAYED",
-            slot_store::LibrarySort::MostPlayed => "MOST PLAYED",
+        self.slot_word = show_name.then_some(match self.state.library_sort {
+            Az => "A–Z",
+            Console => "BY CONSOLE",
         });
         self.shelf_named = None;
     }
@@ -1230,8 +1228,7 @@ impl App {
             QuickRow::UpdateCheck => Some(QuickValue::flag(self.state.update_check)),
             QuickRow::LibrarySort => Some(match self.state.library_sort {
                 slot_store::LibrarySort::Az => QuickValue::SortAz,
-                slot_store::LibrarySort::Recent => QuickValue::SortRecent,
-                slot_store::LibrarySort::MostPlayed => QuickValue::SortMost,
+                slot_store::LibrarySort::Console => QuickValue::SortConsole,
             }),
             QuickRow::LibraryShow => Some(match self.state.favorites_only {
                 true => QuickValue::Favorites,
@@ -2147,10 +2144,10 @@ impl App {
                     }
                 }
                 Action::Insert => self.play(!self.state.eject_save),
-                Action::GbaDown(Btn::L1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(-1, false),
-                Action::GbaDown(Btn::R1) if self.state.library_sort == slot_store::LibrarySort::Az => self.jump_letter(1, false),
+                Action::GbaDown(Btn::L1) => self.jump_letter(-1, false),
+                Action::GbaDown(Btn::R1) => self.jump_letter(1, false),
                 Action::GbaDown(Btn::Y) => self.toggle_favorite(),
-                Action::GbaDown(Btn::Select) => self.cycle_sort(),
+                Action::GbaDown(Btn::Select) => self.toggle_sort(true),
                 _ => {}
             },
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
@@ -2478,11 +2475,7 @@ impl App {
             QuickRow::SwapAb => s.swap_ab = !s.swap_ab,
             QuickRow::GbPalettes => s.gb_palettes = !s.gb_palettes,
             QuickRow::LibrarySort => {
-                let all = slot_store::LibrarySort::ALL;
-                let at = all.iter().position(|v| *v == s.library_sort).unwrap_or(0);
-                s.library_sort = all[(at + if right { 1 } else { all.len() - 1 }) % all.len()];
-                self.persist();
-                self.arrange();
+                self.toggle_sort(false);
                 return;
             }
             QuickRow::LibraryShow => {
@@ -2858,10 +2851,8 @@ impl App {
                 self.save_library();
             }
             self.record_cart(seated);
-            // Back on the shelf: the game just played may have moved up.
-            if matches!(self.phase, Phase::Shelf) && self.state.library_sort != slot_store::LibrarySort::Az {
+            if matches!(self.phase, Phase::Shelf) && self.library_dirty {
                 self.save_library();
-                self.arrange();
             }
         }
         self.step_screen(dt);

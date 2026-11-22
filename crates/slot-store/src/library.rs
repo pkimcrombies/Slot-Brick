@@ -18,30 +18,32 @@ pub struct GameRecord {
     pub favorite: bool,
 }
 
-/// How each shelf is ordered.
+/// How games are ordered in the shared carousel.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum LibrarySort {
     #[default]
     Az,
-    /// The game played last first; games never played after, A–Z.
-    Recent,
-    /// The most played first; games never played after, A–Z.
-    MostPlayed,
+    /// Console groups, with titles A–Z within each group.
+    Console,
 }
 
 impl LibrarySort {
-    pub const ALL: [LibrarySort; 3] = [LibrarySort::Az, LibrarySort::Recent, LibrarySort::MostPlayed];
+    pub const ALL: [LibrarySort; 2] = [LibrarySort::Az, LibrarySort::Console];
 
     pub fn name(self) -> &'static str {
         match self {
             LibrarySort::Az => "az",
-            LibrarySort::Recent => "recent",
-            LibrarySort::MostPlayed => "most",
+            LibrarySort::Console => "console",
         }
     }
 
     pub fn parse(value: &str) -> Option<LibrarySort> {
-        LibrarySort::ALL.into_iter().find(|s| s.name() == value)
+        match value {
+            // Older settings for the retired play-time sorts now use global A–Z.
+            "az" | "recent" | "most" => Some(LibrarySort::Az),
+            "console" => Some(LibrarySort::Console),
+            _ => None,
+        }
     }
 }
 
@@ -107,17 +109,22 @@ impl Library {
     }
 }
 
-/// `carts`, in A–Z order (as `scan` gives them), put in `sort`'s order, and only the favorites
-/// kept when `favorites_only`.
+/// Filter and reorder a carousel whose input is already in global A–Z order.
 pub fn arrange(carts: &mut Vec<Cart>, sort: LibrarySort, favorites_only: bool, library: &Library) {
     if favorites_only {
         carts.retain(|c| library.get(c.platform, &c.stem).favorite);
     }
-    // Stable: games alike in the order keep their A–Z order.
-    match sort {
-        LibrarySort::Az => {}
-        LibrarySort::Recent => carts.sort_by_key(|c| std::cmp::Reverse(library.get(c.platform, &c.stem).last_played)),
-        LibrarySort::MostPlayed => carts.sort_by_key(|c| std::cmp::Reverse(library.get(c.platform, &c.stem).played_secs)),
+    if sort == LibrarySort::Console {
+        // A stable sort preserves title order within each console.
+        carts.sort_by_key(|cart| match cart.platform {
+            Platform::Gb => 0,
+            Platform::Gbc => 1,
+            Platform::Gba => 2,
+            Platform::Nes => 3,
+            Platform::Snes => 4,
+            Platform::Ps1 => 5,
+            Platform::Psp => 6,
+        });
     }
 }
 
@@ -166,23 +173,23 @@ mod tests {
     }
 
     #[test]
-    fn shelves_sort_by_last_played_or_most_played_with_the_rest_a_to_z() {
-        let all = [cart(Platform::Gba, "Alpha"), cart(Platform::Gba, "Beta"), cart(Platform::Gba, "Gamma"), cart(Platform::Gba, "Delta")];
+    fn console_sort_groups_games_and_keeps_title_order_within_each_group() {
+        let all = [
+            cart(Platform::Psp, "Alpha"), cart(Platform::Gba, "Beta"),
+            cart(Platform::Gb, "Delta"), cart(Platform::Gbc, "Gamma"),
+            cart(Platform::Gb, "Zebra"),
+        ];
         let mut lib = Library::default();
-        lib.get_mut(Platform::Gba, "Gamma").last_played = 20;
-        lib.get_mut(Platform::Gba, "Gamma").played_secs = 10;
-        lib.get_mut(Platform::Gba, "Beta").last_played = 10;
-        lib.get_mut(Platform::Gba, "Beta").played_secs = 500;
-        lib.get_mut(Platform::Gba, "Delta").favorite = true;
+        lib.get_mut(Platform::Psp, "Alpha").favorite = true;
+        lib.get_mut(Platform::Gb, "Zebra").favorite = true;
         let order = |sort, favorites| {
             let mut carts = all.to_vec();
             arrange(&mut carts, sort, favorites, &lib);
             stems(&carts).join(" ")
         };
-        assert_eq!(order(LibrarySort::Az, false), "Alpha Beta Gamma Delta");
-        assert_eq!(order(LibrarySort::Recent, false), "Gamma Beta Alpha Delta");
-        assert_eq!(order(LibrarySort::MostPlayed, false), "Beta Gamma Alpha Delta");
-        assert_eq!(order(LibrarySort::Recent, true), "Delta");
+        assert_eq!(order(LibrarySort::Az, false), "Alpha Beta Delta Gamma Zebra");
+        assert_eq!(order(LibrarySort::Console, false), "Delta Zebra Gamma Beta Alpha");
+        assert_eq!(order(LibrarySort::Console, true), "Zebra Alpha");
         assert!(lib.any_favorite(&all) && !Library::default().any_favorite(&all));
     }
 
@@ -203,5 +210,7 @@ mod tests {
         for sort in LibrarySort::ALL {
             assert_eq!(LibrarySort::parse(sort.name()), Some(sort));
         }
+        assert_eq!(LibrarySort::parse("recent"), Some(LibrarySort::Az));
+        assert_eq!(LibrarySort::parse("most"), Some(LibrarySort::Az));
     }
 }

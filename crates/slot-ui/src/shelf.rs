@@ -267,21 +267,17 @@ impl Shelf {
         self.step(1);
     }
 
-    pub fn jump_next_letter(&mut self) {
-        self.jump(1);
+    fn letter_group(cart: &Cart, by_console: bool) -> (Option<slot_store::Platform>, char) {
+        (by_console.then_some(cart.platform), slot_store::initial(&cart.stem))
     }
 
-    pub fn jump_prev_letter(&mut self) {
-        self.jump(-1);
-    }
-
-    fn start_of_letter(&self, from: usize) -> usize {
+    fn start_of_letter(&self, from: usize, by_console: bool) -> usize {
         let n = self.carts.len();
-        let letter = slot_store::initial(&self.carts[from].stem);
+        let group = Self::letter_group(&self.carts[from], by_console);
         let mut at = from;
         for _ in 0..n {
             let before = (at as i32 - 1).rem_euclid(n as i32) as usize;
-            if slot_store::initial(&self.carts[before].stem) != letter {
+            if Self::letter_group(&self.carts[before], by_console) != group {
                 break;
             }
             at = before;
@@ -289,17 +285,17 @@ impl Shelf {
         at
     }
 
-    fn jump(&mut self, dir: i32) {
+    pub fn jump_letter(&mut self, dir: i32, by_console: bool) {
         let n = self.carts.len();
         if n < 2 {
             return;
         }
         let wrap = |i: i32| i.rem_euclid(n as i32) as usize;
-        let here = slot_store::initial(&self.carts[self.index].stem);
+        let here = Self::letter_group(&self.carts[self.index], by_console);
         if self
             .carts
             .iter()
-            .all(|c| slot_store::initial(&c.stem) == here)
+            .all(|c| Self::letter_group(c, by_console) == here)
         {
             return;
         }
@@ -308,16 +304,16 @@ impl Shelf {
                 let mut at = self.index;
                 for _ in 0..n {
                     at = wrap(at as i32 + 1);
-                    if slot_store::initial(&self.carts[at].stem) != here {
+                    if Self::letter_group(&self.carts[at], by_console) != here {
                         break;
                     }
                 }
                 at
             }
             false => {
-                let start = self.start_of_letter(self.index);
+                let start = self.start_of_letter(self.index, by_console);
                 match start == self.index {
-                    true => self.start_of_letter(wrap(start as i32 - 1)),
+                    true => self.start_of_letter(wrap(start as i32 - 1), by_console),
                     false => start,
                 }
             }

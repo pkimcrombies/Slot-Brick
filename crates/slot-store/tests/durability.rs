@@ -234,7 +234,7 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
         clock_set: true,
         auto_clock: false,
         update_check: false,
-        library_sort: slot_store::LibrarySort::MostPlayed,
+        library_sort: slot_store::LibrarySort::Console,
         favorites_only: true,
         play_time_hours: true,
         title_card: false,
@@ -263,7 +263,7 @@ fn the_quick_menu_settings_round_trip_as_their_own_lines() {
     for line in [
         "auto_clock=0",
         "update_check=0",
-        "library_sort=most",
+        "library_sort=console",
         "favorites_only=1",
         "play_time_hours=1",
         "title_card=0",

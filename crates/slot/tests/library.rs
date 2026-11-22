@@ -23,29 +23,44 @@ const PLAYED: &str = "GBA\tGamma\t4000\t20\t1\nGBA\tBeta\t9000\t10\t0\n";
 
 #[test]
 fn select_steps_the_shelf_through_its_orders_and_names_each() {
-    let (d, mut a) = library_app(PLAYED, SlotState::default());
-    assert_eq!(order(&a), "Alpha Beta Gamma");
+    let (d, mut a) = two_systems(SlotState::default());
+    assert_eq!(order(&a), "Alpha Beta Pocket");
     a.apply(Action::GbaDown(Btn::Select));
-    assert_eq!(order(&a), "Gamma Beta Alpha");
-    assert_eq!(a.slot_text().as_deref(), Some("LAST PLAYED"));
+    assert_eq!(order(&a), "Pocket Alpha Beta");
+    assert_eq!(a.slot_text().as_deref(), Some("BY CONSOLE"));
+    assert_eq!(a.selected_stem(), Some("Alpha"));
     a.apply(Action::GbaDown(Btn::Select));
-    assert_eq!(order(&a), "Beta Gamma Alpha");
-    assert_eq!(a.slot_text().as_deref(), Some("MOST PLAYED"));
-    a.apply(Action::GbaDown(Btn::Select));
-    assert_eq!(order(&a), "Alpha Beta Gamma");
+    assert_eq!(order(&a), "Alpha Beta Pocket");
+    assert_eq!(a.slot_text().as_deref(), Some("A–Z"));
     a.settle_saves();
     assert_eq!(slot_store::read_slot_state(d.path()).library_sort, LibrarySort::Az);
 }
 
 #[test]
 fn the_order_chosen_is_kept_and_the_selected_game_stays_selected() {
-    let (_d, mut a) = library_app(PLAYED, SlotState { library_sort: LibrarySort::MostPlayed, ..SlotState::default() });
-    assert_eq!(order(&a), "Beta Gamma Alpha");
-    a.apply(Action::GbaDown(Btn::Right));
-    a.apply(Action::GbaUp(Btn::Right));
-    let picked = a.selected_stem().map(str::to_string);
-    a.apply(Action::GbaDown(Btn::Select));
-    assert_eq!(a.selected_stem().map(str::to_string), picked);
+    use slot_ui::QuickValue;
+
+    let (d, mut a) = two_systems(SlotState::default());
+    press(&mut a, Btn::Right);
+    a.apply(Action::QuickMenu);
+    for _ in 0..QuickRow::Library.position() {
+        press(&mut a, Btn::Down);
+    }
+    press(&mut a, Btn::A);
+    assert_eq!(a.quick_menu(), Some(QuickRow::LibrarySort));
+    assert_eq!(a.quick_value(QuickRow::LibrarySort), Some(QuickValue::SortAz));
+    press(&mut a, Btn::Right);
+    assert_eq!(a.quick_value(QuickRow::LibrarySort), Some(QuickValue::SortConsole));
+    assert_eq!(order(&a), "Pocket Alpha Beta");
+    assert_eq!(a.selected_stem(), Some("Beta"));
+    a.settle_saves();
+    assert_eq!(read_slot_state(d.path()).library_sort, LibrarySort::Console);
+
+    let restarted = App::boot(d.path());
+    assert_eq!(order(&restarted), "Pocket Alpha Beta");
+    press(&mut a, Btn::Right);
+    assert_eq!(a.quick_value(QuickRow::LibrarySort), Some(QuickValue::SortAz));
+    assert_eq!(order(&a), "Alpha Beta Pocket");
 }
 
 #[test]
@@ -65,16 +80,15 @@ fn y_stars_a_favorite_and_favorites_only_shows_just_those() {
 
 #[test]
 fn the_shelf_prints_how_long_the_selected_game_was_played() {
-    let (_d, mut a) = library_app(PLAYED, SlotState { library_sort: LibrarySort::MostPlayed, ..SlotState::default() });
+    let (_d, mut a) = library_app(PLAYED, SlotState::default());
+    assert_eq!(a.played_text(), None, "Alpha was never played");
+    press(&mut a, Btn::Right);
     assert_eq!(a.played_text().as_deref(), Some("150M"));
-    a.apply(Action::GbaDown(Btn::Right));
-    a.apply(Action::GbaUp(Btn::Right));
+    press(&mut a, Btn::Right);
     assert_eq!(a.selected_stem(), Some("Gamma"));
     assert_eq!(a.played_text().as_deref(), Some("66M"));
-    a.apply(Action::GbaDown(Btn::Right));
-    a.apply(Action::GbaUp(Btn::Right));
-    assert_eq!(a.played_text(), None, "Alpha was never played");
-    let (_d2, b) = library_app(PLAYED, SlotState { library_sort: LibrarySort::MostPlayed, play_time_hours: true, ..SlotState::default() });
+    let (_d2, mut b) = library_app(PLAYED, SlotState { play_time_hours: true, ..SlotState::default() });
+    press(&mut b, Btn::Right);
     assert_eq!(b.played_text().as_deref(), Some("2H30M"));
 }
 

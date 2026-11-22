@@ -540,8 +540,7 @@ pub enum QuickValue {
     Percent5,
     Percent10,
     SortAz,
-    SortRecent,
-    SortMost,
+    SortConsole,
     AllGames,
     Favorites,
     Minutes,
@@ -553,7 +552,7 @@ pub enum QuickValue {
 }
 
 impl QuickValue {
-    pub const ALL: [QuickValue; 38] = [
+    pub const ALL: [QuickValue; 37] = [
         QuickValue::Speed2,
         QuickValue::Speed3,
         QuickValue::Speed4,
@@ -584,8 +583,7 @@ impl QuickValue {
         QuickValue::Percent5,
         QuickValue::Percent10,
         QuickValue::SortAz,
-        QuickValue::SortRecent,
-        QuickValue::SortMost,
+        QuickValue::SortConsole,
         QuickValue::AllGames,
         QuickValue::Favorites,
         QuickValue::Minutes,
@@ -630,8 +628,7 @@ impl QuickValue {
             QuickValue::Percent5 => "5%",
             QuickValue::Percent10 => "10%",
             QuickValue::SortAz => "A–Z",
-            QuickValue::SortRecent => "Last Played",
-            QuickValue::SortMost => "Most Played",
+            QuickValue::SortConsole => "By Console",
             QuickValue::AllGames => "All Games",
             QuickValue::Favorites => "Favorites",
             QuickValue::Minutes => "Minutes",

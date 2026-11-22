@@ -1193,16 +1193,21 @@ impl Frontend {
         if matches!(self.app().phase(), Phase::Doze { .. }) {
             return;
         }
-        let should_dim = if matches!(self.app().phase(), Phase::Music) {
-            self.app().music().is_some_and(|music| {
-                music.should_dim()
+        let dim_level = if matches!(self.app().phase(), Phase::Music) {
+            self.app().music().and_then(|music| {
+                if music.should_dim()
                     && self.last_input.elapsed()
                         >= Duration::from_secs(u64::from(music.dim_timeout_secs()))
+                {
+                    Some(music.dim_brightness())
+                } else {
+                    None
+                }
             })
         } else {
-            false
+            None
         };
-        self.session.app_mut().set_music_dimmed(should_dim);
+        self.session.app_mut().set_music_dimmed(dim_level);
     }
 
     /// Called from the Brick's Doze loop to draw a short fade even though

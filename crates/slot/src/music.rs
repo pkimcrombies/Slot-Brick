@@ -632,13 +632,19 @@ impl Music {
     /// User-initiated play opens Now Playing but retains the browser stack.
     fn start(&mut self, index: usize) {
         let album = self.selected_album().expect("song belongs to an album");
+        // Keep the browser's chosen track, even after returning from playback.
+        self.select_row(index);
         self.start_album(album, index);
         self.now_playing_view = true;
     }
 
     /// Automatic advance and skipping keep the current view unchanged.
     fn start_album(&mut self, album: usize, index: usize) {
-        if matches!(self.location().page, Page::Album(selected) if selected == album) {
+        // Preserve a user's independent album-list selection while browsing.
+        // The old cursor follows playback only while Now Playing is visible.
+        if self.now_playing_view
+            && matches!(self.location().page, Page::Album(selected) if selected == album)
+        {
             self.select_row(index);
         }
         self.track = Some(Track {
@@ -1400,6 +1406,9 @@ mod tests {
         let first_path = music.song(music.track.as_ref().unwrap()).path.clone();
         music.input(Action::GbaDown(Btn::B)); // back to Alpha's tracks
         assert!(music.showing_tracks());
+        music.select_row(0);
+        music.update_audio(&ring, 60);
+        assert_eq!(music.cursor(), 0, "browser selection must not follow queued audio");
         music.input(Action::GbaDown(Btn::B)); // album root
         music.input(Action::GbaDown(Btn::Down)); // select Beta
         music.input(Action::GbaDown(Btn::A)); // browse Beta without replacing playback

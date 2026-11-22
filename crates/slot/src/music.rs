@@ -192,6 +192,7 @@ pub(crate) enum Status {
 }
 
 pub(crate) struct Track {
+    album: usize,
     index: usize,
     pub(crate) status: Status,
     playback: Option<Playback>,
@@ -347,6 +348,8 @@ pub(crate) struct Music {
     scan: Option<Scan>,
     browse: Vec<Location>,
     pub(crate) track: Option<Track>,
+    /// Now Playing is an independent Music section; browsing never stops audio.
+    now_playing_view: bool,
     discard_audio: bool,
     /// Cover Flow is the default root album browser. X toggles the former list.
     cover_flow: bool,
@@ -366,6 +369,8 @@ impl Music {
         music.cover_flow = music.settings.cover_flow;
         music.settings_root = Some(slot.to_path_buf());
         music.scan = Scan::start(slot.to_path_buf());
+        // Enter Music on Now Playing. B opens the album browser if nothing plays.
+        music.now_playing_view = true;
         music
     }
 
@@ -378,6 +383,7 @@ impl Music {
                 cursor: 0,
             }],
             track: None,
+            now_playing_view: false,
             discard_audio: false,
             cover_flow: true,
             settings: MusicSettings::default(),
@@ -572,21 +578,36 @@ impl Music {
 
     pub(crate) fn cover_flow(&self) -> bool {
         self.cover_flow && self.is_root() && !self.viewing_artists()
+            && !self.now_playing_view
     }
+
+    pub(crate) fn showing_now_playing(&self) -> bool { self.now_playing_view }
 
     pub(crate) fn showing_tracks(&self) -> bool {
         matches!(self.location().page, Page::Album(_))
     }
 
     pub(crate) fn song(&self, track: &Track) -> &Song {
-        &self.playing_album().songs[track.index]
+        &self.library.albums[track.album].songs[track.index]
     }
 
+    /// The playing album is stable even when the browser opens another album.
     pub(crate) fn playing_album(&self) -> &Album {
+        let album = self.track.as_ref().expect("playing track").album;
+        &self.library.albums[album]
+    }
+
+    /// The browser's current album may differ from the playing album.
+    pub(crate) fn browsed_album(&self) -> &Album {
         let Page::Album(album) = self.location().page else {
-            unreachable!("playback has an album open")
+            unreachable!("track list has a browsed album")
         };
         &self.library.albums[album]
+    }
+
+    pub(crate) fn playing_position(&self) -> Option<(usize, usize)> {
+        let track = self.track.as_ref()?;
+        Some((track.index, self.library.albums[track.album].songs.len()))
     }
 
     fn selected_album(&self) -> Option<usize> {
@@ -608,9 +629,20 @@ impl Music {
             .is_some_and(|track| matches!(track.status, Status::Loading | Status::Playing))
     }
 
+    /// User-initiated play opens Now Playing but retains the browser stack.
     fn start(&mut self, index: usize) {
-        self.select_row(index);
+        let album = self.selected_album().expect("song belongs to an album");
+        self.start_album(album, index);
+        self.now_playing_view = true;
+    }
+
+    /// Automatic advance and skipping keep the current view unchanged.
+    fn start_album(&mut self, album: usize, index: usize) {
+        if matches!(self.location().page, Page::Album(selected) if selected == album) {
+            self.select_row(index);
+        }
         self.track = Some(Track {
+            album,
             index,
             status: Status::Loading,
             playback: None,
@@ -621,18 +653,22 @@ impl Music {
     }
 
     fn switch(&mut self, index: usize, forward: bool) {
+        let Some(album) = self.track.as_ref().map(|track| track.album) else { return };
         if let Some(next) = index
             .checked_add_signed(if forward { 1 } else { -1 })
-            .filter(|&i| i < self.row_count())
+            .filter(|&i| i < self.library.albums[album].songs.len())
         {
-            self.start(next);
+            self.start_album(album, next);
         }
     }
 
     fn advance_at_end(&mut self, index: usize) {
+        let Some(album) = self.track.as_ref().map(|track| track.album) else { return };
         match self.settings.repeat {
-            RepeatMode::One => self.start(index),
-            RepeatMode::All if index + 1 == self.row_count() => self.start(0),
+            RepeatMode::One => self.start_album(album, index),
+            RepeatMode::All if index + 1 == self.library.albums[album].songs.len() => {
+                self.start_album(album, 0)
+            }
             _ => self.switch(index, true),
         }
     }
@@ -661,32 +697,40 @@ impl Music {
             }
             return false;
         }
-        if let Some(track) = &mut self.track {
-            let index = track.index;
-            match action {
-                Action::GbaDown(Btn::A) => match track.status {
-                    Status::Playing => track.status = Status::Paused,
-                    Status::Paused => track.status = Status::Playing,
-                    Status::Finished | Status::Unreadable | Status::NoAudio => self.start(index),
-                    Status::Loading => {}
-                },
-                Action::GbaDown(Btn::Left) => {
-                    track.seek_seconds = track.seek_seconds.saturating_sub(SEEK_SECONDS);
+        if self.now_playing_view {
+            if let Some(track) = &mut self.track {
+                let (album, index) = (track.album, track.index);
+                match action {
+                    Action::GbaDown(Btn::A) => match track.status {
+                        Status::Playing => track.status = Status::Paused,
+                        Status::Paused => track.status = Status::Playing,
+                        Status::Finished | Status::Unreadable | Status::NoAudio => {
+                            self.start_album(album, index)
+                        }
+                        Status::Loading => {}
+                    },
+                    Action::GbaDown(Btn::Left) => {
+                        track.seek_seconds = track.seek_seconds.saturating_sub(SEEK_SECONDS);
+                    }
+                    Action::GbaDown(Btn::Right) => {
+                        track.seek_seconds = track.seek_seconds.saturating_add(SEEK_SECONDS);
+                    }
+                    Action::GbaDown(Btn::L1) | Action::ShelfLeft => self.switch(index, false),
+                    Action::GbaDown(Btn::R1) | Action::ShelfRight => self.switch(index, true),
+                    Action::GbaDown(Btn::X) => {
+                        self.settings.repeat = self.settings.repeat.step(true);
+                        self.persist_settings();
+                    }
+                    Action::GbaDown(Btn::B) => self.now_playing_view = false,
+                    _ => {}
                 }
-                Action::GbaDown(Btn::Right) => {
-                    track.seek_seconds = track.seek_seconds.saturating_add(SEEK_SECONDS);
+            } else {
+                match action {
+                    Action::GbaDown(Btn::B | Btn::R1 | Btn::Right | Btn::A) => {
+                        self.now_playing_view = false;
+                    }
+                    _ => {}
                 }
-                Action::GbaDown(Btn::L1) | Action::ShelfLeft => self.switch(index, false),
-                Action::GbaDown(Btn::R1) | Action::ShelfRight => self.switch(index, true),
-                Action::GbaDown(Btn::X) => {
-                    self.settings.repeat = self.settings.repeat.step(true);
-                    self.persist_settings();
-                }
-                Action::GbaDown(Btn::B) => {
-                    self.track = None;
-                    self.discard_audio = true;
-                }
-                _ => {}
             }
             return false;
         }
@@ -711,16 +755,15 @@ impl Music {
                 self.select_row(self.cursor() + 1)
             }
             Action::GbaDown(btn @ (Btn::L1 | Btn::R1 | Btn::Left | Btn::Right)) if self.is_root() => {
-                let artists = match btn {
-                    Btn::Left => false,
-                    Btn::Right => true,
-                    _ => !self.viewing_artists(),
-                };
-                if artists != self.viewing_artists() {
-                    self.browse[0] = Location {
-                        page: if artists { Page::Artists } else { Page::Albums },
-                        cursor: 0,
-                    };
+                match btn {
+                    Btn::L1 | Btn::Left if self.viewing_artists() => {
+                        self.browse[0] = Location { page: Page::Albums, cursor: 0 };
+                    }
+                    Btn::L1 | Btn::Left => self.now_playing_view = true,
+                    Btn::R1 | Btn::Right if !self.viewing_artists() => {
+                        self.browse[0] = Location { page: Page::Artists, cursor: 0 };
+                    }
+                    _ => {}
                 }
             }
             Action::GbaDown(Btn::A) if self.row_count() > 0 => match self.location().page {
@@ -773,11 +816,9 @@ impl Music {
         if std::mem::take(&mut self.discard_audio) {
             ring.discard();
         }
-        let Page::Album(album) = self.location().page else {
-            return;
-        };
         let volume = self.effective_volume(level);
         let Some(track) = &mut self.track else { return };
+        let album = track.album;
         if track.status == Status::Loading {
             if ring.sample_rate() == 0 {
                 track.status = Status::NoAudio;
@@ -1322,6 +1363,62 @@ mod tests {
     }
 
     #[test]
+    fn music_opens_on_now_playing_and_b_opens_the_album_browser() {
+        let root = tempfile::tempdir().unwrap();
+        let mut music = Music::open(root.path());
+        assert!(music.showing_now_playing());
+        assert!(!music.input(Action::GbaDown(Btn::B)));
+        assert!(!music.showing_now_playing());
+        assert_eq!(music.label(), "albums");
+        music.input(Action::GbaDown(Btn::L1));
+        assert!(music.showing_now_playing(), "Albums -> Now Playing via L1");
+        music.input(Action::GbaDown(Btn::B));
+        music.input(Action::GbaDown(Btn::R1));
+        assert_eq!(music.label(), "artists");
+        music.input(Action::GbaDown(Btn::L1));
+        assert_eq!(music.label(), "albums");
+    }
+
+    #[test]
+    fn browsing_other_albums_does_not_replace_or_interrupt_the_playing_song() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["Alpha", "Beta"] {
+            let folder = root.path().join("Music").join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            silent_mp3(&folder.join("01.mp3"), 2);
+        }
+        let mut music = test_music(root.path());
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        ring.set_idle(true);
+        music.input(Action::GbaDown(Btn::A)); // Alpha track list
+        music.input(Action::GbaDown(Btn::Y)); // start Alpha -> Now Playing
+        assert!(music.showing_now_playing());
+        music.update_audio(&ring, 60);
+        assert!(music.playing());
+        let first_album = music.playing_album().title.clone();
+        let first_path = music.song(music.track.as_ref().unwrap()).path.clone();
+        music.input(Action::GbaDown(Btn::B)); // back to Alpha's tracks
+        assert!(music.showing_tracks());
+        music.input(Action::GbaDown(Btn::B)); // album root
+        music.input(Action::GbaDown(Btn::Down)); // select Beta
+        music.input(Action::GbaDown(Btn::A)); // browse Beta without replacing playback
+        assert_eq!(music.browsed_album().title, "Beta");
+        music.update_audio(&ring, 60);
+        assert_eq!(music.playing_album().title, first_album);
+        assert_eq!(music.song(music.track.as_ref().unwrap()).path, first_path);
+        assert!(music.playing(), "background browsing must keep the decoder alive");
+        music.input(Action::GbaDown(Btn::B)); // root
+        music.input(Action::GbaDown(Btn::L1)); // Now Playing tab
+        assert!(music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::A)); // pause same track
+        assert!(!music.playing());
+        assert_eq!(music.song(music.track.as_ref().unwrap()).path, first_path);
+        music.input(Action::GbaDown(Btn::A)); // resume
+        assert!(music.playing());
+    }
+
+    #[test]
     fn scans_and_plays_only_mp3s_in_the_current_folder() {
         let root = tempfile::tempdir().unwrap();
         let album = root.path().join("Music/An album");
@@ -1373,8 +1470,8 @@ mod tests {
         assert_eq!(music.cursor(), 0);
         music.input(Action::GbaDown(Btn::B));
         music.update_audio(&ring, 80);
-        assert!(music.track.is_none());
-        assert_eq!(ring.queued_frames(), 0);
+        assert!(music.track.is_some(), "B leaves Now Playing without stopping the song");
+        assert!(!music.showing_now_playing());
         assert!(!music.input(Action::GbaDown(Btn::B)));
         assert!(music.is_root());
         assert!(music.input(Action::GbaDown(Btn::B)));

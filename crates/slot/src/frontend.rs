@@ -828,9 +828,11 @@ impl Frontend {
 
     /// The cart menu's words, each value dim and lit: built once, as the quick menu's are.
     fn upload_cart_menu_faces(&mut self, compositor: &mut Compositor) {
-        use slot_ui::{cart_menu_label_face, cart_menu_value_face, CartRow};
+        use slot_ui::{cart_menu_caret_face, cart_menu_label_face, cart_menu_value_face, CartRow};
         let mut up = |f: UndoFace| (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h);
-        let labels = CartRow::ALL.iter().map(|r| up(cart_menu_label_face(*r))).collect();
+        let labels = CartRow::ALL.iter()
+            .map(|r| [false, true].map(|selected| up(cart_menu_label_face(*r, selected))))
+            .collect();
         let mut values = |names: Vec<&str>| -> Vec<[(TexId, u32, u32); 2]> {
             names
                 .into_iter()
@@ -845,7 +847,7 @@ impl Frontend {
         let shapes = values(
             slot_ui::SHAPES.iter().chain(&slot_ui::SNES_SHAPES).chain(&slot_ui::NES_SHAPES).copied().collect(),
         );
-        let carets = [false, true].map(|right| up(quick_caret_face(right)));
+        let carets = [false, true].map(|right| up(cart_menu_caret_face(right)));
         let legend = slot_ui::cart_menu_legend_faces().map(|f| {
             let (tex, w, _) = up(f);
             (tex, w)

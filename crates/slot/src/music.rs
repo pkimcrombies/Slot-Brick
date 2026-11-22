@@ -1404,11 +1404,14 @@ mod tests {
         assert_eq!(music.song(track).artist, "Émilie");
         music.input(Action::GbaDown(Btn::B));
         assert!(music.showing_tracks());
-        assert_eq!(music.cursor(), 2);
+        assert_eq!(music.cursor(), 2, "B highlights the currently playing track");
+        assert_eq!(music.browsed_album().title, "Mixtape");
         music.input(Action::GbaDown(Btn::B));
-        music.input(Action::GbaDown(Btn::B));
-        assert_eq!(music.cursor(), 1);
-        assert_eq!(music.label(), "artists");
+        assert_eq!(music.label(), "albums");
+        assert_eq!(music.row(music.cursor()).0, "Mixtape",
+            "album root stays selected on the playing album");
+        assert!(!music.input(Action::GbaDown(Btn::B)));
+        assert_eq!(music.label(), "albums", "B at the root must not leave Music");
     }
 
     #[test]
@@ -1515,18 +1518,61 @@ mod tests {
     }
 
     #[test]
-    fn back_from_now_playing_still_restores_the_origin_song_list() {
+    fn b_opens_the_playing_album_and_highlights_current_track_not_browsed_album() {
         let root = tempfile::tempdir().unwrap();
-        let folder = root.path().join("Music");
-        std::fs::create_dir_all(&folder).unwrap();
-        silent_mp3(&folder.join("01.mp3"), 2);
+        for album in ["Alpha", "Beta"] {
+            let folder = root.path().join("Music").join(album);
+            std::fs::create_dir_all(&folder).unwrap();
+            silent_mp3(&folder.join("01.mp3"), 2);
+            silent_mp3(&folder.join("02.mp3"), 2);
+        }
         let mut music = test_music(root.path());
-        music.input(Action::GbaDown(Btn::Y));
+        // Start the second track of Beta (row 1 in the sorted Albums root).
+        music.select_row(1);
+        music.input(Action::GbaDown(Btn::A));
+        music.select_row(1);
+        music.input(Action::GbaDown(Btn::A));
         assert!(music.showing_now_playing());
+        assert_eq!(music.playing_album().title, "Beta");
+        assert_eq!(music.playing_position(), Some((1, 2)));
+
+        // Browse Alpha independently, then return to Now Playing.
+        music.input(Action::GbaDown(Btn::R1)); // Albums root
+        music.select_row(0);
+        music.input(Action::GbaDown(Btn::A));
+        assert_eq!(music.browsed_album().title, "Alpha");
+        music.input(Action::GbaDown(Btn::L1)); // Now Playing
+        assert!(music.showing_now_playing());
+
         music.input(Action::GbaDown(Btn::B));
         assert!(!music.showing_now_playing());
-        assert!(music.showing_tracks(), "B returns to the original album");
-        assert_eq!(music.playing_position(), Some((0, 1)));
+        assert!(music.showing_tracks());
+        assert_eq!(music.browsed_album().title, "Beta",
+            "B must use the active track's album, not the browsed album");
+        assert_eq!(music.cursor(), 1, "highlight the actual playing song");
+        assert_eq!(music.playing_position(), Some((1, 2)));
+        music.input(Action::GbaDown(Btn::B));
+        assert!(music.is_root());
+        assert_eq!(music.label(), "albums");
+        assert_eq!(music.row(music.cursor()).0, "Beta",
+            "the album root highlights the playing album");
+        assert!(!music.input(Action::GbaDown(Btn::B)));
+        assert!(music.is_root(), "B never exits Music");
+        assert!(music.input(Action::QuickMenu), "only HOME/Menu exits Music");
+    }
+
+    #[test]
+    fn b_from_empty_now_playing_opens_albums_but_does_not_exit_music() {
+        let root = tempfile::tempdir().unwrap();
+        let mut music = Music::open(root.path());
+        assert!(music.showing_now_playing());
+        assert!(music.track.is_none());
+        music.input(Action::GbaDown(Btn::B));
+        assert_eq!(music.label(), "albums");
+        assert!(music.is_root());
+        assert!(!music.input(Action::GbaDown(Btn::B)));
+        assert_eq!(music.label(), "albums");
+        assert!(music.input(Action::QuickMenu));
     }
 
     #[test]
@@ -1689,7 +1735,10 @@ mod tests {
         assert!(!music.showing_now_playing());
         assert!(!music.input(Action::GbaDown(Btn::B)));
         assert!(music.is_root());
-        assert!(music.input(Action::GbaDown(Btn::B)));
+        assert!(!music.input(Action::GbaDown(Btn::B)));
+        assert!(music.is_root());
+        assert!(music.input(Action::QuickMenu),
+            "HOME/Menu is the only way to leave Music");
     }
 
     #[test]

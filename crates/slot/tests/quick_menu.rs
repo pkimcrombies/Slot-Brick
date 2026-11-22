@@ -120,13 +120,18 @@ fn music_opens_from_the_menu_and_returns_to_the_same_carousel() {
     open_at(&mut a, row);
     press(&mut a, Btn::A);
     assert!(matches!(a.phase(), Phase::Music));
-    // Music now opens at Now Playing. First B goes to its Albums root,
-    // keeping the Music session alive instead of closing it.
+    // B from empty Now Playing opens Albums, not the HOME menu.
     press(&mut a, Btn::B);
     assert!(matches!(a.phase(), Phase::Music));
     assert_eq!(a.quick_menu(), None);
-    // Second B exits Music back to its original HOME menu selection.
-    press(&mut a, Btn::B);
+    // Even repeated B at the Albums root cannot exit the Music app.
+    for _ in 0..3 {
+        press(&mut a, Btn::B);
+        assert!(matches!(a.phase(), Phase::Music));
+        assert_eq!(a.quick_menu(), None);
+    }
+    // HOME/Menu is the one explicit exit, returning to the Music row.
+    a.apply(Action::QuickMenu);
     assert_eq!(a.quick_menu(), Some(row));
     press(&mut a, Btn::B);
     assert!(matches!(a.phase(), Phase::Shelf));

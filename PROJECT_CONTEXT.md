@@ -51,15 +51,17 @@
   Embedded MP3/M4A art loads asynchronously; album rows have 40px covers.
   **Now Playing navigation and background browsing (2026-11-23, not yet
   ARM64-compiled or device-tested):** the real Music entry defaults to a
-  standalone **Now Playing** section, with Albums and Artists alongside it.
+  standalone **Now Playing** section, with Albums, Artists and Settings
+  alongside it.
   Music opens on Now Playing. **B from Now Playing** opens the track list
   belonging to the currently playing album, with that song highlighted
   (regardless of the last browsed album); B again opens the Albums root
   and highlights the playing album. Without a track B opens Albums root.
-  B on an Albums/Artists root does nothing: only **HOME/Menu**
-  (`Action::QuickMenu`) exits Music and returns to Slot's menu. Start opens
-  Music Settings rather than exiting. L1/R1 cycle all three Music sections
-  from any page, including while a track is playing. On Now Playing with
+  B on an Albums/Artists/Settings root does nothing: only **HOME/Menu**
+  (`Action::QuickMenu`) exits Music and returns to Slot's menu. **Start is
+  unmapped in Music.** L1/R1 cycle all four Music sections (Now Playing,
+  Albums, Artists, Settings) from any page, including during playback.
+  On Now Playing with
   an active song, A pauses/resumes, D-pad Left/Right skip
   previous/next track, and X cycles repeat. With **no song loaded**, all
   D-pad directions and A leave the empty Now Playing screen unchanged;
@@ -85,8 +87,14 @@
   to/from Now Playing without stopping music, browsing another album while
   preserving the original song, and the shared clock position.
   **Music Settings + repeat (Nov 2026, pending Rust/device validation):**
-  press **Start** from any Music screen to open a full-width classic settings
-  page; Up/Down select rows, Left/Right/A change values, B/Start closes.
+  **Settings is the fourth Music tab** (after Artists), reached by L1/R1,
+  not Start. Up/Down select rows, Left/Right/A change values; B is inert
+  at this root, just like Albums and Artists. L1/R1 keep cycling tabs.
+  Its two-column label/value layout follows Slot System Settings:
+  `QUICK_PITCH` (48px) row rhythm, `QUICK_VALUE_EDGE` second column,
+  selected labels/values in dusty rose without full-width pink selection
+  bars or dividers, and Music's existing warm-ivory background/black HUD.
+  The screen and existing settings values remain unchanged.
   Rows: Music-only digital volume cap (default 70%, steps of 10 to 0-100),
   default album browse view (Cover Flow/list), album sort (A-Z/newest tagged
   release date first), Repeat (off/all/one), and **Dim after** (Off/30 seconds/
@@ -207,8 +215,8 @@
   Both Albums and Artists use dark charcoal for their selected tab label
   (muted text for the inactive tab); the earlier pink Albums label in
   Cover Flow was inconsistent and is removed. Dusty rose remains for
-  song/list selections. In the three-section Music navigation,
-  `L1/R1` switch Now Playing/Albums/Artists. In Albums, `X` toggles
+  song/list selections. In the four-section Music navigation,
+  `L1/R1` switch Now Playing/Albums/Artists/Settings. In Albums, `X` toggles
   Cover Flow/list, `A` opens, `Y` plays, and `B` backs out.
   The former `x list`/`x covers` hints have been removed.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
@@ -258,6 +266,19 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Settings as fourth Music tab (not compiled/device-tested):**
+  Four-section L1/R1 wrap order is Now Playing, Albums, Artists, Settings.
+  Start is unmapped; Settings B is inert; HOME/Menu alone exits Music.
+  Up/Down select settings; Left/Right/A modify them. Entering Settings
+  resets to the first row; browsing Albums/Artists resets to root.
+  `MusicView::settings` uses the same two-column text-only selection
+  and 48px pitch as Slot's system QuickMenu, while retaining Music's ivory
+  palette and 24px HUD-aligned left margin. Cover Flow decoding is skipped
+  while Settings is shown. The six existing settings and audio behavior
+  are unchanged. Unit regressions updated for four tabs, persistence,
+  Start/B behavior, and ongoing music. Music-video exploration is on hold.
+
 
 - **2026-11-23 UI refinement:** UXWing repeat symbol reduced from 28x28
   to 20x20, matching the visual scale of battery/Wi-Fi HUD indicators.
@@ -314,8 +335,8 @@
   root, selecting the playing track (not a previously browsed album).
   Root Albums cursor follows sorted album ID, so B again selects that
   album in Albums/Cover Flow. Empty Now Playing B opens Albums root.
-  B at Albums/Artists root never exits. Only `Action::QuickMenu`
-  (physical HOME/Menu) exits Music; Start is Music Settings. Updated
+  B at Albums/Artists/Settings root never exits. Only `Action::QuickMenu`
+  (physical HOME/Menu) exits Music; Start is intentionally unmapped. Updated
   integration and unit regressions in `music.rs` / `quick_menu.rs`.
   Rust tests, ARM64 build and on-device verification are pending.
 
@@ -383,9 +404,9 @@
 
 ## Next work
 
-1. Verify new **Now Playing / Albums / Artists** navigation and shared top
-   HUD first: Music defaults to Now Playing, B returns to the browser without
-   stopping music, L1/R1 cycle all three sections, A pauses/resumes,
+1. Verify new **Now Playing / Albums / Artists / Settings** navigation and
+   shared top HUD first: Music defaults to Now Playing, B returns to the
+   browser without stopping music, L1/R1 cycle all four tabs, A pauses/resumes,
    D-pad Left/Right change songs without seeking, and the repeat badge sits
    at bottom-right without overlapping time/progress. There should be no
    button tooltips such as "x repeat" or "x list". Confirm background music
@@ -401,7 +422,9 @@
    Also check the existing GPU Cover Flow perspective, rack overlap,
    frame rate and artwork (without reflections). Keep album list via **X**.
 3. Validate **Music Settings, repeat, and the new dim timer** on device:
-   Start/B navigation; X cycles off/all/one on Now Playing; 70% default
+   Settings via L1/R1 (not Start), B inert at Settings root, clean
+   two-column menu and uninterrupted playback; X cycles off/all/one
+   on Now Playing; 70% default
    volume cap; album sorts and saved preferences; Dim after Off/30sec/1min/2min
    with default 1min, plus Dim brightness 1-9 (default 1) and physical
    display remaining on. Test both the lowest and highest steps and verify

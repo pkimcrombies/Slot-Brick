@@ -21,6 +21,13 @@ const PLAYING_GRADIENT_H: u32 = 60;
 const MUSIC_TEXT_INK: [u8; 3] = [0x24, 0x24, 0x24];
 const MUSIC_MUTED_INK: [u8; 3] = [0x74, 0x6e, 0x6b];
 const MUSIC_SELECTION_INK: [u8; 3] = [0xa0, 0x50, 0x69];
+// Repeat icons match the black shelf HUD; disabled mode uses a neutral grey.
+const REPEAT_ACTIVE_INK: [u8; 3] = [0, 0, 0];
+const REPEAT_DISABLED_INK: [u8; 3] = [0x88, 0x88, 0x88];
+
+fn repeat_icon_ink(mode: RepeatMode) -> [u8; 3] {
+    if mode == RepeatMode::Off { REPEAT_DISABLED_INK } else { REPEAT_ACTIVE_INK }
+}
 const MUSIC_PROGRESS_TRACK: [f32; 4] = [0.84, 0.83, 0.82, 1.0];
 const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
 
@@ -163,8 +170,13 @@ impl MusicView {
                         continue;
                     };
                     let Some(mut pixels) = decode_repeat_icon(&bytes) else { continue };
-                    let ink = if index == 0 { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
-                    // UXWing's black symbols become Slot's muted/rose ink while
+                    let mode = match index {
+                        0 => RepeatMode::Off,
+                        1 => RepeatMode::All,
+                        _ => RepeatMode::One,
+                    };
+                    let ink = repeat_icon_ink(mode);
+                    // UXWing's black symbols become neutral grey or HUD black while
                     // retaining antialiased edges. White pixels are transparent.
                     for pixel in pixels.chunks_exact_mut(4) {
                         let darkness = 255 - ((u16::from(pixel[0]) + u16::from(pixel[1])
@@ -585,7 +597,7 @@ impl Painter<'_> {
             });
             return;
         }
-        let ink = if mode == RepeatMode::Off { MUSIC_MUTED_INK } else { MUSIC_SELECTION_INK };
+        let ink = repeat_icon_ink(mode);
         let colour = [
             ink[0] as f32 / 255.0, ink[1] as f32 / 255.0,
             ink[2] as f32 / 255.0, 1.0,
@@ -1070,6 +1082,13 @@ mod album_thumbnail_layout_tests {
         let decoded = decode_repeat_icon(&png_bytes).expect("valid transparent PNG");
         assert_eq!(decoded.len(), (REPEAT_ICON_SIDE * REPEAT_ICON_SIDE * 4) as usize);
         assert!(decode_repeat_icon(b"not a png").is_none());
+    }
+
+    #[test]
+    fn repeat_icons_use_black_for_active_modes_and_grey_for_off() {
+        assert_eq!(repeat_icon_ink(RepeatMode::Off), [0x88, 0x88, 0x88]);
+        assert_eq!(repeat_icon_ink(RepeatMode::All), [0, 0, 0]);
+        assert_eq!(repeat_icon_ink(RepeatMode::One), [0, 0, 0]);
     }
 
     #[test]

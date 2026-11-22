@@ -223,6 +223,10 @@
   song/list selections. In the four-section Music navigation,
   `L1/R1` switch Now Playing/Albums/Artists/Settings. In Albums, `X` toggles
   Cover Flow/list, `A` opens, `Y` plays, and `B` backs out.
+  In Cover Flow only, Up/Down move to previous/next album-title initial
+  (skipping missing letters and wrapping); Left/Right move one cover.
+  Empty Now Playing shows only tabs and the normal shelf HUD. Settings
+  retains six rows without bottom help captions.
   The former `x list`/`x covers` hints have been removed.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
   `music_view.rs`. The `frontend.rs` animation redraw gate must stay
@@ -271,6 +275,25 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Music minimalism + Cover Flow letter navigation:**
+  Empty Now Playing deliberately renders only the Music tabs beneath the
+  shared HUD (removed "nothing playing" and the choose-album subtitle).
+  Music Settings retains its six rows and ivory/two-column design but
+  removes both bottom instructional/safety captions; these remain true
+  operating considerations, not permanent screen copy. Cover Flow alone:
+  Up goes to the previous available initial, Down to the next initial,
+  skipping unused letters and wrapping at the ends (including the `#`
+  group); Left/Right still move one album. Alphabet jump targets the first
+  displayed album for that letter while keeping A-Z or newest-first
+  album sorting unchanged. A sole initial/empty library is unchanged.
+  Jumps >3 cover positions snap immediately rather than animating through
+  intermediate artwork and wasting image decodes; adjacent Cover Flow
+  navigation retains the existing 400ms ease-out animation. Test coverage
+  added for missing letters, wrapping, shared initials, release sort and
+  far-jump animation. No changes to playback, Music tabs, settings values,
+  saved files or video (still deferred).
+
 
 - **2026-11-23 cartridge Start-menu visual alignment:** The shared
   `slot-ui/src/cart_menu.rs` renderer (GB/GBC/NES/SNES Start) now

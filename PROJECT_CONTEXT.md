@@ -100,13 +100,18 @@
   a representative RGB tint alongside the cover's GPU texture in each
   bounded `MusicCover` slot. `music_view.rs` reuses that tint immediately
   from Cover Flow or album-list caches, or as soon as pending artwork is
-  decoded. Only Now Playing receives 32 lightweight bands forming a soft
-  top-to-bottom hue-to-ivory wash; Music Settings, Cover Flow, Albums and
-  Artists retain plain `#F5F1EA`. Near-monochrome/missing artwork falls
-  back to ivory. This does **not** reload art, add a second decoder,
-  retain an unbounded palette map, or alter text colours. Check both warm
-  and cool colourful covers, black-and-white covers, transitions between
-  albums and text readability on the actual Brick Pro.
+  decoded. The first version used 32 horizontal rectangles with a subtle
+  top-to-bottom tint (32% to 6%), which the user confirmed worked but
+  wanted a little stronger and diagonal. The new implementation uses one
+  **80x60 linearly filtered, cached RGBA gradient texture**, blending album
+  colour from **43% at top-left to 10% at bottom-right**. The texture is
+  generated/updated only when the sampled album colour changes, never on
+  every render frame, and needs just one GPU draw call. No new image reads,
+  extra decoders, shaders or per-frame artwork analysis. Music Settings,
+  Cover Flow, Albums and Artists retain plain `#F5F1EA`. Near-monochrome/
+  missing artwork falls back to ivory. Test the diagonal direction, both
+  warm/cool artwork, text contrast, transitions between albums and GPU
+  performance on the actual Brick Pro.
   This is **reuse of visible/in-flight GPU artwork**, not a persistent
   all-albums or disk cache: artwork not yet requested must still load.
   Verify first-frame appearance, subsequent songs from the same album, and
@@ -215,10 +220,11 @@
    70% default digital cap (with headphones), A-Z vs newest release-date
    sort including albums without date, and saved preferences across restart.
    No parent-control PIN has been added: settings are editable by anyone.
-4. Check Now Playing's new **artwork-adaptive background** on the
-   Brick Pro: representative hue and soft ivory gradient, readable charcoal
-   text, no tint when artwork is monochrome/missing, no incorrect tint when
-   swapping albums, no new image-load delay.
+4. Check Now Playing's **stronger diagonal artwork-adaptive
+   background** on the Brick Pro: hue strongest at top-left, fading smoothly
+   to subtle ivory at bottom-right. Check readability (including dusty-rose
+   text), no tint when artwork is monochrome/missing, no incorrect colour
+   when swapping albums, and no image-load delay or frame-rate regression.
 5. PSP replacement work can resume separately when requested.
 
 **For a new conversation:** ask the assistant to read this file from GitHub,

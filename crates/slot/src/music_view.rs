@@ -13,9 +13,10 @@ use crate::music_cover::{MusicCover, THUMBNAIL};
 // less stark than pure white. System menus and the launcher keep their
 // original dark palette; never change global MENU_* constants.
 const MUSIC_BACKGROUND: [f32; 4] = [245.0 / 255.0, 241.0 / 255.0, 234.0 / 255.0, 1.0];
-// A few flat colour bands are enough for a smooth vertical blend at 640x480;
-// no extra artwork textures, shaders, or per-frame image analysis.
-const PLAYING_BACKGROUND_BANDS: usize = 32;
+// Reuse a single small bilinearly filtered GPU texture for a smooth diagonal
+// backdrop. Regenerate it only if the album colour changes, never per frame.
+const PLAYING_GRADIENT_W: u32 = 80;
+const PLAYING_GRADIENT_H: u32 = 60;
 const MUSIC_TEXT_INK: [u8; 3] = [0x24, 0x24, 0x24];
 const MUSIC_MUTED_INK: [u8; 3] = [0x74, 0x6e, 0x6b];
 const MUSIC_SELECTION_INK: [u8; 3] = [0xa0, 0x50, 0x69];
@@ -115,6 +116,11 @@ struct CachedFace {
     face: Face,
 }
 
+struct PlayingBackdrop {
+    texture: TexId,
+    accent: [u8; 3],
+}
+
 #[derive(Default)]
 pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
@@ -123,6 +129,7 @@ pub(crate) struct MusicView {
     flow_covers: [MusicCover; FLOW_SLOTS],
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
+    playing_backdrop: Option<PlayingBackdrop>,
 }
 
 impl MusicView {
@@ -141,6 +148,37 @@ impl MusicView {
     fn ready_album_tint(&self, first_track: &Path) -> Option<[u8; 3]> {
         self.flow_covers.iter().chain(self.album_covers.iter())
             .find_map(|cached| cached.tint_for(first_track))
+    }
+
+    /// One texture and no additional artwork reads. Its pixels are computed
+    /// only when the sampled album colour changes; GL performs the scaling
+    /// and interpolation in a single background draw.
+    fn playing_background_texture(
+        &mut self,
+        accent: Option<[u8; 3]>,
+        compositor: &mut Compositor,
+    ) -> Option<TexId> {
+        let accent = accent?;
+        if let Some(backdrop) = &self.playing_backdrop {
+            if backdrop.accent == accent {
+                return Some(backdrop.texture);
+            }
+        }
+        let pixels = playing_gradient_rgba(accent);
+        let texture = if let Some(backdrop) = &mut self.playing_backdrop {
+            compositor.update_texture(
+                backdrop.texture, PLAYING_GRADIENT_W, PLAYING_GRADIENT_H, &pixels,
+            );
+            backdrop.accent = accent;
+            backdrop.texture
+        } else {
+            let texture = compositor.create_texture(
+                PLAYING_GRADIENT_W, PLAYING_GRADIENT_H, &pixels,
+            );
+            self.playing_backdrop = Some(PlayingBackdrop { texture, accent });
+            texture
+        };
+        Some(texture)
     }
 
     pub(crate) fn render(
@@ -226,6 +264,11 @@ impl MusicView {
         } else {
             None
         };
+        let backdrop = if music.track.is_some() && !music.music_settings_open() {
+            self.playing_background_texture(accent, compositor)
+        } else {
+            None
+        };
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -233,8 +276,12 @@ impl MusicView {
             scale,
             draws: Vec::new(),
         };
-        if music.track.is_some() && !music.music_settings_open() {
-            p.playing_background(accent);
+        if let Some(texture) = backdrop {
+            p.draws.push(Draw::Tex {
+                x: 0.0, y: 0.0,
+                w: OUT_W as f32, h: OUT_H as f32,
+                tex: texture, alpha: 1.0,
+            });
         } else {
             p.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
         }
@@ -464,27 +511,6 @@ impl Painter<'_> {
         self.place(face, (OUT_W as f32 - face.size[0] as f32) / 2.0, y);
     }
 
-    /// A subdued colour wash inspired by the playing album. The same
-    /// dark text palette remains readable because every band is mixed
-    /// predominantly with warm ivory. Plain artwork uses plain ivory.
-    fn playing_background(&mut self, accent: Option<[u8; 3]>) {
-        let Some(accent) = accent else {
-            self.rect([0.0, 0.0], [OUT_W as f32, OUT_H as f32], MUSIC_BACKGROUND);
-            return;
-        };
-        let bands = PLAYING_BACKGROUND_BANDS as f32;
-        for index in 0..PLAYING_BACKGROUND_BANDS {
-            let top = index as f32 * OUT_H as f32 / bands;
-            let bottom = (index + 1) as f32 * OUT_H as f32 / bands;
-            let progress = (index as f32 + 0.5) / bands;
-            self.rect(
-                [0.0, top],
-                [OUT_W as f32, bottom - top],
-                playing_background_colour(accent, progress),
-            );
-        }
-    }
-
     /// Two small, opposing arrows form a native repeat glyph without
     /// requiring a new font or rasterized asset. Off is muted; active modes
     /// use Slot's dusty rose, with text for accessible state distinction.
@@ -708,11 +734,16 @@ impl Painter<'_> {
     }
 }
 
-/// A perceptually quiet album-colour wash: strongest behind the header
-/// and artwork, easing back into the familiar ivory towards playback controls.
-fn playing_background_colour(accent: [u8; 3], progress: f32) -> [f32; 4] {
-    let progress = progress.clamp(0.0, 1.0);
-    let strength = 0.06 + 0.26 * (1.0 - progress).powi(2);
+/// A restrained, stronger diagonal colour wash, fading from the upper-left
+/// (where the album art sits) towards warm ivory in the lower-right. The
+/// screen keeps the same charcoal text and dusty-rose playback controls.
+fn playing_background_colour(accent: [u8; 3], x: f32, y: f32) -> [f32; 4] {
+    let diagonal = (0.58 * x.clamp(0.0, 1.0)
+        + 0.42 * y.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let smooth = diagonal * diagonal * (3.0 - 2.0 * diagonal);
+    // Previous vertical wash: 32% -> 6%. This is a visible but restrained
+    // increase, from 43% in the top-left to 10% in the bottom-right.
+    let strength = 0.10 + 0.33 * (1.0 - smooth);
     let mut result = MUSIC_BACKGROUND;
     for channel in 0..3 {
         let hue = f32::from(accent[channel]) / 255.0;
@@ -720,6 +751,27 @@ fn playing_background_colour(accent: [u8; 3], progress: f32) -> [f32; 4] {
             + hue * strength;
     }
     result
+}
+
+/// Native GPU bilinear interpolation makes the diagonal smooth at 640x480
+/// using one tiny 80x60 texture rather than hundreds of independent quads.
+fn playing_gradient_rgba(accent: [u8; 3]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(
+        (PLAYING_GRADIENT_W * PLAYING_GRADIENT_H * 4) as usize,
+    );
+    for y in 0..PLAYING_GRADIENT_H {
+        for x in 0..PLAYING_GRADIENT_W {
+            let colour = playing_background_colour(
+                accent,
+                x as f32 / (PLAYING_GRADIENT_W - 1) as f32,
+                y as f32 / (PLAYING_GRADIENT_H - 1) as f32,
+            );
+            for channel in colour {
+                rgba.push((channel * 255.0).round().clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    rgba
 }
 
 /// Position a track row within the visible full-width list.
@@ -862,17 +914,34 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn now_playing_background_follows_album_hue_and_stays_legible() {
-        let red = playing_background_colour([220, 45, 50], 0.0);
-        let blue = playing_background_colour([34, 90, 215], 0.0);
-        let blue_bottom = playing_background_colour([34, 90, 215], 1.0);
-        assert!(red[0] > red[2], "red covers should tint red");
-        assert!(blue[2] > blue[0], "blue covers should tint blue");
-        assert!(blue[0] < blue_bottom[0], "the wash fades towards ivory");
-        assert!(blue[0] > 0.65, "dark song text must remain legible");
-        assert!(blue_bottom[0] < MUSIC_BACKGROUND[0]);
-        assert_eq!(red[3], 1.0);
-        assert_eq!(PLAYING_BACKGROUND_BANDS, 32);
+    fn now_playing_gradient_is_darker_and_diagonal_not_a_vertical_band() {
+        let tint = [34, 90, 215];
+        let top_left = playing_background_colour(tint, 0.0, 0.0);
+        let top_right = playing_background_colour(tint, 1.0, 0.0);
+        let bottom_left = playing_background_colour(tint, 0.0, 1.0);
+        let bottom_right = playing_background_colour(tint, 1.0, 1.0);
+        let red = playing_background_colour([220, 45, 50], 0.0, 0.0);
+        assert!(red[0] > red[2], "warm covers yield a warm tint");
+        assert!(top_left[2] > top_left[0], "blue artwork remains blue");
+        assert!(top_left[0] < top_right[0], "fades from left to right");
+        assert!(top_left[0] < bottom_left[0], "also fades top to bottom");
+        assert!(bottom_right[0] > top_right[0], "both axes influence colour");
+        assert!(bottom_left[0] < top_right[0], "top-to-bottom is not the only axis");
+        assert!(top_left[0] > 0.52, "dark text stays readable on the backdrop");
+        assert!(bottom_right[0] < MUSIC_BACKGROUND[0],
+            "bottom-right still retains a faint album hue");
+        assert_eq!(top_left[3], 1.0);
+    }
+
+    #[test]
+    fn gradient_uses_one_small_opaque_rgba_texture_with_distinct_corners() {
+        let rgba = playing_gradient_rgba([34, 90, 215]);
+        assert_eq!(rgba.len(), (PLAYING_GRADIENT_W * PLAYING_GRADIENT_H * 4) as usize);
+        assert_eq!(rgba[3], 255);
+        assert_eq!(rgba[rgba.len() - 1], 255);
+        assert_ne!(&rgba[..3], &rgba[rgba.len()-4..rgba.len()-1]);
+        // Right neighbour of the top-left already differs along the diagonal.
+        assert_ne!(&rgba[..3], &rgba[4 * (PLAYING_GRADIENT_W as usize - 1)..4 * PLAYING_GRADIENT_W as usize - 1]);
     }
 
     #[test]

@@ -69,6 +69,9 @@
   on 2026-11-22, the user asked to **remove the mirrored reflections** as
   outdated. Covers keep their original 3D perspective; the extra mirrored
   draw pass, shader UV/fade path, and reflection uniform have been removed.
+  Cover Flow now omits the lower `1 / N` album counter entirely and moves
+  the centred album title and artist up 24px (to y=365 and y=402), leaving
+  carousel positions, animation and album-opening controls untouched.
   `X` toggles original list, `L1/R1` Albums/Artists, `A` opens,
   `Y` plays, `B` leaves root. Artists/tracks unchanged.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:

@@ -48,6 +48,9 @@ const FLOW_SLOTS: usize = 7;
 const FLOW_DURATION: Duration = Duration::from_millis(400);
 const FLOW_COVER_Y: f32 = 100.0;
 const FLOW_FRONT_SIDE: f32 = 218.0;
+// With reflections removed, bring the album labels closer to the covers.
+const FLOW_ALBUM_TITLE_Y: f32 = 365.0;
+const FLOW_ALBUM_ARTIST_Y: f32 = 402.0;
 const FLOW_YAW: f32 = 0.95;
 const FLOW_PERSPECTIVE: f32 = 0.35 / FLOW_FRONT_SIDE;
 
@@ -393,18 +396,13 @@ impl Painter<'_> {
                 x: px, y: py, w, h, tex, alpha,
                 yaw, perspective: FLOW_PERSPECTIVE,
             });
-
         }
 
         let (album, artist) = music.row(music.cursor());
-        self.text_center(album, 26, 389.0, MUSIC_TEXT_INK, 544);
+        self.text_center(album, 26, FLOW_ALBUM_TITLE_Y, MUSIC_TEXT_INK, 544);
         if let Some(artist) = artist {
-            self.text_center(artist, 18, 426.0, MUSIC_MUTED_INK, 544);
+            self.text_center(artist, 18, FLOW_ALBUM_ARTIST_Y, MUSIC_MUTED_INK, 544);
         }
-        self.text_center(
-            &format!("{} / {}", music.cursor() + 1, music.row_count()),
-            15, 454.0, MUSIC_MUTED_INK, 160,
-        );
     }
 
     fn text_center(&mut self, text: &str, px: u32, y: f32, ink: [u8; 3], room: u32) {
@@ -662,6 +660,17 @@ mod album_thumbnail_layout_tests {
         let next = motion.to(4, midway);
         assert!((next - before).abs() < 0.001, "navigation jumped instead of retargeting");
         assert_eq!(motion.at(midway + FLOW_DURATION), Some(4.0));
+    }
+
+    #[test]
+    fn cover_flow_album_labels_sit_above_the_old_reflection_area() {
+        // Keep both labels clear of the front album (100 + 218px), while
+        // using the newly empty space below the artwork.
+        assert!(FLOW_ALBUM_TITLE_Y >= FLOW_COVER_Y + FLOW_FRONT_SIDE + 35.0);
+        assert!(FLOW_ALBUM_TITLE_Y < 389.0);
+        assert!(FLOW_ALBUM_ARTIST_Y >= FLOW_ALBUM_TITLE_Y + 32.0);
+        assert!(FLOW_ALBUM_ARTIST_Y < 426.0);
+        assert!(FLOW_ALBUM_ARTIST_Y + 28.0 < OUT_H as f32);
     }
 
     #[test]

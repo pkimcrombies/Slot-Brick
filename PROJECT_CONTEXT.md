@@ -241,6 +241,18 @@
 
 ## Test/build/install guardrails
 
+- **2026-11-23 section-switch regression:** installer pinned to `5a522cd`
+  stopped safely after 260 passed, 1 failed, 8 ignored in
+  `music::tests::shoulders_cycle_all_three_sections_without_skipping_tracks`.
+  After Y began playback from a track list, pressing R1 from Now Playing
+  left the browser inside `Unknown Album` instead of opening the Albums
+  root. Fix in `bddd9eb`: L1/R1 always enter the destination section's
+  root, regardless of nested browsing state; B from Now Playing still
+  restores the originating album track list without stopping audio.
+  Added explicit tests for both paths. No SD changes occurred; Rust tests
+  and ARM64 build for the fix remain unverified.
+
+
 - **Installer validation 2026-11-23:** first pinned Music/Now Playing
   install at `197e134` ran 266 Music/Brick simulation unit tests:
   257 passed, 8 ignored, 1 failed in

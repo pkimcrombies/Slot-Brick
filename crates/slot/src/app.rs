@@ -285,7 +285,7 @@ pub struct App {
     music_before_doze: bool,
     /// Music-only physical backlight dim; never zero and never saved as
     /// the user's normal brightness setting.
-    music_dimmed: bool,
+    music_dimmed: Option<u8>,
     #[cfg(feature = "brick")]
     pub(crate) wifi: Option<crate::brick_wifi::WifiMenu>,
     #[cfg(feature = "brick")]
@@ -592,7 +592,7 @@ impl App {
             music: None,
             music_draws: Vec::new(),
             music_before_doze: false,
-            music_dimmed: false,
+            music_dimmed: None,
             #[cfg(feature = "brick")]
             auto_check: Default::default(),
             update_face: None,
@@ -1234,13 +1234,19 @@ impl App {
         self.music_draws = draws;
     }
 
-    /// Physical brightness only: music's inactivity dim never changes the
-    /// saved system brightness, and the display remains visibly on.
-    pub(crate) fn set_music_dimmed(&mut self, dimmed: bool) {
-        if self.music_dimmed == dimmed { return; }
-        self.music_dimmed = dimmed;
-        let level = if dimmed { (self.state.brightness / 2).max(1) }
-            else { self.state.brightness };
+    /// Set Music's physical backlight step without changing system brightness.
+    /// Track the requested dim step so an adjustment is applied even if the
+    /// screen was already dimmed; avoid a sysfs write on every frame.
+    pub(crate) fn set_music_dimmed(&mut self, dim_level: Option<u8>) {
+        if self.music_dimmed == dim_level { return; }
+        self.music_dimmed = dim_level;
+        let level = match dim_level {
+            // Do not turn an intentionally dark (level 0) screen back on,
+            // or brighten above the user's usual brightness.
+            Some(_) if self.state.brightness == 0 => 0,
+            Some(dim) => dim.clamp(1, BRIGHTNESS_MAX).min(self.state.brightness),
+            None => self.state.brightness,
+        };
         if let Some(power) = &mut self.power {
             power.set_backlight(level);
         }
@@ -4244,7 +4250,7 @@ impl App {
         // While the backlight is still closed, replace the dimmed hardware
         // level with the normal user setting. on_open() then restores it
         // cleanly without a brightness flash during the sleep fade.
-        self.set_music_dimmed(false);
+        self.set_music_dimmed(None);
         #[cfg(feature = "brick")]
         if let Some(leds) = &mut self.brick_leds {
             if let Err(e) = leds.wake() { eprintln!("slot: LEDs wake: {e}"); }
@@ -6834,11 +6840,11 @@ mod quiet_poweroff_tests {
         app.set_power(Power::new(Box::new(power), std::time::Duration::from_secs(180)));
         app.music = Some(crate::music::Music::open(root.path()));
         app.phase = Phase::Music;
-        app.set_music_dimmed(true);
-        assert_eq!(writes.lock().unwrap().last().copied(), Some(3));
+        app.set_music_dimmed(Some(1));
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(1));
         assert_eq!(app.brightness(), 6, "dimming must not change the saved setting");
         app.apply(Action::LidClose);
-        assert_eq!(writes.lock().unwrap().last().copied(), Some(3),
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(1),
             "dimmed panel stays illuminated through the sleep fade");
         app.finish_doze_fade();
         assert_eq!(writes.lock().unwrap().last().copied(), Some(0));
@@ -6846,6 +6852,33 @@ mod quiet_poweroff_tests {
         assert!(matches!(app.phase(), Phase::Music));
         assert_eq!(writes.lock().unwrap().last().copied(), Some(6),
             "wake must restore normal brightness, not the dimmed level");
+    }
+
+    #[test]
+    fn dim_brightness_is_capped_by_normal_level_and_only_writes_when_changed() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            brightness: 3, clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        app.set_power(Power::new(Box::new(RecordingBacklight {
+            root: root.path().to_path_buf(),
+            writes: writes.clone(),
+        }), std::time::Duration::from_secs(180)));
+        let initial = writes.lock().unwrap().len();
+        app.set_music_dimmed(Some(8));
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(3),
+            "dim cannot brighten above normal");
+        app.set_music_dimmed(Some(1));
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(1));
+        app.set_music_dimmed(Some(1));
+        assert_eq!(writes.lock().unwrap().len(), initial + 2,
+            "unchanged dim level must not write backlight every frame");
+        app.set_music_dimmed(None);
+        assert_eq!(writes.lock().unwrap().last().copied(), Some(3));
+        assert_eq!(app.brightness(), 3);
     }
 
     #[test]

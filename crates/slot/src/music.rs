@@ -605,8 +605,8 @@ impl Music {
     /// Music's three sections cycle in the same direction everywhere:
     /// Now Playing <-> Albums <-> Artists, wrapping at either end.
     /// A shoulder-button section switch always enters that section's root,
-    /// even when Now Playing was opened from an album's track list. B from
-    /// Now Playing still returns to the untouched browse stack instead.
+    /// even when Now Playing was opened from an album's track list. Unlike
+    /// section switches, B explicitly opens the current track's album.
     fn navigate_section(&mut self, forward: bool) {
         let current = if self.now_playing_view {
             0

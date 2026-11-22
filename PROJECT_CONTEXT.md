@@ -51,7 +51,9 @@
   original album list; **L1/R1** switches Albums/Artists; **A** opens album,
   **Y** starts album, **B** exits root. Artists and tracks stay lists.
   Implementation is in `music.rs`, `music_view.rs`, with the animation
-  redraw gate in `frontend.rs`. Device verification pending.
+  redraw gate in `frontend.rs`. The first installer hit a legacy list-mode
+  test (Right previously changed to Artists); the fixed test toggles X into
+  list mode before asserting its old navigation. Device verification pending.
 - Now Playing was redesigned (commit `7515789`): **214px artwork on left**,
   track/artist/album and position on right, progress/time at bottom. Keep
   physical playback controls. Device feedback on this redesign is pending.

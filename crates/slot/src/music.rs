@@ -761,6 +761,10 @@ mod tests {
             "albums with the same title use the album artist to distinguish them"
         );
         assert_eq!(music.row(1), ("Mixtape", Some("Various Artists")));
+        // This test covers the legacy list navigation. Cover Flow is the new
+        // default, where Right advances an album instead of changing tabs.
+        music.input(Action::GbaDown(Btn::X));
+        assert!(!music.cover_flow());
         music.input(Action::GbaDown(Btn::Right));
         assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::Left));

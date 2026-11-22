@@ -106,7 +106,7 @@ pub(crate) fn draw_status_text(x: f32, y: f32, p: Printed, scale: [f32; 2], out:
 /// The clock is black at top-left; black battery, connected Wi-Fi and update
 /// indicators line up at top-right. The rest of the shelf stays unobstructed.
 const STATUS_TOP_Y: f32 = 12.0;
-const STATUS_MARGIN: f32 = 24.0;
+pub const STATUS_MARGIN: f32 = 24.0;
 
 pub fn draw_status_bar(
     battery: Option<Battery>,

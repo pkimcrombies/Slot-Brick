@@ -321,7 +321,8 @@ mod tests {
     fn assert_ink(face: &UndoFace, expected: [u8; 3]) {
         let pixels: Vec<_> = face.rgba.chunks_exact(4).filter(|px| px[3] > 0).collect();
         assert!(!pixels.is_empty(), "the label face should contain visible glyphs");
-        assert!(pixels.iter().all(|p| p[..3] == expected),
+        assert!(pixels.iter().all(|p|
+            p[0] == expected[0] && p[1] == expected[1] && p[2] == expected[2]),
             "every visible pixel uses the shared menu palette");
     }
 

@@ -259,6 +259,17 @@
 
 ## Test/build/install guardrails
 
+- **2026-11-23 UXWing repeat icon layout regression:** installer pinned
+  `3d9ae19` stopped before touching SD: 265 passed, 1 failed, 8 ignored
+  in `repeat_badge_fits_bottom_right_without_covering_progress_or_time`.
+  With `QUICK_EDGE=32`, a 32px icon had y=416, violating the test's
+  minimum y>417 below the progress/timestamps. Commit `1637794`
+  lowers the icon to y=428 (20px bottom margin), keeping x at 576;
+  test asserts both clearances and the exact 428px coordinate.
+  Build, other suites and device validation of the revised commit
+  remain pending. Previous install aborted with SD unchanged.
+
+
 - **UXWing repeat assets (2026-11-23):** The Music renderer reads three
   PNG files under `Slot/System/music-icons/` exactly once per
   `MusicView` lifecycle; the `png` decoder is native/offline and the

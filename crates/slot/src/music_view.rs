@@ -398,7 +398,9 @@ impl Painter<'_> {
         position: f32,
         placeholder: TexId,
     ) {
-        let label = self.text_ink("albums", 24, [EDGE, TITLE_TOP], MUSIC_SELECTION_INK);
+        // Match the Artists tab: selected navigation labels are charcoal,
+        // while inactive labels stay muted. Rose is for row selection.
+        let label = self.text_ink("albums", 24, [EDGE, TITLE_TOP], MUSIC_TEXT_INK);
         self.text_ink("artists", 24, [EDGE + label as f32 + 22.0, TITLE_TOP], MUSIC_MUTED_INK);
         self.text_right("x list", 16, OUT_W as f32 - EDGE, TITLE_TOP + 7.0, MUSIC_MUTED_INK);
 

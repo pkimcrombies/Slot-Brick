@@ -93,7 +93,11 @@
   Cover Flow now omits the lower `1 / N` album counter entirely and moves
   the centred album title and artist up 24px (to y=365 and y=402), leaving
   carousel positions, animation and album-opening controls untouched.
-  `X` toggles original list, `L1/R1` Albums/Artists, `A` opens,
+  Both Albums and Artists use dark charcoal for their selected tab label
+  (muted text for the inactive tab); the earlier pink Albums label in
+  Cover Flow was inconsistent and is removed. Dusty rose remains for
+  song/list selections. `X` toggles original list, `L1/R1`
+  Albums/Artists, `A` opens,
   `Y` plays, `B` leaves root. Artists/tracks unchanged.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
   `music_view.rs`. The `frontend.rs` animation redraw gate must stay

@@ -58,7 +58,11 @@
   `Y` plays, `B` leaves root. Artists/tracks unchanged.
   Renderer: `slot-gfx/src/draw.rs` and `shaders.rs`; Music layout:
   `music_view.rs`. The `frontend.rs` animation redraw gate must stay
-  bounded. Hardware and ARM64 compile verification are still pending.
+  bounded. First device installer stopped safely during Rust compilation:
+  adding `Draw::CoverFlow` required `slot-ui/src/peel.rs::fade_from` to
+  include the new sprite variant in its alpha match. The follow-up commit
+  adds this exhaustiveness fix without changing layout or shader behavior.
+  Hardware and ARM64 compile verification are still pending.
 - Now Playing was redesigned (commit `7515789`): **214px artwork on left**,
   track/artist/album and position on right, progress/time at bottom. Keep
   physical playback controls. Device feedback on this redesign is pending.

@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
+use slot_store::BRIGHTNESS_MAX;
 use slot_ui::{
     menu_text_face, pixel_aligned_texture, UndoFace, QUICK_EDGE,
 };
@@ -35,6 +36,9 @@ const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
 const ALBUM_HEADER_BOTTOM: f32 = 108.0;
 const ALBUM_LIST_TOP: f32 = 116.0;
 const ALBUM_TRACK_ROW_H: f32 = 44.0;
+const SETTINGS_FIRST_ROW_Y: f32 = 106.0;
+const SETTINGS_ROW_STEP: f32 = 51.0;
+const SETTINGS_ROW_H: f32 = 44.0;
 const ALBUM_VISIBLE_ROWS: usize = 7;
 const ALBUM_TRACK_TITLE_X: f32 = EDGE + 44.0;
 // A gentle tonal step beneath the header, not a separate white panel.
@@ -634,23 +638,28 @@ impl Painter<'_> {
             MUSIC_MUTED_INK, 220,
         );
         let volume = format!("{}%", music.settings_max_volume());
+        let dim_brightness = format!("{}/{}", music.dim_brightness(), BRIGHTNESS_MAX);
         let values = [
             volume.as_str(),
             music.settings_album_view(),
             music.settings_sort(),
             music.repeat_mode().label(),
             music.settings_dim_timeout(),
+            dim_brightness.as_str(),
         ];
-        let labels = ["volume limit", "album view", "sort albums", "repeat", "dim after"];
+        let labels = [
+            "volume limit", "album view", "sort albums", "repeat",
+            "dim after", "dim brightness",
+        ];
         for (index, (label, value)) in labels.iter().zip(values).enumerate() {
-            let y = 112.0 + index as f32 * 58.0;
+            let y = SETTINGS_FIRST_ROW_Y + index as f32 * SETTINGS_ROW_STEP;
             let selected = music.settings_cursor() == index;
             if selected {
                 let rose = MUSIC_SELECTION_INK.map(|n| n as f32 / 255.0);
-                self.rect([0.0, y], [OUT_W as f32, 47.0],
+                self.rect([0.0, y], [OUT_W as f32, SETTINGS_ROW_H],
                     [rose[0], rose[1], rose[2], 1.0]);
             } else {
-                self.rect([EDGE, y + 47.0], [OUT_W as f32 - EDGE * 2.0, 1.0],
+                self.rect([EDGE, y + SETTINGS_ROW_H], [OUT_W as f32 - EDGE * 2.0, 1.0],
                     ALBUM_ROW_SEPARATOR);
             }
             let ink = if selected { ALBUM_WHITE_INK } else { MUSIC_TEXT_INK };
@@ -1014,9 +1023,9 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn music_settings_five_rows_fit_above_the_footer() {
-        let bottom = 112.0 + 4.0 * 58.0 + 47.0;
-        assert!(bottom < 419.0, "dim after row must not overlap its caption");
+    fn music_settings_six_rows_fit_above_the_footer() {
+        let bottom = SETTINGS_FIRST_ROW_Y + 5.0 * SETTINGS_ROW_STEP + SETTINGS_ROW_H;
+        assert!(bottom < 419.0, "dim brightness row must not overlap its caption");
         assert!(440.0 + 18.0 < OUT_H as f32, "safety caption stays on screen");
     }
 

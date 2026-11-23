@@ -382,6 +382,35 @@ mod tests {
     }
 
     #[test]
+    fn decodes_real_h264_mp4_fixture_with_presentation_timestamps() {
+        let Ok(file) = std::env::var("SLOT_NATIVE_VIDEO_FIXTURE") else {
+            // The CI workflow provides a generated local MP4. Generic host
+            // tests need not have ffmpeg installed on the developer machine.
+            return;
+        };
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let worker = std::thread::spawn(move || {
+            let cancel = AtomicBool::new(false);
+            decode_file(Path::new(&file), 0.0, &sender, &cancel)
+        });
+        let mut frames = 0usize;
+        let mut last_pts = -1.0f64;
+        for message in receiver {
+            if let Message::Frame(frame) = message {
+                assert_eq!((frame.width, frame.height), (320, 180));
+                assert_eq!(frame.rgba.len(), 320 * 180 * 4);
+                assert!(frame.pts >= last_pts, "presentation timestamp went backwards");
+                last_pts = frame.pts;
+                frames += 1;
+            }
+        }
+        worker.join().expect("decoder did not panic")
+            .expect("the decoder must consume the real MP4 fixture");
+        assert!(frames >= 10, "expected at least ten actual H.264 frames, got {frames}");
+        assert!(last_pts > 1.0, "the decoded video clock never advanced");
+    }
+
+    #[test]
     fn no_video_stops_worker_and_clears_display() {
         let mut video = MusicVideo::default();
         video.sync(None, Some(12.5));

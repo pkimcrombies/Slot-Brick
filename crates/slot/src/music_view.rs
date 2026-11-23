@@ -110,6 +110,9 @@ const ALBUM_WHITE_INK: [u8; 3] = [255, 255, 255];
 const PLAYING_COVER_SIDE: f32 = 250.0;
 const PLAYING_COVER_X: f32 = EDGE;
 const PLAYING_COVER_Y: f32 = 112.0;
+// Small red YouTube badge over the upper-left edge of the current cover.
+const VIDEO_BADGE_SIDE: u32 = 22;
+const VIDEO_BADGE_INSET: f32 = 6.0;
 const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 22.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
 // Progress/timestamps occupy the bottom line, with Repeat next to end time.
@@ -135,6 +138,35 @@ const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 40.0;
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
 const PLAYBACK_ICON_FILES: [&str; 2] = ["play.png", "pause.png"];
+const VIDEO_BADGE_FILE: &str = "youtube.png";
+
+/// A video badge means a non-empty local companion video with the same
+/// directory and filename stem as the playing MP3/M4A. It does not search
+/// YouTube or suggest that the current Slot build can decode the video.
+fn has_companion_video(audio_path: &Path) -> bool {
+    ["mp4", "m4v"].into_iter().any(|extension| {
+        std::fs::metadata(audio_path.with_extension(extension))
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+    })
+}
+
+/// Avoid SD metadata reads during title-marquee frames or repeat updates.
+#[derive(Default)]
+struct VideoBadgeCache {
+    audio_path: Option<PathBuf>,
+    available: bool,
+}
+
+impl VideoBadgeCache {
+    fn available_for(&mut self, audio_path: &Path) -> bool {
+        if self.audio_path.as_deref() != Some(audio_path) {
+            self.available = has_companion_video(audio_path);
+            self.audio_path = Some(audio_path.to_path_buf());
+        }
+        self.available
+    }
+}
+
 
 fn playback_icon_index(status: Status) -> Option<usize> {
     match status {
@@ -364,6 +396,9 @@ pub(crate) struct MusicView {
     lock_glyph: Option<LockGlyph>,
     playback_icons_loaded: bool,
     playback_icons: [Option<TexId>; 2],
+    youtube_icon_loaded: bool,
+    youtube_icon: Option<TexId>,
+    video_badge: VideoBadgeCache,
 }
 
 impl Default for MusicView {
@@ -388,6 +423,9 @@ impl Default for MusicView {
             lock_glyph: None,
             playback_icons_loaded: false,
             playback_icons: [None; 2],
+            youtube_icon_loaded: false,
+            youtube_icon: None,
+            video_badge: VideoBadgeCache::default(),
         }
     }
 }
@@ -494,6 +532,26 @@ impl MusicView {
             }
         }
         self.playback_icons[index]
+    }
+
+    /// Downloaded by the installer, decoded once and kept in GPU memory.
+    /// Keep UXWing's red-and-white artwork and transparent background.
+    fn youtube_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
+        if !self.youtube_icon_loaded {
+            self.youtube_icon_loaded = true;
+            if let Some(root) = music.icon_root() {
+                let path = root.join("System/music-icons").join(VIDEO_BADGE_FILE);
+                if let Some(bytes) = std::fs::read(path).ok()
+                    .filter(|bytes| bytes.len() <= 4 << 20) {
+                    if let Some(pixels) = decode_youtube_icon(&bytes) {
+                        self.youtube_icon = Some(compositor.create_texture(
+                            VIDEO_BADGE_SIDE, VIDEO_BADGE_SIDE, &pixels,
+                        ));
+                    }
+                }
+            }
+        }
+        self.youtube_icon
     }
 
     pub(crate) fn hud_lock_icon(&self) -> Option<(TexId, u32, u32)> {
@@ -725,6 +783,19 @@ impl MusicView {
         } else {
             None
         };
+        let video_badge_icon = if music.showing_now_playing() && !music.music_settings_open() {
+            if let Some(track) = music.track.as_ref() {
+                if self.video_badge.available_for(&music.song(track).path) {
+                    self.youtube_icon(music, compositor)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let title_offset = if music.showing_now_playing() && !music.music_settings_open() {
             if let Some(track) = music.track.as_ref() {
                 let song = music.song(track);
@@ -773,7 +844,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon, playback_icon, title_face);
+                p.playing(music, track, cover, repeat_icon, playback_icon, video_badge_icon, title_face);
             } else {
                 p.empty_now_playing();
             }
@@ -796,6 +867,14 @@ fn decode_lock_icon(png: &[u8]) -> Option<Vec<u8>> {
     if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
     let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
     slot_ui::cover_rgba(&rgba, w, h, HUD_LOCK_SIDE, HUD_LOCK_SIDE)
+}
+
+/// Keep the original red/white YouTube logo, including transparent pixels.
+fn decode_youtube_icon(png: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = crate::cart_art::png_size(png)?;
+    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
+    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
+    slot_ui::cover_rgba(&rgba, w, h, VIDEO_BADGE_SIDE, VIDEO_BADGE_SIDE)
 }
 
 /// Tint the official UXWing glyph black, retaining alpha and hiding white.
@@ -1076,7 +1155,7 @@ impl Painter<'_> {
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
                repeat_icon: Option<TexId>, playback_icon: Option<TexId>,
-               title_face: Option<Face>) {
+               video_badge_icon: Option<TexId>, title_face: Option<Face>) {
         self.music_tabs(0);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
@@ -1089,17 +1168,25 @@ impl Painter<'_> {
             [PLAYING_COVER_SIDE, PLAYING_COVER_SIDE],
             MUSIC_COVER_PLACEHOLDER,
         );
+        let mut art_top_left = [PLAYING_COVER_X, PLAYING_COVER_Y];
         if let Some((texture, pixels)) = cover {
             let size = pixels.map(|n| n as f32 * PLAYING_COVER_SIDE / THUMBNAIL as f32);
+            art_top_left = [
+                PLAYING_COVER_X + (PLAYING_COVER_SIDE - size[0]) / 2.0,
+                PLAYING_COVER_Y + (PLAYING_COVER_SIDE - size[1]) / 2.0,
+            ];
             self.draws.push(pixel_aligned_texture(
-                texture,
-                [
-                    PLAYING_COVER_X + (PLAYING_COVER_SIDE - size[0]) / 2.0,
-                    PLAYING_COVER_Y + (PLAYING_COVER_SIDE - size[1]) / 2.0,
-                ],
-                size,
-                self.scale,
-                1.0,
+                texture, art_top_left, size, self.scale, 1.0,
+            ));
+        }
+        // Draw last so this is a small overlay, not a replacement for the
+        // artwork. Keep it relative to the visible cover even if letterboxed.
+        if let Some(tex) = video_badge_icon {
+            let side = VIDEO_BADGE_SIDE as f32;
+            self.draws.push(pixel_aligned_texture(
+                tex,
+                [art_top_left[0] + VIDEO_BADGE_INSET, art_top_left[1] + VIDEO_BADGE_INSET],
+                [side, side], self.scale, 1.0,
             ));
         }
 
@@ -1682,6 +1769,48 @@ mod album_thumbnail_layout_tests {
         assert!(!indicator.pending());
         assert_eq!(indicator.update(true, now + UNLOCK_ICON_HOLD),
             Some(LockGlyph::Closed));
+    }
+
+    #[test]
+    fn video_badge_detects_only_matching_non_empty_local_companions() {
+        let dir = tempfile::tempdir().unwrap();
+        let song = dir.path().join("My Song.mp3");
+        let next = dir.path().join("Other Song.m4a");
+        std::fs::write(&song, b"music").unwrap();
+        std::fs::write(&next, b"music").unwrap();
+        std::fs::write(dir.path().join("Different.mp4"), b"video").unwrap();
+        assert!(!has_companion_video(&song));
+        let video = dir.path().join("My Song.mp4");
+        std::fs::write(&video, b"").unwrap();
+        assert!(!has_companion_video(&song), "empty video must not show badge");
+        std::fs::write(&video, b"video").unwrap();
+        assert!(has_companion_video(&song));
+        assert!(!has_companion_video(&next));
+        std::fs::write(dir.path().join("Other Song.m4v"), b"video").unwrap();
+        assert!(has_companion_video(&next));
+    }
+
+    #[test]
+    fn video_badge_cache_rechecks_when_the_playing_song_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_video = dir.path().join("With.mp3");
+        let without_video = dir.path().join("Without.mp3");
+        std::fs::write(dir.path().join("With.mp4"), b"video").unwrap();
+        let mut cache = VideoBadgeCache::default();
+        assert!(cache.available_for(&with_video));
+        assert!(!cache.available_for(&without_video));
+        assert!(cache.available_for(&with_video));
+    }
+
+    #[test]
+    fn youtube_badge_is_small_inside_the_top_left_of_the_cover() {
+        assert_eq!(VIDEO_BADGE_FILE, "youtube.png");
+        assert!(VIDEO_BADGE_SIDE <= 24);
+        assert!(VIDEO_BADGE_INSET >= 4.0);
+        assert!(VIDEO_BADGE_INSET + VIDEO_BADGE_SIDE as f32
+            < PLAYING_COVER_SIDE / 4.0);
+        assert!(PLAYING_COVER_X + VIDEO_BADGE_INSET
+            + VIDEO_BADGE_SIDE as f32 < PLAYING_INFO_X);
     }
 
     #[test]

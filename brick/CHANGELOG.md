@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music Cover Flow: preload four additional album covers per side (15-slot rolling cache, 7 on screen), avoiding placeholder pop-in while browsing and promptly cancelling stale cover requests on fast jumps.
 - Music minimalism: remove empty Now Playing placeholder text and both bottom Settings help captions. In Albums Cover Flow, Up/Down jump previous/next available initial and wrap; large jumps snap directly to avoid unnecessary artwork loading, while Left/Right still move one album.
 - Cartridge Start menus (GB/GBC/NES/SNES): match System Settings' black canvas, clean two-column rows, standard 48px spacing and pink text-only selection. Keep large cartridge preview, live plastic changes and B/Left/Right/Y/A footer hints; no control changes.
 - Music Settings is now a fourth L1/R1 tab after Artists, not a Start-button overlay. The ivory settings page uses Slot's standard two-column text-only menu style with rose selection text; B stays in the app, and HOME exits.

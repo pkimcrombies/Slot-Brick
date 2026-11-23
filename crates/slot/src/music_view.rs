@@ -144,10 +144,7 @@ const VIDEO_BADGE_FILE: &str = "youtube.png";
 /// directory and filename stem as the playing MP3/M4A. It does not search
 /// YouTube or suggest that the current Slot build can decode the video.
 fn has_companion_video(audio_path: &Path) -> bool {
-    ["mp4", "m4v"].into_iter().any(|extension| {
-        std::fs::metadata(audio_path.with_extension(extension))
-            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
-    })
+    crate::music::companion_video(audio_path).is_some()
 }
 
 /// Avoid SD metadata reads during title-marquee frames or repeat updates.

@@ -645,6 +645,30 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 OpenSSL runtime package URL correction
+
+- The first `Install-Slot-Brick-Video-OpenSSL11-Fix-20261123.txt`
+  stopped before SD writes: `security.debian.org` responded HTTP 404
+  for pinned `libssl1.1_1.1.1w-0+deb11u8_arm64.deb`.
+  Debian's current security pool no longer reliably serves this
+  legacy Bullseye security build.
+- Corrected installer:
+  `Install-Slot-Brick-Video-OpenSSL11-Fix-v2-20261123.txt`.
+  It uses Debian's historical archived security pool at
+  `https://archive.debian.org/debian-archive/debian-security/pool/updates/main/o/openssl/`
+  and two indexed mirrors (`ftp.snt.utwente.nl/pub/linux/debian-archive/`,
+  `debian.snt.utwente.nl/debian-archive/`) as sequential fallbacks.
+  Checks exact Debian-published SHA256
+  `0fba4e602e499c97c4b623bd56295115667c312ff583221a71b476dd6983a5e0`
+  and 1396228-byte length before Docker extraction or any SD write.
+- Fix replaces only download/fallback logic; original isolated-library
+  placement, AArch64 ELF checks, license file, backups, and rollback
+  are unchanged. Package download success remains unverified on the
+  user's Windows host until rerun.
+- Future full installer: stage all FFplay dependencies and verify
+  the complete ELF dependency tree before touching SD, so users don't
+  have to install missing libraries one at a time.
+
 ## 2026-11-23 ffplay runtime missing OpenSSL 1.1 (second device log)
 
 - User installed successful `libbz2.so.1.0` patch. New

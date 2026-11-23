@@ -645,6 +645,32 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 ffplay runtime missing OpenSSL 1.1 (second device log)
+
+- User installed successful `libbz2.so.1.0` patch. New
+  `video-player(1).log` progressed from prior libbz2 failures (old lines
+  1-8) to repeated `libssl.so.1.1: cannot open shared object file`
+  (new lines 9-17). The video/SDL decoder has still **not run**.
+- Official Debian bullseye-security `libssl1.1`
+  `1.1.1w-0+deb11u8` ARM64 package supplies both
+  `libssl.so.1.1` and `libcrypto.so.1.1`; pinned SHA256
+  `0fba4e602e499c97c4b623bd56295115667c312ff583221a71b476dd6983a5e0`
+  from Debian's arm64 package download page.
+- Small follow-up patch:
+  `Install-Slot-Brick-Video-OpenSSL11-Fix-20261123.txt`
+  downloads/extracts that package under disposable Docker, verifies
+  AArch64 ELF headers, installs exactly those two shared objects and
+  the copyright text into `Slot/System/video-player/lib`, with
+  hash-checked backups and rollback. It preserves Slot OS's newer
+  system libraries and user media. The shell script strips Windows
+  CR but **retains LF line breaks** (an earlier fix that flattened
+  them to `; ` broke POSIX `for ... do` syntax).
+- This is still an on-device experiment; another loader/runtime/display
+  error is possible, and video playback is not yet verified.
+- Next full installer must incorporate this dependency as well as bz2
+  and run a full ARM64 ELF needed-library closure check before
+  user installation.
+
 ## 2026-11-23 libbz2 extraction script CRLF correction
 
 - The first libbz2-only installer downloaded and verified Debian's ARM64

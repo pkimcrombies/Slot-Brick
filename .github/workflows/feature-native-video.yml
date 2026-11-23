@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   native-video-check:
@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          persist-credentials: false
+          persist-credentials: true
       - name: Install project Rust toolchain
         run: rustup toolchain install 1.96 --profile minimal
       - name: Refresh lockfile for the new pinned decoder crates
@@ -30,7 +30,25 @@ jobs:
       - name: Check Slot native video under brick feature flags
         run: cargo +1.96 check -p slot --no-default-features --features brick
       - name: Run native-video unit tests
-        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests
+        run: cargo +1.96 test -p slot --no-default-features --features sim --lib
+      - name: Build Slot for actual ARM64 Brick target in Docker
+        run: sh brick/docker-build.sh
+      - name: Keep tested ARM64 executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: slot-native-video-arm64
+          path: dist-brick/Slot/System/slot
+          if-no-files-found: error
+      - name: Commit the verified Cargo.lock on the feature branch
+        if: success()
+        run: |
+          if ! git diff --quiet -- Cargo.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "Lock tested native H264 and MP4 dependencies"
+            git push origin HEAD:refs/heads/feature/psp-replaces-ps1
+          fi
       - name: Keep resolved dependency lockfile
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

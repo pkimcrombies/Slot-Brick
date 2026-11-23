@@ -645,6 +645,36 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Music video-available cover badge (build/device verification pending)
+
+- New first-stage **visual indicator only** on native Music Now Playing:
+  a small 22px full-colour UXWing YouTube Color badge
+  (https://uxwing.com/youtube-color-icon/) overlays the upper-left corner
+  of the current track's 250px album art (6px inset), keeping album art,
+  metadata and playback controls unmoved. No badge in the absence of video.
+- Current library indexes audio only; **no video player, remote YouTube
+  lookup or streaming support exists** in this branch. For this first
+  stage, "video available" means a nonempty sidecar video next to the
+  currently playing MP3/M4A with the *same filename stem*, ending
+  `.mp4` or `.m4v`, e.g.
+  `Slot/Music/Artist/Track.mp3` + `Slot/Music/Artist/Track.mp4`.
+  This is availability signalling, **not** a guarantee that video will
+  play until a player/codec pipeline is implemented. Future video
+  integration may replace the detection source.
+- MusicView caches per-track video presence: no repeated stat() on
+  marquee frames. Only Now Playing requests the badge. Cache and GPU
+  icon allocation are bounded; icon decoded and uploaded once.
+- Installer must download official UXWing Colour YouTube PNG from
+  `https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/youtube-color-icon.png`,
+  stage as `Slot/System/music-icons/youtube.png`, PNG-validate,
+  back up prior file if any, checksum and install only after full
+  regression tests and ARM64 success; preserve Games, Saves, Music and
+  Config. Always include the `.txt` to `.ps1` rename in the
+  supplied pasteable command.
+- Tests added for a matching non-empty local companion, different
+  track isolation, cache rekeying, logo RGB preservation, icon size and
+  top-left containment. No Docker or actual Brick Pro testing yet.
+
 ## 2026-11-23 User-selected lock icon replacement (build/device verification pending)
 
 - The user chose **UXWing Padlock** (https://uxwing.com/padlock-icon/)

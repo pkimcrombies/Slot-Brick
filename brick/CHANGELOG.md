@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Fix regression-test fixture: synthetic long MP3 streams can have unknown reported duration; the +/-10-second seek test now validates the actual decode/seek result without requiring a duration header.
 - Music Artists root: Left/Right now jump previous/next populated alphabet group (wrap), never change tabs; L1/R1 remain the tab controls.
 - Music hold lock: VolUp+VolDown chord toggles lock instead of mute in Music only, preserves volume/playback, blocks accidental inputs/HOME while locked, dims immediately to Music dim brightness and shows a small padlock. Power sleep/shutdown remain available; global mute outside Music stays unchanged.
 - Music Now Playing: 250px artwork, lowered progress/times, 20px Repeat aligned beside end time, Up/Down seek +/-10 seconds (including paused), and a gently scrolling long-title marquee. No Korean font replacement yet; choose a replacement for the existing Hangul fallback separately.

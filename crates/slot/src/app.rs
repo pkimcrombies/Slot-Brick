@@ -3543,8 +3543,9 @@ impl App {
                     self.status_bolt,
                     self.wifi_face(),
                     self.update_face(),
-                    self.music.as_ref().filter(|m| m.locked())
-                        .and(self.music_lock_face),
+                    // MusicView owns the brief open-lock confirmation after unlocking.
+                    // A closed padlock stays visible while Music is locked.
+                    self.music_lock_face,
                     self.shelf_clock,
                     self.status_scale,
                     out,

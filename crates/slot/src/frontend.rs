@@ -922,6 +922,11 @@ impl Frontend {
         if matches!(self.app().phase(), Phase::Music)
             && self.music_view.cover_flow_loading()
             && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
+        // Only titles too long for the Now Playing column need a modest
+        // 12.5fps redraw. Static titles and other tabs keep the idle gate.
+        if matches!(self.app().phase(), Phase::Music)
+            && self.music_view.title_marquee_active()
+            && self.last_render.elapsed() >= Duration::from_millis(80) {return true}
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.

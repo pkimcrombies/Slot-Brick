@@ -933,7 +933,8 @@ impl Frontend {
         // 15-cover prefetch window is warm, then the ordinary idle redraw
         // gate takes over. Otherwise artwork may pop in only on a key press.
         if matches!(self.app().phase(), Phase::Music)
-            && self.music_view.cover_flow_loading()
+            && (self.music_view.cover_flow_loading()
+                || self.music_view.album_list_loading())
             && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
         // Only titles too long for the Now Playing column need a modest
         // 12.5fps redraw. Static titles and other tabs keep the idle gate.

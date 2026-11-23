@@ -635,6 +635,41 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Music HUD and playback glyph update (build/device verification pending)
+
+- A guarded Windows installer caught a `slot-ui` unit regression:
+  `music_lock_sits_immediately_left_of_battery_without_moving_the_battery`
+  failed (33/34 passed) because raster alignment consumed half a pixel
+  of the required 10px lock/battery gap. The installer correctly left SD
+  untouched. A follow-up centring request supersedes the adjacent-battery
+  placement entirely: Music Lock now uses the **UXWing Lock Line** icon
+  (https://uxwing.com/lock-line-icon/) at 18px, in the centre of the
+  shared top HUD. Clock, battery, Wi-Fi and update positions must remain
+  identical to the Shelf. A new test checks centre placement and verifies
+  the rest of the entire status HUD is byte-for-byte identical at scales
+  1.0 and 1.6 for both battery charge states.
+- When Music is playing, place the UXWing Play icon
+  (https://uxwing.com/play-icon/) left of the elapsed timestamp;
+  when paused, show UXWing Pause
+  (https://uxwing.com/pause-icon/) instead. Both use a single black 20px
+  texture, at x=24/y=434; elapsed time starts at x=54, repeat/end time
+  remain unchanged. Remove the separate "paused" and "playing" status
+  text beneath X-of-Y but retain loading, finished and genuine error
+  messages. Do not change control mappings or actual playback.
+- Runtime offline icon paths: `Slot/System/music-icons/lock.png`
+  (replace old lock graphic), `play.png`, `pause.png`.
+  Existing Repeat Off/All/One assets remain as before. Decode once,
+  tint black, reuse GPU textures; do not bundle Flutter or rework HUD
+  on game/shelf screens. The Windows installer must stage and validate the
+  three UXWing PNG assets before running tests/build and copy them only
+  after a successful pinned ARM64 build, with backups and SHA verification.
+  No new source commits alone prove a successful Rust build or device
+  installation. The old installer is pinned to a previous SHA.
+- Previous attempt fixed `E0308` in `music_cover.rs`; subsequent
+  cartridge-ui-tests reached Rust tests and failed only the old lock
+  placement assertion. New full test suite and ARM64/device verification
+  are still pending on the user's Windows Docker toolchain.
+
 ## Next work
 
 1. Verify new **Now Playing / Albums / Artists / Settings** navigation and

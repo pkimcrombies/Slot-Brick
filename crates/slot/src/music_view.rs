@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_store::BRIGHTNESS_MAX;
 use slot_ui::{
-    menu_text_face, pixel_aligned_texture, UndoFace, QUICK_PITCH,
+    menu_marquee_face, menu_marquee_width, menu_text_face,
+    pixel_aligned_texture, UndoFace, QUICK_PITCH,
     QUICK_VALUE_EDGE, STATUS_MARGIN,
 };
 
@@ -58,20 +59,26 @@ const ALBUM_ROW_SEPARATOR: [f32; 4] = [0.89, 0.88, 0.87, 1.0];
 const ALBUM_WHITE_INK: [u8; 3] = [255, 255, 255];
 // ClassiPod-inspired composition, retaining Slot's native 640x480 layout,
 // typography, embedded artwork decoder and physical controls.
-const PLAYING_COVER_SIDE: f32 = 214.0;
+// Fill the available artwork region while retaining a clean text column.
+const PLAYING_COVER_SIDE: f32 = 250.0;
 const PLAYING_COVER_X: f32 = EDGE;
-const PLAYING_COVER_Y: f32 = 113.0;
-const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 24.0;
+const PLAYING_COVER_Y: f32 = 112.0;
+const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 22.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
-const PLAYING_PROGRESS_Y: f32 = 372.0;
-// Bottom-right repeat mode stays clear of elapsed/total time and progress.
+// Progress/timestamps occupy the bottom line, with Repeat next to end time.
+const PLAYING_PROGRESS_Y: f32 = 414.0;
+const PLAYING_TIME_Y: f32 = 432.0;
 // Match the scale of the 18px Wi-Fi and 22px battery HUD symbols.
 const REPEAT_ICON_SIDE: u32 = 20;
-const REPEAT_ICON_BOTTOM_MARGIN: f32 = 20.0;
 const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
-// The progress bar is at y=372 and time labels begin at y=392. The
-// smaller icon stays below the timestamps with a 20px bottom margin.
-const REPEAT_BADGE_Y: f32 = OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN - REPEAT_ICON_SIDE as f32;
+const REPEAT_BADGE_Y: f32 = PLAYING_TIME_Y + 2.0;
+const PLAYING_END_TIME_RIGHT: f32 = REPEAT_BADGE_X - 12.0;
+// Scroll only titles wider than the available information column.
+const TITLE_MARQUEE_PX: u32 = 26;
+const TITLE_MARQUEE_START_PAUSE: f32 = 1.3;
+const TITLE_MARQUEE_END_PAUSE: f32 = 0.85;
+const TITLE_MARQUEE_FORWARD_PX_PER_SEC: f32 = 38.0;
+const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 65.0;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
@@ -160,6 +167,45 @@ struct CachedFace {
     face: Face,
 }
 
+#[derive(Default)]
+struct TitleMarquee {
+    song: Option<PathBuf>,
+    started: Option<Instant>,
+    overflowing: bool,
+}
+
+impl TitleMarquee {
+    /// A small pause at each end, then a smooth left/right pass. Returning
+    /// None keeps the original static title path for titles that already fit.
+    fn offset(&mut self, path: &Path, title: &str, room: u32, now: Instant) -> Option<f32> {
+        if self.song.as_deref() != Some(path) {
+            self.song = Some(path.to_path_buf());
+            self.started = Some(now);
+        }
+        let overflow = (menu_marquee_width(title, TITLE_MARQUEE_PX) - room as f32).max(0.0);
+        self.overflowing = overflow > 1.0;
+        if !self.overflowing { return None; }
+        let forward = overflow / TITLE_MARQUEE_FORWARD_PX_PER_SEC;
+        let backward = overflow / TITLE_MARQUEE_BACKWARD_PX_PER_SEC;
+        let cycle = TITLE_MARQUEE_START_PAUSE + forward
+            + TITLE_MARQUEE_END_PAUSE + backward;
+        let t = now.saturating_duration_since(self.started.unwrap_or(now))
+            .as_secs_f32() % cycle;
+        let t = t - TITLE_MARQUEE_START_PAUSE;
+        if t <= 0.0 { return Some(0.0); }
+        if t < forward { return Some(t * TITLE_MARQUEE_FORWARD_PX_PER_SEC); }
+        let t = t - forward - TITLE_MARQUEE_END_PAUSE;
+        if t <= 0.0 { return Some(overflow); }
+        Some((overflow - t * TITLE_MARQUEE_BACKWARD_PX_PER_SEC).max(0.0))
+    }
+
+    fn reset(&mut self) {
+        self.song = None;
+        self.started = None;
+        self.overflowing = false;
+    }
+}
+
 struct PlayingBackdrop {
     texture: TexId,
     accent: [u8; 3],
@@ -176,6 +222,7 @@ pub(crate) struct MusicView {
     playing_backdrop: Option<PlayingBackdrop>,
     repeat_icons_loaded: bool,
     repeat_icons: [Option<TexId>; 3],
+    title_marquee: TitleMarquee,
 }
 
 impl MusicView {
@@ -218,6 +265,11 @@ impl MusicView {
             RepeatMode::One => 2,
         };
         self.repeat_icons[index]
+    }
+
+    /// Only long titles need the additional low-frequency redraws.
+    pub(crate) fn title_marquee_active(&self) -> bool {
+        self.title_marquee.overflowing
     }
 
     pub(crate) fn cover_flow_animating(&self) -> bool {
@@ -390,6 +442,20 @@ impl MusicView {
         } else {
             None
         };
+        let title_offset = if music.showing_now_playing() && !music.music_settings_open() {
+            if let Some(track) = music.track.as_ref() {
+                let song = music.song(track);
+                self.title_marquee.offset(
+                    &song.path, &song.title, PLAYING_INFO_W, Instant::now(),
+                )
+            } else {
+                self.title_marquee.reset();
+                None
+            }
+        } else {
+            self.title_marquee.reset();
+            None
+        };
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -410,7 +476,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon);
+                p.playing(music, track, cover, repeat_icon, title_offset);
             } else {
                 p.empty_now_playing();
             }
@@ -635,7 +701,7 @@ impl Painter<'_> {
     }
 
     /// Three distinct UXWing glyphs are loaded as GPU textures and rendered
-    /// icon-only at the bottom-right. The native fallback is used if assets
+    /// beside the end timestamp. The native fallback is used if assets
     /// have not been installed yet (for example, a pre-upgrade SD card).
     fn repeat_badge(&mut self, mode: RepeatMode, icon: Option<TexId>) {
         let (x, y) = (REPEAT_BADGE_X, REPEAT_BADGE_Y);
@@ -674,7 +740,7 @@ impl Painter<'_> {
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
-               repeat_icon: Option<TexId>) {
+               repeat_icon: Option<TexId>, title_offset: Option<f32>) {
         self.music_tabs(0);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
@@ -701,11 +767,25 @@ impl Painter<'_> {
             ));
         }
 
-        // ClassiPod's artwork-left, information-right hierarchy, rendered with
-        // Slot's own text faces. All strings remain ellipsized to this column.
-        self.text_with_room(
-            &song.title, 26, [PLAYING_INFO_X, 128.0], MUSIC_SELECTION_INK, PLAYING_INFO_W,
-        );
+        // Only the title scrolls when wider than its allotted column.
+        // The viewport is cropped in RGBA before upload, so Hangul and long
+        // Latin text never overpaint the album art or right screen margin.
+        if let Some(offset) = title_offset {
+            let scroll = offset.round();
+            let key = format!(
+                "title-marquee/{}/{}/{}/{:?}/{}", TITLE_MARQUEE_PX,
+                PLAYING_INFO_W, scroll as i32, MUSIC_SELECTION_INK, song.title
+            );
+            let face = self.texture(key, |scale| {
+                menu_marquee_face(&song.title, TITLE_MARQUEE_PX, PLAYING_INFO_W,
+                    scale, MUSIC_SELECTION_INK, scroll)
+            });
+            self.place(face, PLAYING_INFO_X, 128.0);
+        } else {
+            self.text_with_room(
+                &song.title, 26, [PLAYING_INFO_X, 128.0], MUSIC_SELECTION_INK, PLAYING_INFO_W,
+            );
+        }
         self.text_with_room(
             &song.artist, 19, [PLAYING_INFO_X, 185.0], MUSIC_TEXT_INK, PLAYING_INFO_W,
         );
@@ -730,8 +810,8 @@ impl Painter<'_> {
             state, 15, [PLAYING_INFO_X, 306.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
 
-        // The progress line is informational only, not a seek control.
-        // Left/Right change tracks; L1/R1 switch Music sections.
+        // Progress tracks the decoder position. Up/Down seek ten seconds;
+        // Left/Right change tracks; shoulders switch Music sections.
         let width = OUT_W as f32 - 2.0 * EDGE;
         self.rect([EDGE, PLAYING_PROGRESS_Y], [width, 4.0], MUSIC_PROGRESS_TRACK);
         if let Some((elapsed, total)) = track.time() {
@@ -748,12 +828,15 @@ impl Painter<'_> {
                         [rose[0], rose[1], rose[2], 1.0],
                     );
                 }
-                self.text_ink(&timestamp(elapsed), 17, [EDGE, 392.0], MUSIC_MUTED_INK);
+                self.text_ink(&timestamp(elapsed), 17,
+                    [EDGE, PLAYING_TIME_Y], MUSIC_MUTED_INK);
                 self.text_right(
-                    &timestamp(total), 17, OUT_W as f32 - EDGE, 392.0, MUSIC_MUTED_INK,
+                    &timestamp(total), 17, PLAYING_END_TIME_RIGHT,
+                    PLAYING_TIME_Y, MUSIC_MUTED_INK,
                 );
             } else {
-                self.text_ink(&timestamp(elapsed), 17, [EDGE, 392.0], MUSIC_MUTED_INK);
+                self.text_ink(&timestamp(elapsed), 17,
+                    [EDGE, PLAYING_TIME_Y], MUSIC_MUTED_INK);
             }
         }
     }

@@ -165,7 +165,8 @@ pub fn draw_status_bar_with_lock(
     }
     if let Some((tex, w, h)) = wifi {
         let (w, h) = (w as f32, h as f32);
-        icon_right -= WIFI_GAP + w;
+        let raster_w = (w * scale[0]).round().max(1.0) / scale[0];
+        icon_right = ((icon_right - WIFI_GAP - raster_w) * scale[0]).floor() / scale[0];
         let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
         out.push(pixel_aligned_texture(tex, [icon_right, y], [w, h], scale, 1.0));
     }

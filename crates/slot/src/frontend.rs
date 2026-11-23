@@ -1189,6 +1189,20 @@ impl Frontend {
         true
     }
 
+    /// Called by the device event loop after Y reaches Music. The video
+    /// plays externally; this preserves all UI state and cached album art.
+    pub fn take_external_video(&mut self) -> Option<crate::VideoHandoff> {
+        self.session.take_video_handoff()
+    }
+
+    pub fn return_from_external_video(&mut self, handoff: &crate::VideoHandoff,
+                                      at_seconds: Option<u32>) {
+        self.session.complete_video_handoff(handoff, at_seconds);
+        self.last = Instant::now(); // exclude external playback time from app dt
+        self.last_input = Instant::now();
+        self.draws.clear(); // always repaint after the child exits
+    }
+
     pub fn advance(&mut self, input: &mut dyn InputSource) {
         let now = self.now();
         input.set_stick_to_game(self.session.stick_to_game());

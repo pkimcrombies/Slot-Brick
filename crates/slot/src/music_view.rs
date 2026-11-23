@@ -86,6 +86,11 @@ const REPEAT_ICON_SIDE: u32 = 20;
 const REPEAT_BADGE_X: f32 = OUT_W as f32 - EDGE - REPEAT_ICON_SIDE as f32;
 const REPEAT_BADGE_Y: f32 = PLAYING_TIME_Y + 2.0;
 const PLAYING_END_TIME_RIGHT: f32 = REPEAT_BADGE_X - 12.0;
+// UXWing play/pause state at the beginning of the elapsed-time row.
+const PLAYBACK_ICON_SIDE: u32 = 20;
+const PLAYBACK_ICON_X: f32 = EDGE;
+const PLAYBACK_ICON_Y: f32 = PLAYING_TIME_Y + 2.0;
+const PLAYING_START_TIME_X: f32 = PLAYBACK_ICON_X + PLAYBACK_ICON_SIDE as f32 + 10.0;
 // Scroll only titles wider than the available information column.
 const TITLE_MARQUEE_PX: u32 = 26;
 const TITLE_MARQUEE_START_PAUSE: f32 = 1.3;
@@ -95,6 +100,7 @@ const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 40.0;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
+const PLAYBACK_ICON_FILES: [&str; 2] = ["play.png", "pause.png"];
 // Seven 3D covers are drawn; four extra on each side are decoded ahead
 // of time. A 15-slot rolling GPU cache costs at most ~3.75 MiB in
 // 256x256 RGBA textures, without keeping an entire music library in RAM.
@@ -310,6 +316,8 @@ pub(crate) struct MusicView {
     title_marquee: TitleMarquee,
     lock_icon_loaded: bool,
     lock_icon: Option<TexId>,
+    playback_icons_loaded: bool,
+    playback_icons: [Option<TexId>; 2],
 }
 
 impl Default for MusicView {
@@ -328,6 +336,8 @@ impl Default for MusicView {
             title_marquee: TitleMarquee::default(),
             lock_icon_loaded: false,
             lock_icon: None,
+            playback_icons_loaded: false,
+            playback_icons: [None; 2],
         }
     }
 }
@@ -392,6 +402,33 @@ impl MusicView {
             }
         }
         self.lock_icon
+    }
+
+    /// Load playback images from SD once and reuse GPU textures on every frame.
+    fn playback_icon(&mut self, music: &Music, status: Status,
+                     compositor: &mut Compositor) -> Option<TexId> {
+        let index = match status {
+            Status::Playing => 0,
+            Status::Paused => 1,
+            _ => return None,
+        };
+        if !self.playback_icons_loaded {
+            self.playback_icons_loaded = true;
+            if let Some(root) = music.icon_root() {
+                let folder = root.join("System/music-icons");
+                for (i, file) in PLAYBACK_ICON_FILES.iter().enumerate() {
+                    let Some(bytes) = std::fs::read(folder.join(file)).ok()
+                        .filter(|bytes| bytes.len() <= 4 << 20) else { continue };
+                    let Some(pixels) = decode_status_icon(&bytes, PLAYBACK_ICON_SIDE) else {
+                        continue;
+                    };
+                    self.playback_icons[i] = Some(compositor.create_texture(
+                        PLAYBACK_ICON_SIDE, PLAYBACK_ICON_SIDE, &pixels,
+                    ));
+                }
+            }
+        }
+        self.playback_icons[index]
     }
 
     pub(crate) fn hud_lock_icon(&self) -> Option<(TexId, u32, u32)> {
@@ -607,6 +644,12 @@ impl MusicView {
         } else {
             None
         };
+        let playback_icon = if music.showing_now_playing() && !music.music_settings_open() {
+            music.track.as_ref()
+                .and_then(|track| self.playback_icon(music, track.status, compositor))
+        } else {
+            None
+        };
         let title_offset = if music.showing_now_playing() && !music.music_settings_open() {
             if let Some(track) = music.track.as_ref() {
                 let song = music.song(track);
@@ -652,7 +695,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon, title_face);
+                p.playing(music, track, cover, repeat_icon, playback_icon, title_face);
             } else {
                 p.empty_now_playing();
             }
@@ -671,10 +714,15 @@ impl MusicView {
 /// texture. The downloadable PNG has a transparent background; this also
 /// supports the common black-on-white downloads by removing white pixels.
 fn decode_lock_icon(png: &[u8]) -> Option<Vec<u8>> {
+    decode_status_icon(png, HUD_LOCK_SIDE)
+}
+
+/// Tint the official UXWing glyph black, retaining alpha and hiding white.
+fn decode_status_icon(png: &[u8], side: u32) -> Option<Vec<u8>> {
     let (w, h) = crate::cart_art::png_size(png)?;
     if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
     let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
-    let mut pixels = slot_ui::cover_rgba(&rgba, w, h, HUD_LOCK_SIDE, HUD_LOCK_SIDE)?;
+    let mut pixels = slot_ui::cover_rgba(&rgba, w, h, side, side)?;
     for px in pixels.chunks_exact_mut(4) {
         let darkness = 255 - ((u16::from(px[0]) + u16::from(px[1])
             + u16::from(px[2])) / 3) as u8;
@@ -946,7 +994,8 @@ impl Painter<'_> {
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
-               repeat_icon: Option<TexId>, title_face: Option<Face>) {
+               repeat_icon: Option<TexId>, playback_icon: Option<TexId>,
+               title_face: Option<Face>) {
         self.music_tabs(0);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
@@ -995,12 +1044,12 @@ impl Painter<'_> {
         self.text_with_room(
             &position, 16, [PLAYING_INFO_X, 326.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
-        // No redundant 'playing' label under the track counter. Preserve
-        // useful paused/loading/error messages when playback needs attention.
+        // Playback state appears beside elapsed time; keep only diagnostic
+        // loading and error text beneath the track counter.
         let state = match track.status {
             Status::Playing => None,
             Status::Loading => Some("loading"),
-            Status::Paused => Some("paused"),
+            Status::Paused => None,
             Status::Finished => Some("finished"),
             Status::Unreadable => Some("could not play this track"),
             Status::NoAudio => Some("audio output unavailable"),
@@ -1016,6 +1065,13 @@ impl Painter<'_> {
         let width = OUT_W as f32 - 2.0 * EDGE;
         self.rect([EDGE, PLAYING_PROGRESS_Y], [width, 4.0], MUSIC_PROGRESS_TRACK);
         if let Some((elapsed, total)) = track.time() {
+            if let Some(tex) = playback_icon {
+                self.draws.push(pixel_aligned_texture(
+                    tex, [PLAYBACK_ICON_X, PLAYBACK_ICON_Y],
+                    [PLAYBACK_ICON_SIDE as f32, PLAYBACK_ICON_SIDE as f32],
+                    self.scale, 1.0,
+                ));
+            }
             if let Some(total) = total {
                 let fraction = if total > 0.0 {
                     (elapsed / total).clamp(0.0, 1.0) as f32
@@ -1030,14 +1086,14 @@ impl Painter<'_> {
                     );
                 }
                 self.text_ink(&timestamp(elapsed), 17,
-                    [EDGE, PLAYING_TIME_Y], MUSIC_MUTED_INK);
+                    [PLAYING_START_TIME_X, PLAYING_TIME_Y], MUSIC_MUTED_INK);
                 self.text_right(
                     &timestamp(total), 17, PLAYING_END_TIME_RIGHT,
                     PLAYING_TIME_Y, MUSIC_MUTED_INK,
                 );
             } else {
                 self.text_ink(&timestamp(elapsed), 17,
-                    [EDGE, PLAYING_TIME_Y], MUSIC_MUTED_INK);
+                    [PLAYING_START_TIME_X, PLAYING_TIME_Y], MUSIC_MUTED_INK);
             }
         }
     }
@@ -1500,6 +1556,37 @@ mod album_thumbnail_layout_tests {
         assert_eq!(HUD_LOCK_SIDE, 18);
         let view = MusicView::default();
         assert!(view.hud_lock_icon().is_none());
+    }
+
+    #[test]
+    fn play_pause_icons_fit_before_elapsed_time_without_shifting_progress() {
+        assert_eq!(PLAYBACK_ICON_FILES, ["play.png", "pause.png"]);
+        assert_eq!(PLAYBACK_ICON_SIDE, REPEAT_ICON_SIDE);
+        assert_eq!(PLAYBACK_ICON_X, EDGE);
+        assert_eq!(PLAYBACK_ICON_Y, REPEAT_BADGE_Y);
+        assert!(PLAYBACK_ICON_X + PLAYBACK_ICON_SIDE as f32 + 8.0
+            <= PLAYING_START_TIME_X);
+        assert!(PLAYING_START_TIME_X < PLAYING_END_TIME_RIGHT - 75.0);
+    }
+
+    #[test]
+    fn uxwing_play_pause_pngs_decode_to_black_icons_without_opaque_background() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&[
+                0, 0, 0, 255, 255, 255, 255, 255,
+                0, 0, 0, 0, 0, 0, 0, 255,
+            ]).unwrap();
+        }
+        let decoded = decode_status_icon(&png_bytes, PLAYBACK_ICON_SIDE)
+            .expect("valid transparent playback PNG");
+        assert_eq!(decoded.len(), (PLAYBACK_ICON_SIDE * PLAYBACK_ICON_SIDE * 4) as usize);
+        assert!(decoded.chunks_exact(4).any(|pixel| pixel[3] == 0));
+        assert!(decoded.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]));
+        assert!(decode_status_icon(b"not a png", PLAYBACK_ICON_SIDE).is_none());
     }
 
     #[test]

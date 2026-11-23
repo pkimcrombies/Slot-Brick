@@ -284,7 +284,7 @@ pub fn fade_from(out: &mut [Draw], from: usize, alpha: f32) {
             Draw::Tex { alpha: a, .. }
             | Draw::Turned { alpha: a, .. }
             | Draw::CoverFlow { alpha: a, .. } => *a *= alpha,
-            Draw::Game | Draw::Shot { .. } => {}
+            Draw::Game | Draw::Shot { .. } | Draw::Video { .. } => {}
         }
     }
 }

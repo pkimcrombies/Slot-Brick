@@ -40,11 +40,9 @@ were explicitly rejected by the user.
   OpenH264 is an alternate C decoder, but its official public decoder
   feature list specifies Constrained Baseline, making High-profile
   music videos less straightforward.
-- YUV420 frame -> RGB(A) conversion off the render thread. Upload to a
-  **single reused GPU texture** with
-  `Compositor::update_texture(tex, w, h, rgba)`; render using
-  `Draw::Tex` with aspect-fit to the output screen. Existing Slot
-  renderer supplies GLES2 and avoids any extra display backend.
+- The worker passes the decoded YUV420 planes to Slot's compositor. The
+  video pass uploads the planes into reusable textures and converts them
+  to RGB in its shader while fitting the image to the display.
 - Start with a *known-good 480p/30 fps H.264 sidecar* and measure
   CPU, frame drops, elapsed time drift and memory. Fall back to
   360p/24 fps or lower resolution if the CPU cannot keep pace;
@@ -74,8 +72,8 @@ when converting. Conversion runs on the computer.
 
 For choppy playback, play a representative section and press Y to close
 the video. In `Slot/Logs/slot.log`, the worker reports the average time
-spent reading, decoding and converting pixels. The presentation summary
-counts displayed frames and frames dropped when they arrived too late.
+spent reading and decoding. The presentation summary reports texture
+upload time, displayed frames and frames that arrived too late.
 
 ## Pre-install verification
 

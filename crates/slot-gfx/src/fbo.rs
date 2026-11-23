@@ -4,6 +4,7 @@ use crate::pipeline::GamePass;
 use crate::quad::Quad;
 use crate::shaders::{BEZEL_FRAG, BLIT_FRAG, BLIT_VERT};
 use crate::surface::{blit_rect, GfxError, Surface, OUT_H, OUT_W};
+use crate::video::VideoPass;
 
 pub const BACKDROP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
@@ -21,6 +22,7 @@ pub struct Compositor {
     screen: f32,
     quad: Quad,
     game: GamePass,
+    video: Option<VideoPass>,
     sprites: Sprites,
     bezel_prog: gl::types::GLuint,
     u_bezel_gain: gl::types::GLint,
@@ -85,6 +87,7 @@ impl Compositor {
                 screen: 0.0,
                 quad: Quad::new(),
                 game: GamePass::new()?,
+                video: None,
                 sprites: Sprites::new()?,
                 bezel_prog,
                 u_bezel_gain,
@@ -121,6 +124,12 @@ impl Compositor {
                         self.game.draw_still(tex, &self.quad);
                     }
                 }
+                Draw::Video { x, y, w, h } => {
+                    self.sprites.draw(&items[from..i], &self.quad);
+                    if let Some(video) = &self.video {
+                        video.draw([x, y, w, h], &self.quad);
+                    }
+                }
                 _ => continue,
             }
             from = i + 1;
@@ -140,9 +149,12 @@ impl Compositor {
         self.sprites.update_texture(id, w, h, rgba);
     }
 
-    /// Write a complete RGBA frame into an existing texture of the same size.
-    pub fn write_texture_pixels(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
-        self.sprites.write_texture_pixels(id, w, h, rgba);
+    /// Upload the top-down luma, Cb and Cr planes of a single 8-bit YUV420 frame.
+    pub fn upload_video_420(&mut self, w: u32, h: u32, planes: [&[u8]; 3]) -> Result<(), GfxError> {
+        if self.video.is_none() {
+            self.video = Some(VideoPass::new()?);
+        }
+        self.video.as_mut().expect("video pass initialized").upload(w, h, planes)
     }
 
     pub fn set_blue_light(&mut self, step: u8) {

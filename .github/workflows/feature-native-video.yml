@@ -35,7 +35,7 @@ jobs:
       - name: Generate H264/MP4 test videos locally
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri
           ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=10' -f lavfi -i 'sine=frequency=880:sample_rate=44100' -t 3 -pix_fmt yuv420p -c:v libx264 -preset veryfast -profile:v baseline -x264-params 'bframes=0:keyint=10' -c:a aac /tmp/slot-baseline-h264.mp4
           ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=10' -t 3 -an -pix_fmt yuv420p -c:v libx264 -preset veryfast -profile:v main -x264-params 'bframes=2:keyint=10' /tmp/slot-main-bframes-h264.mp4
       - name: Decode real Baseline H264 MP4 frames
@@ -46,6 +46,11 @@ jobs:
         env:
           SLOT_NATIVE_VIDEO_SOUNDTRACK_FIXTURE: /tmp/slot-baseline-h264.mp4
         run: cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::native_video_
+      - name: Verify YUV colour and texture updates in OpenGL ES
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: cargo +1.96 test -p slot-gfx --no-default-features --features sim --test video
       - name: Decode real Main H264 B-frames
         env:
           SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-main-bframes-h264.mp4

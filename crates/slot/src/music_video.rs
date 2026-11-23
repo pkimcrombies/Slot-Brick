@@ -17,10 +17,11 @@ use std::time::{Duration, Instant};
 use mp4::{MediaType, Mp4Reader};
 use rust_h264::decoder::{ChromaFormat, Frame, OrderedDecoder};
 use rust_h264::nal::{parse_annex_b, parse_avcc};
-use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
+use slot_gfx::{Compositor, Draw, OUT_H, OUT_W};
 
 const MAX_PIXELS: usize = 854 * 480;
 const MAX_FILE_BYTES: u64 = 1 << 30;
+const FRAME_QUEUE: usize = 5;
 // Allow half a 60 Hz refresh of lead time when choosing the next frame.
 const FRAME_AHEAD: f64 = 0.008;
 
@@ -28,7 +29,7 @@ pub(crate) struct VideoFrame {
     pub(crate) pts: f64,
     width: u32,
     height: u32,
-    rgba: Vec<u8>,
+    planes: [Vec<u8>; 3],
 }
 
 enum Message {
@@ -43,6 +44,7 @@ struct PresentationStats {
     late: u32,
     superseded: u32,
     max_delay: f64,
+    upload: Duration,
 }
 
 /// An instance is owned by Frontend and outlives any individual Music track.
@@ -53,8 +55,7 @@ pub(crate) struct MusicVideo {
     cancel: Option<Arc<AtomicBool>>,
     receiver: Option<Receiver<Message>>,
     next: Option<VideoFrame>,
-    texture: Option<(TexId, (u32, u32))>,
-    shown: bool,
+    shown: Option<(u32, u32)>,
     clock: f64,
     failed: bool,
     finished: bool,
@@ -78,8 +79,9 @@ impl MusicVideo {
         let stats = std::mem::take(&mut self.stats);
         if stats.shown > 0 || stats.late > 0 {
             eprintln!(
-                "slot: native video presentation: {} displayed, {} too late, {} superseded, worst delay {:.1} ms",
+                "slot: native video presentation: {} displayed, {} too late, {} superseded, worst delay {:.1} ms, average upload {:.1} ms",
                 stats.shown, stats.late, stats.superseded, stats.max_delay * 1000.0,
+                stats.upload.as_secs_f64() * 1000.0 / f64::from(stats.shown.max(1)),
             );
         }
         if let Some(cancel) = self.cancel.take() {
@@ -90,14 +92,16 @@ impl MusicVideo {
         self.receiver = None;
         self.next = None;
         self.path = None;
-        self.shown = false;
+        self.shown = None;
         self.failed = false;
         self.finished = false;
     }
 
     fn start(&mut self, path: PathBuf, at: f64) {
         self.stop();
-        let (sender, receiver) = mpsc::sync_channel(2);
+        // The decoded planes are compact enough to buffer a few frames
+        // through a short CPU decode spike without delaying presentation.
+        let (sender, receiver) = mpsc::sync_channel(FRAME_QUEUE);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let worker_path = path.clone();
@@ -178,7 +182,7 @@ impl MusicVideo {
                 Message::Error(err) => {
                     eprintln!("slot: native video: {err}");
                     self.failed = true;
-                    self.shown = false;
+                    self.shown = None;
                     return None;
                 }
                 Message::Finished => {
@@ -190,30 +194,25 @@ impl MusicVideo {
         latest
     }
 
-    /// Upload at most one frame for each presentation. Sized textures are
-    /// reused across frames and across videos with the same dimensions.
+    /// Upload at most one frame for each presentation, using compact YUV planes.
     pub(crate) fn overlay(&mut self, compositor: &mut Compositor, draws: &mut Vec<Draw>) {
         if self.path.is_none() || self.failed {
             return;
         }
         if let Some(frame) = self.take_due_frame() {
             let (w, h) = (frame.width, frame.height);
-            let tex = match self.texture {
-                Some((tex, size)) if size == (w, h) => {
-                    compositor.write_texture_pixels(tex, w, h, &frame.rgba);
-                    tex
-                }
-                Some((tex, _)) => {
-                    compositor.update_texture(tex, w, h, &frame.rgba);
-                    tex
-                }
-                None => compositor.create_texture(w, h, &frame.rgba),
-            };
-            self.texture = Some((tex, (w, h)));
-            self.shown = true;
+            let started = Instant::now();
+            if let Err(error) = compositor.upload_video_420(w, h, frame.planes.each_ref().map(Vec::as_slice)) {
+                eprintln!("slot: native video: {error}");
+                self.shown = None;
+                self.failed = true;
+                return;
+            }
+            self.stats.upload += started.elapsed();
+            self.shown = Some((w, h));
             self.stats.shown += 1;
         }
-        if let Some((tex, (w, h))) = self.texture.filter(|_| self.shown) {
+        if let Some((w, h)) = self.shown {
             let factor = (OUT_W as f32 / w as f32).min(OUT_H as f32 / h as f32);
             let width = w as f32 * factor;
             let height = h as f32 * factor;
@@ -222,10 +221,10 @@ impl MusicVideo {
                 x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
                 colour: [0.0, 0.0, 0.0, 1.0],
             });
-            draws.push(Draw::Tex {
+            draws.push(Draw::Video {
                 x: (OUT_W as f32 - width) * 0.5,
                 y: (OUT_H as f32 - height) * 0.5,
-                w: width, h: height, tex, alpha: 1.0,
+                w: width, h: height,
             });
         }
     }
@@ -296,7 +295,6 @@ struct DecodeStats {
     frames: u32,
     read: Duration,
     decode: Duration,
-    colour: Duration,
 }
 
 impl Drop for DecodeStats {
@@ -306,8 +304,8 @@ impl Drop for DecodeStats {
         }
         let ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0 / f64::from(self.frames);
         eprintln!(
-            "slot: native video worker: {} samples, {} frames, average {:.1} ms read + {:.1} ms decode + {:.1} ms colour per frame",
-            self.samples, self.frames, ms(self.read), ms(self.decode), ms(self.colour),
+            "slot: native video worker: {} samples, {} frames, average {:.1} ms read + {:.1} ms decode per frame",
+            self.samples, self.frames, ms(self.read), ms(self.decode),
         );
     }
 }
@@ -387,16 +385,12 @@ fn decode_file(
 fn send_frame(frame: Frame, pts: f64, begin: f64,
               sender: &SyncSender<Message>, stats: &mut DecodeStats) -> Result<(), String> {
     if pts + 0.08 < begin { return Ok(()); }
-    let started = Instant::now();
-    let rgba = yuv420_to_rgba(&frame)?;
+    let frame = video_frame(frame, pts)?;
     stats.frames += 1;
-    stats.colour += started.elapsed();
-    sender.send(Message::Frame(VideoFrame {
-        pts, width: frame.width, height: frame.height, rgba,
-    })).map_err(|_| "viewer closed".to_string())
+    sender.send(Message::Frame(frame)).map_err(|_| "viewer closed".to_string())
 }
 
-fn yuv420_to_rgba(frame: &Frame) -> Result<Vec<u8>, String> {
+fn video_frame(mut frame: Frame, pts: f64) -> Result<VideoFrame, String> {
     if frame.bit_depth != 8 || frame.chroma_format != ChromaFormat::Yuv420 {
         return Err("only 8-bit YUV420 H.264 is supported in the initial player".into());
     }
@@ -410,53 +404,17 @@ fn yuv420_to_rgba(frame: &Frame) -> Result<Vec<u8>, String> {
     if frame.y.len() < pixels || frame.u.len() < cw * ch || frame.v.len() < cw * ch {
         return Err("decoder returned a truncated YUV frame".into());
     }
-    let mut rgba = vec![255u8; pixels * 4];
-    for (row, (luma, output)) in frame.y[..pixels].chunks_exact(w)
-        .zip(rgba.chunks_exact_mut(w * 4)).enumerate()
-    {
-        let chroma = (row / 2) * cw..(row / 2 + 1) * cw;
-        let chroma_pairs = frame.u[chroma.clone()].iter().zip(&frame.v[chroma]);
-        for ((&u, &v), (luma_pair, output_pair)) in chroma_pairs
-            .zip(luma.chunks(2).zip(output.chunks_mut(8)))
-        {
-            // Horizontal neighbours share chroma in YUV420.
-            let u = i32::from(u) - 128;
-            let v = i32::from(v) - 128;
-            let red = 409 * v + 128;
-            let green = -100 * u - 208 * v + 128;
-            let blue = 516 * u + 128;
-            for (&y, pixel) in luma_pair.iter().zip(output_pair.chunks_exact_mut(4)) {
-                let brightness = 298 * (i32::from(y) - 16).max(0);
-                pixel[0] = ((brightness + red) >> 8).clamp(0, 255) as u8;
-                pixel[1] = ((brightness + green) >> 8).clamp(0, 255) as u8;
-                pixel[2] = ((brightness + blue) >> 8).clamp(0, 255) as u8;
-            }
-        }
-    }
-    Ok(rgba)
+    frame.y.truncate(pixels);
+    frame.u.truncate(cw * ch);
+    frame.v.truncate(cw * ch);
+    Ok(VideoFrame {
+        pts, width: frame.width, height: frame.height, planes: [frame.y, frame.u, frame.v],
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn odd_sized_yuv420_uses_the_correct_chroma_for_every_pixel() {
-        let frame = Frame {
-            width: 3, height: 3,
-            y: vec![16, 64, 128, 235, 81, 145, 22, 150, 210],
-            u: vec![90, 240, 128, 54],
-            v: vec![240, 16, 128, 200],
-            pic_order_cnt: 0,
-            chroma_format: ChromaFormat::Yuv420,
-            bit_depth: 8,
-        };
-        assert_eq!(yuv420_to_rgba(&frame).unwrap(), [
-            179, 0, 0, 255, 235, 0, 0, 255, 0, 178, 255, 255,
-            255, 179, 178, 255, 255, 0, 0, 255, 0, 197, 255, 255,
-            7, 7, 7, 255, 156, 156, 156, 255, 255, 196, 77, 255,
-        ]);
-    }
 
     #[test]
     fn presentation_keeps_only_the_newest_due_frame() {
@@ -468,7 +426,7 @@ mod tests {
         };
         for pts in [1.0, 1.0417, 1.0833, 1.125] {
             sender.send(Message::Frame(VideoFrame {
-                pts, width: 1, height: 1, rgba: vec![0; 4],
+                pts, width: 1, height: 1, planes: [vec![16], vec![128], vec![128]],
             })).unwrap();
         }
 
@@ -479,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_yuv420_black_and_white_are_opaque() {
+    fn video_frame_preserves_decoder_planes() {
         let frame = Frame {
             width: 2, height: 2,
             y: vec![16, 16, 235, 235],
@@ -488,9 +446,9 @@ mod tests {
             chroma_format: ChromaFormat::Yuv420,
             bit_depth: 8,
         };
-        let rgba = yuv420_to_rgba(&frame).unwrap();
-        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
-        assert_eq!(&rgba[8..12], &[255, 255, 255, 255]);
+        let packed = video_frame(frame, 2.5).unwrap();
+        assert_eq!(packed.pts, 2.5);
+        assert_eq!(packed.planes, [vec![16, 16, 235, 235], vec![128], vec![128]]);
     }
 
     #[test]
@@ -502,7 +460,7 @@ mod tests {
             chroma_format: ChromaFormat::Yuv420,
             bit_depth: 10,
         };
-        assert!(yuv420_to_rgba(&frame).is_err());
+        assert!(video_frame(frame, 0.0).is_err());
     }
 
     #[test]
@@ -522,7 +480,7 @@ mod tests {
         for message in receiver {
             if let Message::Frame(frame) = message {
                 assert_eq!((frame.width, frame.height), (320, 180));
-                assert_eq!(frame.rgba.len(), 320 * 180 * 4);
+                assert_eq!(frame.planes.each_ref().map(Vec::len), [320 * 180, 160 * 90, 160 * 90]);
                 assert!(frame.pts >= last_pts, "presentation timestamp went backwards");
                 last_pts = frame.pts;
                 frames += 1;

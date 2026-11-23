@@ -52,7 +52,8 @@ fn quads(out: &[Draw]) -> Vec<Quad> {
             } => Quad { x, y, w, h, alpha },
             Draw::Turned {
                 x, y, w, h, alpha, ..
-            } => Quad { x, y, w, h, alpha },
+            } | Draw::CoverFlow { x, y, w, h, alpha, .. } => Quad { x, y, w, h, alpha },
+            Draw::Video { x, y, w, h } => Quad { x, y, w, h, alpha: 1.0 },
             Draw::Game | Draw::Shot { .. } => Quad {
                 x: 0.0,
                 y: 0.0,

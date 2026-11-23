@@ -53,6 +53,12 @@ pub enum Draw {
     Shot {
         tex: TexId,
     },
+    Video {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
 }
 
 pub struct Sprites {
@@ -139,29 +145,6 @@ impl Sprites {
         }
     }
 
-    /// Update a texture in place. The caller supplies its existing dimensions.
-    pub fn write_texture_pixels(&self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
-        let Some(tex) = self.textures.get(id.0) else { return };
-        if rgba.len() < (w * h * 4) as usize {
-            return;
-        }
-        unsafe {
-            gl::BindTexture(gl::TEXTURE_2D, *tex);
-            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-            gl::TexSubImage2D(
-                gl::TEXTURE_2D,
-                0,
-                0,
-                0,
-                w as i32,
-                h as i32,
-                gl::RGBA,
-                gl::UNSIGNED_BYTE,
-                rgba.as_ptr().cast(),
-            );
-        }
-    }
-
     pub fn source(&self, id: TexId) -> Option<gl::types::GLuint> {
         self.textures.get(id.0).copied()
     }
@@ -210,7 +193,7 @@ impl Sprites {
                     ),
                     None => continue,
                 },
-                Draw::Game | Draw::Shot { .. } => continue,
+                Draw::Game | Draw::Shot { .. } | Draw::Video { .. } => continue,
             };
             let (cos, sin) = if turn == 0.0 {
                 (1.0, 0.0)

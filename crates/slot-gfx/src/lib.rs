@@ -14,6 +14,7 @@ mod power;
 mod quad;
 mod shaders;
 mod surface;
+mod video;
 
 pub use bezel::{framed, lifted_rect, screen_rect};
 pub use draw::{Draw, TexId};

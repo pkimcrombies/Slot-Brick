@@ -645,6 +645,46 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Experimental Y video-player handoff (NOT hardware validated)
+
+- This is an experimental external-player path on the existing
+  `feature/psp-replaces-ps1` branch, **not** a native video decoder.
+- On Music > Now Playing only, pressing Y when the playing MP3/M4A has
+  a nonempty same-stem `.mp4`/`.m4v` sets a one-shot video request.
+  If locked, App blocks Y as before. The request does not change the
+  normal Album/Artist browser's Y-to-play mapping.
+- Music's decoder and song identity remain in RAM. The handoff rewinds
+  buffered audio to audible time, records starting seconds, pauses the
+  track and explicitly shuts down Slot's ALSA PCM output thread.
+  Music resumes its previous playing/paused state on return, seeking
+  to NX's patched ffplay `-posfile` position if available. Song switching,
+  tabs, repeat, album cache, SD settings remain untouched.
+- The device loop temporarily unbinds its EGL context, spawns
+  `Slot/System/video-player/ffplay` as an external process with
+  `-fs -autoexit -posfile` and the same-stem local file, polling
+  physical controls. Y, B, Menu or Power terminates the child; natural
+  video completion also returns. Rebind EGL and reopen ALSA, force
+  a new UI frame. If EGL cannot be rebound, exit with existing code 66
+  so Slot OS restarts safely. The first 300ms are debounced.
+  Logs: `Slot/Logs/slot.log`, `Slot/Logs/video-player.log`.
+- Packaging path: stage official **NX Redux v2.5.0 Brick Pro** release
+  `NXRedux-v2.5.0-brickpro.zip` (pinned SHA256
+  `e3ada6dc277762000139e648b64ece0e7e73e415e68e22f045054d84f5851879`),
+  extract only the prebuilt patched ARM64 `ffplay` plus its needed
+  compatibility libraries into `Slot/System/video-player`. Do not
+  install NX Redux, bootloader, firmware, MinUI, or other tools.
+- **Important uncertainty:** NX's release is for Brick Pro stock firmware;
+  Slot OS is a separate minimal Linux userspace and may lack some
+  shared libraries or a compatible SDL2 display backend. Tests and an
+  offline ARM64 build of Slot can pass yet the child might exit
+  immediately without video, or fail to reacquire display. Treat this
+  as a guarded device experiment, not production ready. Do not
+  claim compatibility without on-device video + return verification.
+- Ship any installer as a downloadable `.txt`, including one complete
+  paste-ready PowerShell command for renaming to `.ps1` and executing.
+  Preserve the previous regression tests, ARM64 binary check and
+  verified backup/rollback. Avoid any SD formatting/repartitioning.
+
 ## 2026-11-23 Video badge installer compile correction (still unverified)
 
 - The installer pinned to `31be697` stopped safely at `regression-tests`

@@ -92,6 +92,14 @@ impl Session {
         self.sink.ring()
     }
 
+    pub(crate) fn save_music_resume(&self) {
+        if self.music_active {
+            if let Some(resume) = self.app.music().and_then(|music| music.resume_snapshot(&self.sink.ring())) {
+                resume.save(&self.root);
+            }
+        }
+    }
+
     /// A genuine kernel suspend can invalidate the ALSA handle. The paused
     /// music decoder/session remains in App, but its sink is reopened after
     /// wake before feeding more PCM into the ring.
@@ -247,8 +255,20 @@ impl Session {
             Action::FfStop => self.fast = false,
             _ => {}
         }
+        // Music is dropped by App when Menu actually closes it. Capture the
+        // position before applying the action, then save only on a real exit.
+        let music_resume = if matches!(self.app.phase(), Phase::Music) && action == Action::QuickMenu {
+            self.app.music().and_then(|music| music.resume_snapshot(&self.sink.ring()))
+        } else {
+            None
+        };
         let menu = self.overlaid();
         self.bridge_link(|app| app.apply(action));
+        if !matches!(self.app.phase(), Phase::Music) {
+            if let Some(resume) = music_resume {
+                resume.save(&self.root);
+            }
+        }
         if matches!(
             action,
             Action::VolumeUp | Action::VolumeDown | Action::MuteToggle
@@ -285,7 +305,9 @@ impl Session {
             }
             music.update_audio(&ring, level);
             self.music_active = true;
-        } else if std::mem::take(&mut self.music_active) {
+        } else if self.music_active {
+            self.save_music_resume();
+            self.music_active = false;
             let ring = self.sink.ring();
             if matches!(self.app.phase(), Phase::Doze { .. }) {
                 if let Some(music) = self.app.music_mut() {

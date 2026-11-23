@@ -794,12 +794,22 @@ impl App {
             let platform = self.state.cart_platform;
             stem.and_then(|stem| self.seat_of(&stem, platform))
         };
-        // PSP games start from an explicit insertion.
-        let seated = seated.filter(|&i| self.shelf.carts[i].platform != Platform::Psp);
         self.phase = Phase::Shelf;
         match seated {
             Some(i) => {
                 self.shelf_mut().select(i);
+                let cart = &self.shelf.carts[i];
+                if cart.platform == Platform::Psp {
+                    // Remember the game on the shelf. PSP still needs an
+                    // explicit insertion to start its emulator.
+                    self.name_pending = true;
+                    return;
+                }
+                if cart.platform == Platform::Ps1 {
+                    self.chosen_disc = self.remembered_disc(&cart.stem)
+                        .filter(|&disc| disc < slot_store::ps1::discs(&cart.rom).len())
+                        .map(|disc| (disc as u32, None));
+                }
                 self.insert(false);
                 if let Phase::Inserting { resumed, t, .. } = &mut self.phase {
                     *resumed = true;
@@ -3258,7 +3268,7 @@ impl App {
     }
 
     fn record_cart(&mut self, cart: Option<String>) {
-        let platform = self.seated_cart().map(|c| c.platform);
+        let platform = cart.as_ref().and_then(|_| self.seated_cart()).map(|c| c.platform);
         if self.state.cart == cart && self.state.cart_platform == platform {
             return;
         }
@@ -4094,18 +4104,19 @@ impl App {
         match discs {
             Some((stem, discs)) if discs.len() > 1 && self.on_shelf() => {
                 self.play_held = None;
-                let last = self
-                    .root
-                    .as_ref()
-                    .and_then(|r| slot_store::ini::value(r, crate::disc_picker::DISCS_FILE, &stem))
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .map_or(0, |n| n.saturating_sub(1));
+                let last = self.remembered_disc(&stem).unwrap_or(0);
                 self.disc_picker = Some(crate::disc_picker::DiscPicker::open(stem, discs, last, clean, self.now()));
                 self.disc_faces.clear();
                 self.disc_faces_wanted = true;
             }
             _ => self.insert(clean),
         }
+    }
+
+    fn remembered_disc(&self, stem: &str) -> Option<usize> {
+        let root = self.root.as_ref()?;
+        slot_store::ini::value(root, crate::disc_picker::DISCS_FILE, stem)?
+            .parse::<usize>().ok()?.checked_sub(1)
     }
 
     fn disc_picker_input(&mut self, action: Action) {
@@ -4237,14 +4248,14 @@ impl App {
 
     fn flush_eject(&mut self, stem: &str) {
         self.settle_saves();
-        if self.platform == Platform::Psp {
-            return;
-        }
-        let (Some(root), Some(snapshot)) = (&self.root, &self.snapshot) else {
+        let Some((root, snapshot)) = self.root.as_ref().zip(self.snapshot.as_ref())
+            .filter(|_| self.platform != Platform::Psp) else {
+            self.record_cart(None);
             return;
         };
         let Some(state) = snapshot.state() else {
             eprintln!("slot: eject: the core gave up no state");
+            self.record_cart(None);
             return;
         };
         let (state, sav) = trusted_write(snapshot.as_ref(), state, "eject");

@@ -203,6 +203,61 @@ fn a_resumed_cart_makes_no_sound() {
 }
 
 #[test]
+fn ejecting_clears_the_remembered_cart_before_the_animation_finishes() {
+    let root = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
+    write_slot_state(root.path(), &SlotState {
+        cart: Some("Emerald".into()), cart_platform: Some(Platform::Gba), clock_set: true,
+        ..SlotState::default()
+    }).unwrap();
+    let mut app = App::boot(root.path());
+    app.on_core_ready();
+    app.update(INSERT_S);
+    assert!(matches!(app.phase(), Phase::Playing { .. }));
+
+    app.apply(Action::Eject);
+    assert!(matches!(app.phase(), Phase::Ejecting { .. }));
+    let state = slot_store::read_slot_state(root.path());
+    assert_eq!((state.cart, state.cart_platform), (None, None));
+    assert!(matches!(App::boot(root.path()).phase(), Phase::Shelf));
+}
+
+#[test]
+fn boot_remembers_the_psp_title_for_explicit_insertion() {
+    let root = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
+    let folder = root.path().join("Games/PSP");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("PSP Title.iso"), [0]).unwrap();
+    write_slot_state(root.path(), &SlotState {
+        cart: Some("PSP Title".into()), cart_platform: Some(Platform::Psp), clock_set: true,
+        ..SlotState::default()
+    }).unwrap();
+
+    let app = App::boot(root.path());
+    assert!(matches!(app.phase(), Phase::Shelf));
+    let selected = app.selected_cart().unwrap();
+    assert_eq!((selected.platform, selected.stem.as_str()), (Platform::Psp, "PSP Title"));
+}
+
+#[test]
+fn boot_restores_the_disc_that_was_inserted() {
+    let root = common::tmp_root_with_carts(&["Emerald", "Zzz"]);
+    let folder = root.path().join("Games/PS1");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("Two Discs.m3u"), "Disc 1.chd\nDisc 2.chd\n").unwrap();
+    std::fs::write(folder.join("Disc 1.chd"), [0]).unwrap();
+    std::fs::write(folder.join("Disc 2.chd"), [0]).unwrap();
+    slot_store::ini::write(root.path(), "Config/discs.ini", "Two Discs", "2").unwrap();
+    write_slot_state(root.path(), &SlotState {
+        cart: Some("Two Discs".into()), cart_platform: Some(Platform::Ps1), clock_set: true,
+        ..SlotState::default()
+    }).unwrap();
+
+    let app = App::boot(root.path());
+    assert!(matches!(app.phase(), Phase::Inserting { resumed: true, .. }));
+    assert_eq!(app.chosen_disc(), Some(1));
+}
+
+#[test]
 fn the_cart_sounds_as_it_comes_free_and_not_before_the_screen_is_out() {
     let mut a = playing("Emerald");
     a.take_sfx();

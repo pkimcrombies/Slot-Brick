@@ -329,6 +329,7 @@ pub(crate) struct Track {
     pub(crate) status: Status,
     playback: Option<Playback>,
     ending: bool,
+    restore_at_ms: Option<u64>,
     // Button events are UI-thread only. Seek is applied by update_audio,
     // where the decoder and audio Ring are available together.
     pending_seek_seconds: i32,
@@ -483,6 +484,38 @@ impl MusicSettings {
     }
 }
 
+const MUSIC_RESUME_FILE: &str = "Config/music.resume";
+
+pub(crate) struct MusicResume {
+    path: PathBuf,
+    position_ms: u64,
+}
+
+impl MusicResume {
+    fn read(root: &Path) -> Option<Self> {
+        let record = std::fs::read_to_string(root.join(MUSIC_RESUME_FILE)).ok()?;
+        let (position, file) = record.split_once('\n')?;
+        let path = PathBuf::from(file);
+        if path.as_os_str().is_empty()
+            || !path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        Some(Self { path, position_ms: position.parse().ok()? })
+    }
+
+    pub(crate) fn save(&self, root: &Path) {
+        let Some(file) = self.path.to_str() else { return };
+        let record = format!("{}\n{file}", self.position_ms);
+        let path = root.join(MUSIC_RESUME_FILE);
+        let result = std::fs::create_dir_all(root.join("Config"))
+            .and_then(|()| slot_store::atomic_write(&path, record.as_bytes()));
+        if let Err(error) = result {
+            eprintln!("slot: music resume: {error}");
+        }
+    }
+}
+
 pub(crate) struct Music {
     library: Library,
     scan: Option<Scan>,
@@ -492,6 +525,7 @@ pub(crate) struct Music {
     now_playing_view: bool,
     video: Option<VideoPlayback>,
     resume_song_at: Option<u64>,
+    restore_song: Option<MusicResume>,
     /// Session-only hold switch (VolUp + VolDown chord); never persisted.
     locked: bool,
     discard_audio: bool,
@@ -512,6 +546,7 @@ impl Music {
         music.settings = MusicSettings::load(slot);
         music.cover_flow = music.settings.cover_flow;
         music.settings_root = Some(slot.to_path_buf());
+        music.restore_song = MusicResume::read(slot);
         music.scan = Scan::start(slot.to_path_buf());
         // Enter Music on Now Playing. B opens the album browser if nothing plays.
         music.now_playing_view = true;
@@ -530,6 +565,7 @@ impl Music {
             now_playing_view: false,
             video: None,
             resume_song_at: None,
+            restore_song: None,
             locked: false,
             discard_audio: false,
             cover_flow: true,
@@ -542,6 +578,36 @@ impl Music {
         };
         music.sort_albums();
         music
+    }
+
+    fn restore_last_song(&mut self) {
+        let Some(resume) = self.restore_song.take() else { return };
+        let Some(root) = self.settings_root.as_ref() else { return };
+        let path = root.join("Music").join(resume.path);
+        let found = self.library.albums.iter().enumerate().find_map(|(album, entry)| {
+            entry.songs.iter().position(|song| song.path == path).map(|track| (album, track))
+        });
+        if let Some((album, index)) = found {
+            self.start_album(album, index);
+            self.track.as_mut().expect("restored track").restore_at_ms = Some(resume.position_ms);
+        }
+    }
+
+    pub(crate) fn resume_snapshot(&self, ring: &Ring) -> Option<MusicResume> {
+        let track = self.track.as_ref()?;
+        let playback = track.playback.as_ref()?;
+        let path = self.song(track).path.strip_prefix(self.settings_root.as_ref()?.join("Music")).ok()?;
+        let frame = if track.status == Status::Finished {
+            0
+        } else {
+            self.video.as_ref().and_then(|video| video.parked_song_frame)
+                .or(self.resume_song_at)
+                .unwrap_or_else(|| playback.audible_frame(ring))
+        };
+        Some(MusicResume {
+            path: path.to_path_buf(),
+            position_ms: frame.saturating_mul(1_000) / u64::from(playback.decoder.rate),
+        })
     }
 
     fn persist_settings(&self) {
@@ -920,6 +986,7 @@ impl Music {
             status: Status::Loading,
             playback: None,
             ending: false,
+            restore_at_ms: None,
             pending_seek_seconds: 0,
         });
         self.discard_audio = true;
@@ -1137,6 +1204,7 @@ impl Music {
             self.library = library;
             self.scan = None;
             self.sort_albums();
+            self.restore_last_song();
         }
         if std::mem::take(&mut self.discard_audio) {
             ring.discard();
@@ -1164,6 +1232,14 @@ impl Music {
                 } else {
                     Status::Unreadable
                 };
+                if let (Some(ms), Some(playback)) = (track.restore_at_ms.take(), track.playback.as_mut()) {
+                    let frame = ms.saturating_mul(u64::from(playback.decoder.rate)) / 1_000;
+                    if frame > 0 && playback.seek_to(frame, ring) != Some(false) {
+                        // If the file was replaced with a shorter song, offer it from the start.
+                        let _ = playback.seek_to(0, ring);
+                    }
+                    track.status = Status::Paused;
+                }
             }
         }
         if let Some(video) = self.video.as_mut() {
@@ -1209,6 +1285,49 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_music_restores_the_saved_song_paused() {
+        let root = tempfile::tempdir().unwrap();
+        let album = root.path().join("Music/Album");
+        std::fs::create_dir_all(&album).unwrap();
+        let song = album.join("01.mp3");
+        silent_mp3(&song, 2);
+        let frames = std::fs::read(&song).unwrap();
+        std::fs::write(&song, frames.repeat(120)).unwrap();
+        let mut music = test_music(root.path());
+        music.settings_root = Some(root.path().to_path_buf());
+        music.start_album(0, 0);
+        music.now_playing_view = true;
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        ring.set_idle(true);
+        music.update_audio(&ring, 70);
+        music.input(Action::GbaDown(Btn::Up));
+        music.update_audio(&ring, 70);
+        let saved = music.resume_snapshot(&ring).expect("playing song");
+        assert_eq!(saved.path, Path::new("Album/01.mp3"));
+        assert!((9_900..10_400).contains(&saved.position_ms));
+        saved.save(root.path());
+        drop(music);
+
+        let mut music = Music::open(root.path());
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while music.scan.is_some() && Instant::now() < deadline {
+            music.update_audio(&ring, 70);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let track = music.track.as_ref().expect("remembered song");
+        assert_eq!(music.song(track).path, song);
+        assert_eq!(track.status, Status::Paused);
+        assert!((track.time().unwrap().0 - saved.position_ms as f64 / 1_000.0).abs() < 0.1);
+        assert_eq!(ring.queued_frames(), 0);
+
+        music.input(Action::GbaDown(Btn::A));
+        music.update_audio(&ring, 70);
+        assert!(music.playing());
+        assert!(ring.queued_frames() > 0);
+    }
 
     #[test]
     fn movie_clock_smooths_audio_batches_and_holds_during_stalls() {
@@ -1284,6 +1403,7 @@ mod tests {
         });
         music.start_album(0, 0);
         music.now_playing_view = true;
+        music.settings_root = Some(dir.path().to_path_buf());
         let ring = Ring::new(0);
         ring.reopen(48_000);
         ring.set_idle(true);
@@ -1306,6 +1426,9 @@ mod tests {
         music.input(Action::GbaDown(Btn::Right));
         music.update_audio(&ring, 70);
         assert_eq!(music.native_video().unwrap().1, 10.0, "Right seeks the movie forward");
+        let saved = music.resume_snapshot(&ring).unwrap();
+        let song_rate = music.track.as_ref().unwrap().playback.as_ref().unwrap().decoder.rate;
+        assert_eq!(saved.position_ms, parked * 1_000 / u64::from(song_rate));
         music.input(Action::GbaDown(Btn::Left));
         music.update_audio(&ring, 70);
         assert_eq!(music.native_video().unwrap().1, 0.0, "Left seeks the movie back");

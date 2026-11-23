@@ -278,6 +278,16 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+- **2026-11-23 thumbnail build failure correction:** User's installer
+  stopped safely at regression-tests compilation (exit 101, SD unchanged).
+  `music_cover::embedded_cover_sized(path, size: u32)` reused `let size`
+  for `music_tags::id3v2_size`, shadowing the thumbnail dimension
+  with a `usize`. This produced Rust E0308 at
+  `choose_cover_sized(metadata.visuals(), size)`. Renamed that local
+  value to `tag_bytes` and preserved the `u32` thumbnail size.
+  No production behaviour change intended. Re-run test/build on
+  user's Docker toolchain before declaring installation successful.
+
 
 - **2026-11-23 Music Now Playing smoother title marquee and labels:**
   Music's first tab is visually called **"now"** (tab order and

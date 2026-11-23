@@ -10,7 +10,7 @@ use slot_ui::{
 };
 
 use crate::music::{Music, RepeatMode, Status, Track};
-use crate::music_cover::{MusicCover, THUMBNAIL};
+use crate::music_cover::{MusicCover, LIST_THUMBNAIL};
 
 // Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
 // less stark than pure white. System menus and the launcher keep their
@@ -35,15 +35,24 @@ const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
 
 // Match the shared top-left clock, rather than the 32px quick-menu inset.
 const EDGE: f32 = STATUS_MARGIN;
-const ROWS: usize = 6;
+// Nine 40px rows fill the usable 640x480 Music canvas; twenty-one
+// off-thread 64px thumbnail cache slots keep ten nearby albums warm.
+const ROWS: usize = 9;
+const LIST_CACHE_RADIUS: usize = 10;
+const LIST_CACHE_SLOTS: usize = LIST_CACHE_RADIUS * 2 + 1;
+const LIST_TOP: f32 = 100.0;
+const ROW_H: f32 = 40.0;
+const ALBUM_COVER_SIDE: f32 = 34.0;
+const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 12.0;
+const LIST_SCROLL_X: f32 = OUT_W as f32 - EDGE + 8.0;
+const LIST_SCROLL_TOP: f32 = LIST_TOP + 4.0;
+const LIST_SCROLL_HEIGHT: f32 = ROWS as f32 * ROW_H - 8.0;
 const TITLE_TOP: f32 = 42.0;
-// Tiny hold indicator, tucked into the spare end of the Music tab row.
-const MUSIC_LOCK_X: f32 = OUT_W as f32 - STATUS_MARGIN - 18.0;
-const MUSIC_LOCK_Y: f32 = TITLE_TOP + 7.0;
-const LIST_TOP: f32 = 104.0;
-const ROW_H: f32 = 48.0;
-const ALBUM_COVER_SIDE: f32 = 40.0;
-const ALBUM_TEXT_X: f32 = EDGE + ALBUM_COVER_SIDE + 14.0;
+fn list_prefetch_range(cursor: usize, count: usize) -> std::ops::Range<usize> {
+    cursor.saturating_sub(LIST_CACHE_RADIUS)
+        ..cursor.saturating_add(LIST_CACHE_RADIUS + 1).min(count)
+}
+
 // Classic iPod-style album browser: full-width menu rows rather than a
 // floating Cover Flow selection panel. Keep Slot's warm-white/rose palette.
 const ALBUM_HEADER_BOTTOM: f32 = 108.0;
@@ -214,11 +223,11 @@ struct PlayingBackdrop {
     accent: [u8; 3],
 }
 
-#[derive(Default)]
 pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
     cover: MusicCover,
-    album_covers: [MusicCover; ROWS],
+    album_covers: [MusicCover; LIST_CACHE_SLOTS],
+    list_visible: bool,
     flow_covers: [MusicCover; FLOW_CACHE_SLOTS],
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
@@ -226,6 +235,24 @@ pub(crate) struct MusicView {
     repeat_icons_loaded: bool,
     repeat_icons: [Option<TexId>; 3],
     title_marquee: TitleMarquee,
+}
+
+impl Default for MusicView {
+    fn default() -> Self {
+        Self {
+            cache: Vec::new(),
+            cover: MusicCover::default(),
+            album_covers: std::array::from_fn(|_| MusicCover::list_thumbnail()),
+            list_visible: false,
+            flow_covers: std::array::from_fn(|_| MusicCover::default()),
+            flow_motion: FlowMotion::default(),
+            flow_placeholder: None,
+            playing_backdrop: None,
+            repeat_icons_loaded: false,
+            repeat_icons: [None; 3],
+            title_marquee: TitleMarquee::default(),
+        }
+    }
 }
 
 impl MusicView {
@@ -279,6 +306,12 @@ impl MusicView {
         self.flow_motion.active(Instant::now())
     }
 
+    /// List thumbnails refresh only while the Albums list is visible and
+    /// has unfinished workers; idle Music still consumes no extra frames.
+    pub(crate) fn album_list_loading(&self) -> bool {
+        self.list_visible && self.album_covers.iter().any(MusicCover::is_loading)
+    }
+
     /// Poll pending cover workers promptly while the carousel is on screen.
     /// When all requests settle, return to the usual low-CPU idle redraw gate.
     pub(crate) fn cover_flow_loading(&self) -> bool {
@@ -290,13 +323,11 @@ impl MusicView {
     /// original texture ID avoids decoding/uploading an image that is already
     /// on screen. The caches themselves own and reuse those texture slots.
     fn ready_album_art(&self, first_track: &Path) -> Option<(TexId, [u32; 2])> {
-        self.flow_covers.iter().chain(self.album_covers.iter())
-            .find_map(|cached| cached.ready_for(first_track))
+        self.flow_covers.iter().find_map(|cached| cached.ready_for(first_track))
     }
 
     fn ready_album_tint(&self, first_track: &Path) -> Option<[u8; 3]> {
-        self.flow_covers.iter().chain(self.album_covers.iter())
-            .find_map(|cached| cached.tint_for(first_track))
+        self.flow_covers.iter().find_map(|cached| cached.tint_for(first_track))
     }
 
     /// One texture and no additional artwork reads. Its pixels are computed
@@ -349,7 +380,7 @@ impl MusicView {
                 // A fast press before Cover Flow finishes decoding must use
                 // that same in-flight worker, including its sampled colour.
                 let pending = first_path.and_then(|path| {
-                    self.flow_covers.iter_mut().chain(self.album_covers.iter_mut())
+                    self.flow_covers.iter_mut()
                         .find(|cached| cached.requested_for(path))
                         .map(|cached| {
                             let art = cached.texture(path, album, compositor);
@@ -365,16 +396,31 @@ impl MusicView {
         } else {
             (None, None)
         };
-        // Reuse a fixed number of cover decoders and GPU textures as the list scrolls.
-        // Artwork is decoded off-thread by MusicCover and never blocks the render loop.
+        // A small thumbnail cache is independent of the seven visible
+        // 256px Cover Flow cards. Nine 40px rows are drawn while up to
+        // ten more albums in either direction are decoded in background.
         let first = music.cursor().saturating_sub(ROWS - 1);
         let mut album_art = [None; ROWS];
-        if !music.showing_now_playing() && !music.music_settings_open()
-            && !music.cover_flow() {
+        self.list_visible = !music.showing_now_playing()
+            && !music.music_settings_open() && !music.cover_flow()
+            && (0..music.row_count()).any(|i| music.album_for_row(i).is_some());
+        if self.list_visible {
+            let cache_root = music.icon_root();
             for (slot, art) in album_art.iter_mut().enumerate() {
-                if let Some(album) = music.album_for_row(first + slot) {
+                let index = first + slot;
+                if let Some(album) = music.album_for_row(index) {
                     if let Some(song) = album.songs.first() {
-                        *art = self.album_covers[slot].texture(&song.path, album, compositor);
+                        *art = self.album_covers[index % LIST_CACHE_SLOTS]
+                            .texture_cached(&song.path, album, compositor, cache_root);
+                    }
+                }
+            }
+            for index in list_prefetch_range(music.cursor(), music.row_count()) {
+                if (first..first + ROWS).contains(&index) { continue; }
+                if let Some(album) = music.album_for_row(index) {
+                    if let Some(song) = album.songs.first() {
+                        let _ = self.album_covers[index % LIST_CACHE_SLOTS]
+                            .texture_cached(&song.path, album, compositor, cache_root);
                     }
                 }
             }
@@ -624,7 +670,7 @@ impl Painter<'_> {
             // Albums gain a thumbnail; artist and track rows keep their existing layout.
             let x = if music.album_for_row(i).is_some() {
                 if let Some((texture, pixels)) = album_art[i - first] {
-                    let size = pixels.map(|n| n as f32 * ALBUM_COVER_SIDE / THUMBNAIL as f32);
+                    let size = pixels.map(|n| n as f32 * ALBUM_COVER_SIDE / LIST_THUMBNAIL as f32);
                     self.draws.push(pixel_aligned_texture(
                         texture,
                         [
@@ -640,12 +686,25 @@ impl Painter<'_> {
             } else {
                 EDGE
             };
+            let room = (LIST_SCROLL_X - x - 18.0).max(1.0) as u32;
             if let Some(subtitle) = subtitle {
-                self.text_ink(label, 23, [x, y + 1.0], ink);
-                self.text_ink(subtitle, 14, [x, y + 28.0], MUSIC_MUTED_INK);
+                self.text_with_room(label, 21, [x, y], ink, room);
+                self.text_with_room(subtitle, 13, [x, y + 23.0], MUSIC_MUTED_INK, room);
             } else {
-                self.text_ink(label, 24, [x, y + 6.0], ink);
+                self.text_with_room(label, 22, [x, y + 6.0], ink, room);
             }
+        }
+        if music.row_count() > ROWS {
+            let total = music.row_count();
+            let rail = [0.88, 0.86, 0.84, 1.0];
+            let thumb = [0.62, 0.32, 0.42, 1.0];
+            self.rect([LIST_SCROLL_X, LIST_SCROLL_TOP], [2.0, LIST_SCROLL_HEIGHT], rail);
+            let thumb_h = (LIST_SCROLL_HEIGHT * ROWS as f32 / total as f32).max(16.0);
+            let progress = first as f32 / (total - ROWS) as f32;
+            self.rect(
+                [LIST_SCROLL_X, LIST_SCROLL_TOP + progress * (LIST_SCROLL_HEIGHT - thumb_h)],
+                [2.0, thumb_h], thumb,
+            );
         }
     }
 

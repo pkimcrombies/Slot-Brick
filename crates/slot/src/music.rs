@@ -1008,6 +1008,45 @@ mod tests {
     }
 
     #[test]
+    fn ten_second_seek_changes_decoder_position_and_preserves_pause_state() {
+        let root = tempfile::tempdir().unwrap();
+        let album = root.path().join("Music/Album");
+        fs::create_dir_all(&album).unwrap();
+        let song = album.join("01.mp3");
+        silent_mp3(&song, 2);
+        // The existing test helper makes only ~0.3s of audio; repeat those
+        // valid frames to let +10/-10s be tested against real decoder data.
+        let frames = fs::read(&song).unwrap();
+        fs::write(&song, frames.repeat(120)).unwrap();
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::A)); // Album -> tracks
+        music.input(Action::GbaDown(Btn::Y)); // start song -> Now Playing
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        ring.set_idle(true);
+        music.update_audio(&ring, 70);
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Playing);
+        assert!(music.track.as_ref().unwrap().time().unwrap().1.unwrap() > 30.0);
+        music.input(Action::GbaDown(Btn::Up));
+        music.update_audio(&ring, 70);
+        let elapsed = music.track.as_ref().unwrap().time().unwrap().0;
+        assert!((9.0..13.0).contains(&elapsed),
+            "Up should seek forward about ten seconds: {elapsed}");
+        music.input(Action::GbaDown(Btn::A)); // pause
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Paused);
+        music.input(Action::GbaDown(Btn::Down));
+        music.update_audio(&ring, 70);
+        let back = music.track.as_ref().unwrap().time().unwrap().0;
+        assert!(back < 3.0, "Down should seek backwards without resuming: {back}");
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Paused);
+        assert_eq!(ring.queued_frames(), 0,
+            "a seek while paused must discard samples from the old position");
+        music.input(Action::GbaDown(Btn::A));
+        music.update_audio(&ring, 70);
+        assert!(music.playing(), "playback can resume from the new seek point");
+    }
+
+    #[test]
     fn settings_persist_and_bad_values_do_not_override_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let mut prefs = MusicSettings::default();

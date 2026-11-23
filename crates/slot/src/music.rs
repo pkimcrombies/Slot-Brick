@@ -18,18 +18,6 @@ pub(crate) fn companion_video(audio: &Path) -> Option<PathBuf> {
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0))
 }
 
-/// The currently playing audio track remains alive while an external
-/// fullscreen player owns the display and ALSA. Slot restores its state when
-/// that child process exits. Video playback itself is not part of dr_mp3.
-#[derive(Clone, Debug)]
-pub struct VideoHandoff {
-    pub path: PathBuf,
-    pub at_seconds: u32,
-    pub was_playing: bool,
-    pub was_loading: bool,
-}
-
-
 unsafe extern "C" {
     fn slot_mp3_open(
         path: *const c_void,
@@ -369,7 +357,8 @@ pub(crate) struct Music {
     pub(crate) track: Option<Track>,
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
-    video_requested: bool,
+    video_visible: bool,
+    video_path: Option<PathBuf>,
     /// Session-only hold switch (VolUp + VolDown chord); never persisted.
     locked: bool,
     discard_audio: bool,
@@ -406,7 +395,8 @@ impl Music {
             }],
             track: None,
             now_playing_view: false,
-            video_requested: false,
+            video_visible: false,
+            video_path: None,
             locked: false,
             discard_audio: false,
             cover_flow: true,
@@ -785,7 +775,8 @@ impl Music {
         {
             self.select_row(index);
         }
-        self.video_requested = false;
+        self.video_visible = false;
+        self.video_path = None;
         self.track = Some(Track {
             album,
             index,
@@ -820,15 +811,17 @@ impl Music {
 
     /// True when the browser should return to Slot's menu.
     pub(crate) fn input(&mut self, action: Action) -> bool {
-        if action == Action::QuickMenu { return true; }
+        if action == Action::QuickMenu { self.video_visible = false; return true; }
         // All sections, including Settings, share the same tab navigation.
         // Start is intentionally unmapped; HOME/Menu alone exits Music.
         match action {
             Action::GbaDown(Btn::L1) => {
+                self.video_visible = false;
                 self.navigate_section(false);
                 return false;
             }
             Action::GbaDown(Btn::R1) => {
+                self.video_visible = false;
                 self.navigate_section(true);
                 return false;
             }
@@ -853,17 +846,23 @@ impl Music {
         }
         if self.now_playing_view {
             if action == Action::GbaDown(Btn::B) {
+                self.video_visible = false;
                 self.browse_playing_album();
                 return false;
             }
             if let Some(track) = &mut self.track {
                 let (album, index) = (track.album, track.index);
                 match action {
-                    // On Now Playing only, Y hands a matching local video to
-                    // the separate player. No video = no control change.
+                    // Y switches between artwork and a native silent video.
+                    // Audio continues in the existing MP3/M4A decoder.
                     Action::GbaDown(Btn::Y) => {
-                        if companion_video(&self.library.albums[album].songs[index].path).is_some() {
-                            self.video_requested = true;
+                        if self.video_visible {
+                            self.video_visible = false;
+                        } else {
+                            self.video_path = companion_video(
+                                &self.library.albums[album].songs[index].path,
+                            );
+                            self.video_visible = self.video_path.is_some();
                         }
                     }
                     Action::GbaDown(Btn::A) => match track.status {
@@ -953,34 +952,27 @@ impl Music {
         false
     }
 
-    /// Consume a Y request only once, and rewind any queued sound to the
-    /// audible sample before the external player's initial -ss seek.
-    pub(crate) fn take_video_handoff(&mut self, ring: &Ring) -> Option<VideoHandoff> {
-        if !std::mem::take(&mut self.video_requested) { return None; }
-        let track = self.track.as_ref()?;
-        let video = companion_video(&self.song(track).path)?;
-        let was_loading = track.status == Status::Loading;
-        let was_playing = matches!(track.status, Status::Playing | Status::Loading);
-        self.prepare_suspend(ring);
-        let track = self.track.as_mut()?;
-        let at_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as u32);
-        track.status = Status::Paused;
-        Some(VideoHandoff { path: video, at_seconds, was_playing, was_loading })
+    /// The selected sidecar is cached at Y press, not re-statted on every
+    /// display frame. Outside Now Playing, only the existing Music UI shows.
+    pub(crate) fn native_video_path(&self) -> Option<&Path> {
+        if self.video_visible && self.now_playing_view && !self.settings_view {
+            self.video_path.as_deref()
+        } else {
+            None
+        }
     }
 
-    /// Resume the original audio decoder, not the video's soundtrack.
-    /// The patched NX ffplay supplies a position; if absent, stay at the
-    /// original handoff point rather than guessing elapsed wall time.
-    pub(crate) fn finish_video_handoff(&mut self, video: &VideoHandoff,
-                                       at_seconds: Option<u32>) {
-        let Some(track) = self.track.as_mut() else { return; };
-        let final_seconds = at_seconds.unwrap_or(video.at_seconds);
-        let current_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as i64);
-        let shift = i64::from(final_seconds) - current_seconds;
-        track.pending_seek_seconds = shift.clamp(-3600, 3600) as i32;
-        track.status = if video.was_loading { Status::Loading }
-            else if video.was_playing { Status::Playing }
-            else { Status::Paused };
+    /// Slot's audible MP3/M4A clock subtracts audio samples already queued in
+    /// its ring. Do not drive video from the raw decoder's submitted count;
+    /// that would make it consistently lead the actual speakers.
+    pub(crate) fn audible_seconds(&self, ring: &Ring) -> Option<f64> {
+        let playback = self.track.as_ref()?.playback.as_ref()?;
+        let decoded = playback.submitted as f64 / f64::from(playback.decoder.rate);
+        let rate = ring.sample_rate();
+        let queued = if rate > 0 {
+            ring.queued_frames() as f64 / f64::from(rate)
+        } else { 0.0 };
+        Some((decoded - queued).max(0.0))
     }
 
     /// Stop queued audio when entering kernel suspend without losing track,
@@ -1100,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn now_playing_y_requests_external_video_only_with_matching_file() {
+    fn now_playing_y_toggles_native_video_without_touching_audio() {
         let dir = tempfile::tempdir().unwrap();
         let music_dir = dir.path().join("Music/Album");
         fs::create_dir_all(&music_dir).unwrap();
@@ -1119,20 +1111,19 @@ mod tests {
         music.start_album(0, 0);
         music.now_playing_view = true;
         music.input(Action::GbaDown(Btn::Y));
-        assert!(!music.video_requested, "Y does nothing without a video");
+        assert!(music.native_video_path().is_none(),
+            "Y should leave artwork intact without a same-stem video");
         fs::write(mp3.with_extension("mp4"), b"video").unwrap();
         music.input(Action::GbaDown(Btn::Y));
-        assert!(music.video_requested);
-        let ring = Ring::new(0);
-        let request = music.take_video_handoff(&ring).expect("external video request");
-        assert_eq!(request.path, mp3.with_extension("mp4"));
-        assert_eq!(request.at_seconds, 0);
-        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Paused));
-        assert!(music.take_video_handoff(&ring).is_none(), "request is consumed once");
-        music.finish_video_handoff(&request, Some(9));
-        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Loading),
-            "a decoder not opened before the handoff must still open afterward");
-        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 9);
+        assert_eq!(music.native_video_path(), Some(mp3.with_extension("mp4").as_path()));
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Loading,
+            "opening video must not pause or reset the MP3 decoder");
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.native_video_path().is_none(), "second Y returns to artwork");
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.native_video_path().is_some());
+        music.input(Action::GbaDown(Btn::B));
+        assert!(music.native_video_path().is_none(), "browsing stops video only");
     }
 
     #[test]

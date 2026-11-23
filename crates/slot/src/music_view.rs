@@ -75,7 +75,18 @@ const REPEAT_BADGE_Y: f32 = OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN - REPEAT_IC
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
+// Seven 3D covers are drawn; four extra on each side are decoded ahead
+// of time. A 15-slot rolling GPU cache costs at most ~3.75 MiB in
+// 256x256 RGBA textures, without keeping an entire music library in RAM.
 const FLOW_SLOTS: usize = 7;
+const FLOW_EXTRA_COVERS: usize = 4;
+const FLOW_CACHE_SLOTS: usize = FLOW_SLOTS + 2 * FLOW_EXTRA_COVERS;
+const FLOW_CACHE_RADIUS: usize = FLOW_SLOTS / 2 + FLOW_EXTRA_COVERS;
+
+fn flow_prefetch_range(cursor: usize, albums: usize) -> std::ops::Range<usize> {
+    cursor.saturating_sub(FLOW_CACHE_RADIUS)
+        ..cursor.saturating_add(FLOW_CACHE_RADIUS + 1).min(albums)
+}
 // ClassiPod Original: 400 ms ease-out-sine, a 0.95 radian Y rotation,
 // 22% side scale reduction, and perspective coefficient 0.35 / cover size.
 const FLOW_DURATION: Duration = Duration::from_millis(400);
@@ -159,7 +170,7 @@ pub(crate) struct MusicView {
     cache: Vec<CachedFace>,
     cover: MusicCover,
     album_covers: [MusicCover; ROWS],
-    flow_covers: [MusicCover; FLOW_SLOTS],
+    flow_covers: [MusicCover; FLOW_CACHE_SLOTS],
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
     playing_backdrop: Option<PlayingBackdrop>,
@@ -315,7 +326,7 @@ impl MusicView {
             self.flow_motion.clear();
             None
         };
-        let flow_first = flow.map_or(0, |position| position.round() as isize - 3);
+        let flow_first = flow.map_or(0, |position| position.round() as isize - (FLOW_SLOTS / 2) as isize);
         let mut flow_art = [None; FLOW_SLOTS];
         if flow.is_some() {
             for (slot, item) in flow_art.iter_mut().enumerate() {
@@ -326,9 +337,28 @@ impl MusicView {
                 let album_index = album_index as usize;
                 if let Some(album) = music.album_for_row(album_index) {
                     if let Some(song) = album.songs.first() {
-                        // Modulo slot ownership remains stable when scrolling
-                        // through adjacent album indices.
-                        *item = self.flow_covers[album_index % FLOW_SLOTS]
+                        // Draw the seven visible covers first. Extra cache
+                        // requests must not delay artwork in the viewport.
+                        *item = self.flow_covers[album_index % FLOW_CACHE_SLOTS]
+                            .texture(&song.path, album, compositor);
+                    }
+                }
+            }
+        }
+        // Keep another four covers warm on each side of the visible seven.
+        // These use the same 15 rolling texture handles, so moving into the
+        // prefetched window requires no new decode or placeholder flash.
+        // Skip visible indices: they were already requested above.
+        if flow.is_some() {
+            for album_index in flow_prefetch_range(music.cursor(), music.row_count()) {
+                let visible = (flow_first..flow_first + FLOW_SLOTS as isize)
+                    .contains(&(album_index as isize));
+                if visible {
+                    continue;
+                }
+                if let Some(album) = music.album_for_row(album_index) {
+                    if let Some(song) = album.songs.first() {
+                        let _ = self.flow_covers[album_index % FLOW_CACHE_SLOTS]
                             .texture(&song.path, album, compositor);
                     }
                 }
@@ -926,6 +956,25 @@ mod album_thumbnail_layout_tests {
         assert!(ALBUM_COVER_SIDE <= ROW_H);
         assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
         assert!(ALBUM_TEXT_X < OUT_W as f32 - EDGE);
+    }
+
+    #[test]
+    fn cover_flow_preloads_four_additional_albums_on_each_side() {
+        assert_eq!(FLOW_SLOTS, 7, "3D layout remains seven visible covers");
+        assert_eq!(FLOW_EXTRA_COVERS, 4);
+        assert_eq!(FLOW_CACHE_SLOTS, 15);
+        assert_eq!(flow_prefetch_range(10, 40), 3..18);
+        assert_eq!(flow_prefetch_range(0, 40), 0..8);
+        assert_eq!(flow_prefetch_range(39, 40), 32..40);
+        assert_eq!(flow_prefetch_range(0, 0), 0..0);
+        assert_eq!(flow_prefetch_range(0, 1), 0..1);
+        for cursor in 0..40 {
+            let slots: std::collections::HashSet<usize> =
+                flow_prefetch_range(cursor, 40)
+                    .map(|index| index % FLOW_CACHE_SLOTS).collect();
+            assert_eq!(slots.len(), flow_prefetch_range(cursor, 40).len(),
+                "warm cache must never overwrite a different album in its own window");
+        }
     }
 
     #[test]

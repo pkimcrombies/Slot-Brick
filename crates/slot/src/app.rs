@@ -15,6 +15,7 @@ use slot_store::{
 };
 use slot_ui::{
     board_from, board_zoom, draw_backdrop, draw_empty_slot, draw_status_bar,
+    draw_status_bar_with_lock,
     draw_sticker, ease, grown, lid_at, lid_from, lift_of, on_board, shelf_cart_at, ClockPicker,
     Draw, FfState, GbShell, Hud, HudKind, Icon, LinkBadge, Millis, PauseChoice, Placed, Polaroids,
     PowerChoice, QuickMenu, QuickMenuFaces, QuickRow, QuickValue, Refusal, Shelf, SlotChrome,
@@ -281,6 +282,7 @@ pub enum Phase {
 pub struct App {
     music: Option<crate::music::Music>,
     music_draws: Vec<Draw>,
+    music_lock_face: Option<(TexId, u32, u32)>,
     /// The Doze state can restore a Music session, not just a cartridge.
     music_before_doze: bool,
     /// Music-only physical backlight dim; never zero and never saved as
@@ -591,6 +593,7 @@ impl App {
             wifi_face: None,
             music: None,
             music_draws: Vec::new(),
+            music_lock_face: None,
             music_before_doze: false,
             music_dimmed: None,
             #[cfg(feature = "brick")]
@@ -1232,6 +1235,10 @@ impl App {
 
     pub(crate) fn set_music_draws(&mut self, draws: Vec<Draw>) {
         self.music_draws = draws;
+    }
+
+    pub(crate) fn set_music_lock_face(&mut self, face: Option<(TexId, u32, u32)>) {
+        self.music_lock_face = face;
     }
 
     /// Set Music's physical backlight step without changing system brightness.
@@ -3530,12 +3537,14 @@ impl App {
                 out.extend_from_slice(&self.music_draws);
                 // The exact same shelf HUD: black top-left clock, top-right
                 // battery, Wi-Fi and update indicator on Music's ivory canvas.
-                draw_status_bar(
+                draw_status_bar_with_lock(
                     self.battery,
                     self.battery_percent,
                     self.status_bolt,
                     self.wifi_face(),
                     self.update_face(),
+                    self.music.as_ref().filter(|m| m.locked())
+                        .and(self.music_lock_face),
                     self.shelf_clock,
                     self.status_scale,
                     out,

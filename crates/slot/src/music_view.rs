@@ -33,6 +33,40 @@ fn repeat_icon_ink(mode: RepeatMode) -> [u8; 3] {
 const MUSIC_PROGRESS_TRACK: [f32; 4] = [0.84, 0.83, 0.82, 1.0];
 const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
 const HUD_LOCK_SIDE: u32 = 18;
+// A simple confirmation, not an animation: show the open icon briefly.
+const UNLOCK_ICON_HOLD: Duration = Duration::from_millis(600);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LockGlyph { Closed, Open }
+
+#[derive(Default)]
+struct LockFeedback {
+    was_locked: bool,
+    open_until: Option<Instant>,
+}
+
+impl LockFeedback {
+    fn update(&mut self, locked: bool, now: Instant) -> Option<LockGlyph> {
+        if locked {
+            self.was_locked = true;
+            self.open_until = None;
+            return Some(LockGlyph::Closed);
+        }
+        if self.was_locked {
+            self.open_until = Some(now + UNLOCK_ICON_HOLD);
+        }
+        self.was_locked = false;
+        if self.open_until.is_some_and(|end| now < end) {
+            Some(LockGlyph::Open)
+        } else {
+            self.open_until = None;
+            None
+        }
+    }
+
+    fn pending(&self) -> bool { self.open_until.is_some() }
+}
+
 
 // Match the shared top-left clock, rather than the 32px quick-menu inset.
 const EDGE: f32 = STATUS_MARGIN;
@@ -324,6 +358,10 @@ pub(crate) struct MusicView {
     title_marquee: TitleMarquee,
     lock_icon_loaded: bool,
     lock_icon: Option<TexId>,
+    unlock_icon_loaded: bool,
+    unlock_icon: Option<TexId>,
+    lock_feedback: LockFeedback,
+    lock_glyph: Option<LockGlyph>,
     playback_icons_loaded: bool,
     playback_icons: [Option<TexId>; 2],
 }
@@ -344,6 +382,10 @@ impl Default for MusicView {
             title_marquee: TitleMarquee::default(),
             lock_icon_loaded: false,
             lock_icon: None,
+            unlock_icon_loaded: false,
+            unlock_icon: None,
+            lock_feedback: LockFeedback::default(),
+            lock_glyph: None,
             playback_icons_loaded: false,
             playback_icons: [None; 2],
         }
@@ -412,6 +454,25 @@ impl MusicView {
         self.lock_icon
     }
 
+    /// Same UXWing 18px outline style as the closed padlock.
+    fn unlock_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
+        if !self.unlock_icon_loaded {
+            self.unlock_icon_loaded = true;
+            if let Some(root) = music.icon_root() {
+                let path = root.join("System/music-icons/unlock.png");
+                if let Some(bytes) = std::fs::read(path).ok()
+                    .filter(|bytes| bytes.len() <= 4 << 20) {
+                    if let Some(pixels) = decode_lock_icon(&bytes) {
+                        self.unlock_icon = Some(compositor.create_texture(
+                            HUD_LOCK_SIDE, HUD_LOCK_SIDE, &pixels,
+                        ));
+                    }
+                }
+            }
+        }
+        self.unlock_icon
+    }
+
     /// Load playback images from SD once and reuse GPU textures on every frame.
     fn playback_icon(&mut self, music: &Music, status: Status,
                      compositor: &mut Compositor) -> Option<TexId> {
@@ -436,7 +497,17 @@ impl MusicView {
     }
 
     pub(crate) fn hud_lock_icon(&self) -> Option<(TexId, u32, u32)> {
-        self.lock_icon.map(|id| (id, HUD_LOCK_SIDE, HUD_LOCK_SIDE))
+        let id = match self.lock_glyph {
+            Some(LockGlyph::Closed) => self.lock_icon,
+            Some(LockGlyph::Open) => self.unlock_icon,
+            None => None,
+        }?;
+        Some((id, HUD_LOCK_SIDE, HUD_LOCK_SIDE))
+    }
+
+    /// Refresh only until the open icon disappears, then return to idle redraw.
+    pub(crate) fn unlock_feedback_pending(&self) -> bool {
+        self.lock_feedback.pending()
     }
 
     /// Only long titles need the additional low-frequency redraws.
@@ -668,8 +739,11 @@ impl MusicView {
             self.title_marquee.reset();
             None
         };
-        if music.locked() {
-            let _ = self.lock_icon(music, compositor);
+        self.lock_glyph = self.lock_feedback.update(music.locked(), Instant::now());
+        match self.lock_glyph {
+            Some(LockGlyph::Closed) => { let _ = self.lock_icon(music, compositor); }
+            Some(LockGlyph::Open) => { let _ = self.unlock_icon(music, compositor); }
+            None => {}
         }
         // Build the viewport before borrowing the text painter. No glyph
         // rasterization occurs on subsequent frames of the same song.
@@ -1560,6 +1634,33 @@ mod album_thumbnail_layout_tests {
         assert_eq!(HUD_LOCK_SIDE, 18);
         let view = MusicView::default();
         assert!(view.hud_lock_icon().is_none());
+    }
+
+    #[test]
+    fn music_lock_icon_switches_immediately_then_open_icon_expires() {
+        let now = Instant::now();
+        let mut indicator = LockFeedback::default();
+        assert_eq!(indicator.update(false, now), None, "no initial unlock flash");
+        assert_eq!(indicator.update(true, now), Some(LockGlyph::Closed));
+        assert_eq!(indicator.update(false, now), Some(LockGlyph::Open));
+        assert_eq!(indicator.update(false, now + Duration::from_millis(500)),
+            Some(LockGlyph::Open));
+        assert!(indicator.pending(), "request redraw until icon disappears");
+        assert_eq!(indicator.update(false, now + UNLOCK_ICON_HOLD), None);
+        assert!(!indicator.pending(), "no background refresh after confirmation");
+    }
+
+    #[test]
+    fn relocking_cancels_any_pending_open_indicator() {
+        let now = Instant::now();
+        let mut indicator = LockFeedback::default();
+        assert_eq!(indicator.update(true, now), Some(LockGlyph::Closed));
+        assert_eq!(indicator.update(false, now), Some(LockGlyph::Open));
+        assert_eq!(indicator.update(true, now + Duration::from_millis(100)),
+            Some(LockGlyph::Closed));
+        assert!(!indicator.pending());
+        assert_eq!(indicator.update(true, now + UNLOCK_ICON_HOLD),
+            Some(LockGlyph::Closed));
     }
 
     #[test]

@@ -645,6 +645,37 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 ffplay missing libbz2 on Slot OS (user device log)
+
+- User installed the experimental video handoff and pressed Y, but video
+  never appeared. `Slot/Logs/video-player.log` contained repeated
+  `ffplay: error while loading shared libraries: libbz2.so.1.0:
+  cannot open shared object file: No such file or directory`.
+  This **proves the external process was invoked**, not that EGL/SDL,
+  decoding, sound or return-to-Music have worked yet.
+- Root cause: previous installer staged the NX Redux ARM64 `ffplay`
+  and several `lib*.so` dependencies, but did not include
+  `libbz2.so.1.0` from the stock-firmware userspace.
+- For the already-installed card, use the **small library-only**
+  `Install-Slot-Brick-Video-libBz2-Fix-20261123.txt` installer.
+  It downloads official Debian bookworm ARM64
+  `libbz2-1.0_1.0.8-5+b1_arm64.deb` from
+  `https://deb.debian.org/debian/pool/main/b/bzip2/`
+  with SHA-256
+  `d3a96ece03326498b39ff093a76800dfcbcb1d4049d6ae6e9f6fa1aa7a590ad6`,
+  extracts the dereferenced shared object in existing Docker, and
+  installs **only**
+  `Slot/System/video-player/lib/libbz2.so.1.0` plus its attribution
+  file. Existing files are backed up and verified; SD partition,
+  firmware, Slot launcher, games, saves, music, and other libraries
+  remain unchanged.
+- **A second missing dependency is possible**: this fixes only the
+  loader's first confirmed error. On-device re-test with a local
+  MP4 is still required. If failure continues, use the newest
+  `Slot/Logs/video-player.log` and `Slot/Logs/slot.log` to diagnose.
+  Future full video installers should package this verified runtime
+  dependency automatically and check ELF dependency closure.
+
 ## 2026-11-23 Experimental Y video-player handoff (NOT hardware validated)
 
 - This is an experimental external-player path on the existing

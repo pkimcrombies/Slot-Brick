@@ -189,6 +189,11 @@ fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
     command.arg("-i").arg(&handoff.path);
     command.env("LD_LIBRARY_PATH", library_path)
         .env("SDL_NOMOUSE", "1")
+        // SDL2's joystick enumeration uses libudev.so.0 on NX Redux's
+        // stock-firmware runtime, which Slot OS does not ship. The parent
+        // Slot process polls Y for return, so ffplay needs no udev joystick.
+        .env("SDL_JOYSTICK_DISABLE_UDEV", "1")
+        .env("SDL_HIDAPI_JOYSTICK_DISABLE_UDEV", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null());
     if let Some(output) = output {

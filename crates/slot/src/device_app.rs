@@ -188,7 +188,6 @@ fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
         }
     };
     let started = Instant::now();
-    let mut y_released = false;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -208,9 +207,8 @@ fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
         let mut exit = false;
         for event in input.poll(now()) {
             match event {
-                RawEvent::Up(Btn::Y) => y_released = true,
                 RawEvent::Down(Btn::Y)
-                    if y_released && started.elapsed() >= Duration::from_millis(300) =>
+                    if started.elapsed() >= Duration::from_millis(300) =>
                 { exit = true; }
                 RawEvent::Down(Btn::B | Btn::Menu | Btn::Power)
                     if started.elapsed() >= Duration::from_millis(300) =>

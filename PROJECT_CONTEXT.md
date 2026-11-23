@@ -279,6 +279,20 @@
 
 ## Test/build/install guardrails
 
+- **2026-11-23 installer regression fix:** User's Docker run compiled successfully
+  and executed 294 library tests: 285 passed, 8 ignored, 1 failed.
+  The failure was `music::tests::ten_second_seek_changes_decoder_position_and_preserves_pause_state`
+  at the synthetic MP3 duration assertion (`time().1.unwrap()`):
+  the generated MPEG frame stream has no Xing/VBR duration header, and
+  dr_mp3 legitimately returns an *unknown* total duration even though
+  the frame data supports seeking. Changed only that test assumption to
+  accept `None` or a plausible reported duration and keep the actual
+  +10/-10 audio seek assertions, pause-state checks, and ring-flush checks.
+  The install stopped at regression-tests exit 101 *before* any SD mutation.
+  New installer must pin the HEAD after these fixes. Remaining tests, ARM64
+  build, and hardware behavior are still pending rerun on user's machine.
+
+
 - **2026-11-23 Artists letters + Music lock (not yet device-built):**
   The Artists root no longer treats D-pad Left as a tab shortcut to
   Albums. D-pad Left/Right (and ShelfLeft/ShelfRight) jump to the

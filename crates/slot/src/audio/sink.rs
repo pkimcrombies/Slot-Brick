@@ -25,4 +25,9 @@ impl std::error::Error for AudioError {}
 pub trait AudioSink: Send {
     fn open(&mut self, sample_rate: u32) -> Result<(), AudioError>;
     fn ring(&self) -> Arc<Ring>;
+
+    /// Release exclusive output ownership for an external video player.
+    /// Non-device backends may leave audio attached; the Brick ALSA sink
+    /// explicitly closes its output thread and PCM handle.
+    fn suspend(&mut self) {}
 }

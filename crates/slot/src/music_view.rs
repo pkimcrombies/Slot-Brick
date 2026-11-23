@@ -1772,6 +1772,24 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
+    fn youtube_png_badge_preserves_red_colour_and_transparency() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&[
+                255, 0, 0, 255, 255, 0, 0, 255,
+                255, 0, 0, 255, 255, 0, 0, 255,
+            ]).unwrap();
+        }
+        let pixels = decode_youtube_icon(&png_bytes).expect("valid logo PNG");
+        assert_eq!(pixels.len(), (VIDEO_BADGE_SIDE * VIDEO_BADGE_SIDE * 4) as usize);
+        assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
+        assert!(decode_youtube_icon(b"not a png").is_none());
+    }
+
+    #[test]
     fn video_badge_detects_only_matching_non_empty_local_companions() {
         let dir = tempfile::tempdir().unwrap();
         let song = dir.path().join("My Song.mp3");

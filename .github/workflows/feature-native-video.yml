@@ -1,0 +1,39 @@
+name: Native Music video verification
+
+on:
+  push:
+    branches:
+      - feature/psp-replaces-ps1
+    paths:
+      - 'crates/slot/**'
+      - 'crates/slot-gfx/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/feature-native-video.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-video-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install project Rust toolchain
+        run: rustup toolchain install 1.96 --profile minimal
+      - name: Refresh lockfile for the new pinned decoder crates
+        run: cargo +1.96 update --workspace
+      - name: Check Slot native video under brick feature flags
+        run: cargo +1.96 check -p slot --no-default-features --features brick
+      - name: Run native-video unit tests
+        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests
+      - name: Keep resolved dependency lockfile
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: slot-native-video-cargo-lock
+          path: Cargo.lock

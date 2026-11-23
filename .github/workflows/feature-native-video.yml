@@ -31,6 +31,18 @@ jobs:
         run: cargo +1.96 check -p slot --no-default-features --features brick
       - name: Run native-video unit tests
         run: cargo +1.96 test -p slot --no-default-features --features sim --lib
+      - name: Generate H264/MP4 test videos locally
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=10' -t 3 -an -pix_fmt yuv420p -c:v libx264 -preset veryfast -profile:v baseline -x264-params 'bframes=0:keyint=10' /tmp/slot-baseline-h264.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=320x180:rate=10' -t 3 -an -pix_fmt yuv420p -c:v libx264 -preset veryfast -profile:v main -x264-params 'bframes=2:keyint=10' /tmp/slot-main-bframes-h264.mp4
+      - name: Decode real Baseline H264 MP4 frames
+        env:
+          SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-baseline-h264.mp4
+        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests::decodes_real_h264_mp4_fixture_with_presentation_timestamps -- --nocapture
+      - name: Decode real Main H264 B-frames
+        env:
+          SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-main-bframes-h264.mp4
+        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests::decodes_real_h264_mp4_fixture_with_presentation_timestamps -- --nocapture
       - name: Build Slot for actual ARM64 Brick target in Docker
         run: sh brick/docker-build.sh
       - name: Keep tested ARM64 executable

@@ -68,14 +68,13 @@
   Albums, Artists, Settings) from any page, including during playback.
   On Now Playing with
   an active song, A pauses/resumes, D-pad Left/Right skip
-  previous/next track, and X cycles repeat. With **no song loaded**, all
-  D-pad directions and A leave the empty Now Playing screen unchanged;
-  L1/R1 alone switch sections, while B intentionally opens Albums root.
-  D-pad Up/Down have no playback action.
-  User-requested
-  seeking has been removed from the player controls; the low-level seek_by(0)
-  remains internally for suspend/resume accuracy. Button hints such as
-  "x repeat" and "x list" are intentionally absent on Music screens.
+  previous/next track, Up/Down seek +10/-10 seconds, and X cycles repeat.
+  Seeking is applied in `Music::update_audio` using the existing playback
+  decoder and Ring to flush old queued samples; seeking while paused does not
+  resume audio, and pending seek input can accumulate before decoder startup.
+  With **no song loaded**, all D-pad directions and A leave the empty Now
+  Playing screen unchanged; L1/R1 alone switch sections, while B opens
+  Albums root. Button hints such as "x repeat" and "x list" remain absent.
   Music::Track now owns its album ID and song index independently of the
   browser location: audio decoding, repeat, metadata, album cover and track
   count all use the playing album even when the user browses another album.
@@ -127,9 +126,9 @@
   are used (full YYYY-MM-DD where available; year-only tags remain supported);
   missing dates sort last and never use filesystem timestamps.
   Playback controls: A pause/resume, Left/Right previous/next song,
-  L1/R1 switch the three Music sections, X changes repeat mode.
-  No seek gestures. B opens the playing album's song list without
-  stopping playback; HOME/Menu is the only exit from Music.
+  Up/Down seek +10/-10 seconds, L1/R1 switch all four Music tabs,
+  and X changes repeat mode. B opens the playing album's song list
+  without stopping playback; HOME/Menu is the only exit from Music.
   **Music sleep/resume + dim (2026-11-23, pending device validation):**
   Physical backlight dimming is optional, applies only while Music is actively
   playing and the settings screen is closed. Previously it halved the
@@ -235,9 +234,12 @@
   include the new sprite variant in its alpha match. The follow-up commit
   adds this exhaustiveness fix without changing layout or shader behavior.
   Hardware and ARM64 compile verification are still pending.
-- Now Playing was redesigned (commit `7515789`): **214px artwork on left**,
-  track/artist/album and position on right, progress/time at bottom. Keep
-  physical playback controls. Device feedback on this redesign is pending.
+- Now Playing was redesigned (commit `7515789`, later revised): **250px artwork
+  on left** (previously 214px), track/artist/album and position on right,
+  progress/timestamps lowered to y=414/432, and the 20px UXWing Repeat icon
+  aligned at y=434 next to the end timestamp. Keep physical playback controls.
+  Only a long Now Playing song title scrolls horizontally; other metadata
+  and shorter titles remain static. Device feedback is pending.
 - Fades are in `crates/slot/src/frontend.rs` (`NavFade`, `PowerFade`);
   sleep handling also uses `device_app.rs`. Boot 440ms, menu 220ms,
   sleep 300ms, wake 360ms, shutdown 210ms. **Brick sleep-fade fix
@@ -275,6 +277,29 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Now Playing controls/layout/marquee (pending validation):**
+  Album art enlarged 214->250 logical pixels, x=24, y=112; the metadata
+  column remains 300+ pixels wide. Progress moves from y=372 to y=414
+  and elapsed/total time to y=432. UXWing Repeat (20px; black for active,
+  grey when off) moves from isolated bottom-right to x=596, y=434,
+  alongside and 12px to the right of the end time's right edge at x=584.
+  Up/Down now seek forward/back 10s, with pending commands applied on
+  the audio thread's regular update and the Ring flushed; paused stays
+  paused. Left/Right continue skipping songs and L1/R1 cycle sections.
+  Long song titles (>available width) now scroll left, pause, scroll
+  right, and repeat in a strictly cropped title-only 26px viewport,
+  with gentle 80ms redraws while visible. Slot UI uses a bounded
+  raster viewport, preserving the existing font/fallback and background.
+  Static/short titles and other tabs incur no animation cost.
+  Regression tests added for time/repeat/art layout, marquee rendering,
+  and real MP3 seek on the audio Ring. Korean font was NOT replaced:
+  existing `Slot/System/Fonts/.SlotHangul.ttf` can be swapped on SD
+  with a different static TTF. Candidate typefaces are Pretendard,
+  Noto Sans KR, Gowun Dodum. Recommend testing one visually and preserving
+  the current file until a choice is confirmed. No changes to game assets,
+  saves, persistent music settings or background playback.
+
 
 - **2026-11-23 Cover Flow warm artwork cache:** Previously the visible
   7 covers (selected +/-3) were also the entire GPU cache, and entering

@@ -48,15 +48,36 @@ were explicitly rejected by the user.
   360p/24 fps or lower resolution if the CPU cannot keep pace;
   do not imply 1080p support without measurements.
 
+## If Y returns to the album artwork
+
+Check `Slot/Logs/slot.log`. The first Brick Pro test reached the native
+decoder and reported `no H.264 video track in MP4`. The installed
+`Slot/System/slot-native` matched the ARM64 CI artifact by SHA-256.
+The companion was a 1080p VP9 video (`vp09`) inside an MP4 container.
+
+Inspect the video stream with `ffprobe` on a computer. Slot expects
+H.264 (`avc1`) in a regular MP4. To convert a VP9 companion for an
+initial 360p/24 fps device test, create a new file on the computer:
+
+```sh
+ffmpeg -n -i original.mp4 -map 0:v:0 -an -sn -dn \
+  -vf 'scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=24,setsar=1' \
+  -c:v libx264 -profile:v baseline -level:v 3.0 -pix_fmt yuv420p \
+  -crf 20 -g 24 -movflags +faststart converted.mp4
+```
+
+Back up the original companion before replacing it. Install the converted
+file beside the song with the same basename. The existing audio file
+provides the playback clock and soundtrack. Conversion runs on the computer.
+
 ## Pre-install verification
 
-1. Compiled and passed the complete Slot host/simulator Rust library tests,
-   including Music Y-toggle and YUV420 conversion, in GitHub Actions run
-   https://github.com/pkimcrombies/Slot-Brick/actions/runs/45115112228.
-2. Built an actual ARM64 Slot binary using the repository's pinned Docker
-   toolchain and confirmed AArch64 ELF with only the normal Slot runtime
-   libraries. A dedicated additional run generates and decodes Baseline and
-   Main/B-frame H.264 MP4 fixtures before packaging.
+1. GitHub Actions run
+   [45116025887](https://github.com/pkimcrombies/Slot-Brick/actions/runs/45116025887)
+   passed the Slot host regressions, including Music Y-toggle, and decoded
+   Baseline and Main/B-frame H.264 MP4 fixtures before packaging.
+2. Built Slot for ARM64 using the repository's Brick toolchain and checked
+   that the AArch64 ELF links only the normal Slot runtime libraries.
 3. Prepared a source-commit-pinned installer with SHA256-verified ARM64
    binary, backup, byte-for-byte rollback, and no firmware/system changes.
 4. Still required on-device: video startup; 30fps playback and MP3 continuity;
@@ -68,8 +89,9 @@ were explicitly rejected by the user.
 The prior external ffplay handoff was removed from the live Music and Brick
 runtime code. Previously installed `video-player` files on the SD card
 remain unused and are **not automatically removed**: keep them untouched
-until a native-video hardware test passes. The installer modifies only the
-`Slot/System/slot` executable after saving a checksum-verified original.
+until a native-video hardware test passes. An executable installer targets
+`Slot/System/slot-native` after saving a checksum-verified original.
+`Slot/System/slot` is the shell wrapper that starts it.
 
 References:
 - https://docs.rs/crate/rust_h264/0.6.1

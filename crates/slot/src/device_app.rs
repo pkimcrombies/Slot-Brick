@@ -144,6 +144,20 @@ fn sim_sleep(input: &mut BrickInput, frontend: &Frontend, sim: &slot::sim::Share
     }
 }
 
+/// Ask ffplay to shut down cleanly so its patched -posfile can record
+/// the last position. Escalate to SIGKILL only if the child does not exit.
+#[cfg(all(feature = "brick", not(feature = "sim")))]
+fn stop_video_child(child: &mut std::process::Child) {
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM); }
+    let deadline = Instant::now() + Duration::from_millis(600);
+    while Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) { return; }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// External ffplay trial: Slot keeps its Music state in memory while the
 /// child owns ALSA and the display. The parent still polls the hardware Y
 /// button, so the child's default Y/aspect mapping cannot trap the user.
@@ -197,8 +211,7 @@ fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
             Ok(None) => {}
             Err(err) => {
                 eprintln!("slot: video: wait failed: {err}");
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_video_child(&mut child);
                 break;
             }
         }
@@ -218,8 +231,7 @@ fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
         }
         if exit {
             eprintln!("slot: video: return button pressed");
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_video_child(&mut child);
             break;
         }
         std::thread::sleep(Duration::from_millis(30));

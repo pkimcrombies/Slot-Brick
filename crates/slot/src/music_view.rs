@@ -101,6 +101,14 @@ const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 40.0;
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
 const PLAYBACK_ICON_FILES: [&str; 2] = ["play.png", "pause.png"];
+
+fn playback_icon_index(status: Status) -> Option<usize> {
+    match status {
+        Status::Playing => Some(0),
+        Status::Paused => Some(1),
+        _ => None,
+    }
+}
 // Seven 3D covers are drawn; four extra on each side are decoded ahead
 // of time. A 15-slot rolling GPU cache costs at most ~3.75 MiB in
 // 256x256 RGBA textures, without keeping an entire music library in RAM.
@@ -407,11 +415,7 @@ impl MusicView {
     /// Load playback images from SD once and reuse GPU textures on every frame.
     fn playback_icon(&mut self, music: &Music, status: Status,
                      compositor: &mut Compositor) -> Option<TexId> {
-        let index = match status {
-            Status::Playing => 0,
-            Status::Paused => 1,
-            _ => return None,
-        };
+        let index = playback_icon_index(status)?;
         if !self.playback_icons_loaded {
             self.playback_icons_loaded = true;
             if let Some(root) = music.icon_root() {
@@ -1556,6 +1560,15 @@ mod album_thumbnail_layout_tests {
         assert_eq!(HUD_LOCK_SIDE, 18);
         let view = MusicView::default();
         assert!(view.hud_lock_icon().is_none());
+    }
+
+    #[test]
+    fn playback_status_selects_play_or_pause_and_retains_diagnostics() {
+        assert_eq!(playback_icon_index(Status::Playing), Some(0));
+        assert_eq!(playback_icon_index(Status::Paused), Some(1));
+        for status in [Status::Loading, Status::Finished, Status::Unreadable, Status::NoAudio] {
+            assert_eq!(playback_icon_index(status), None);
+        }
     }
 
     #[test]

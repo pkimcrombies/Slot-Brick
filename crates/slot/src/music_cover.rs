@@ -86,28 +86,29 @@ impl MusicCover {
         cover
     }
 
-    /// Upload on the render thread, with at most one reader active. A late cover
-    /// belongs to the track that requested it and is ignored after a skip.
+    /// A recycled cache slot must not wait for a slow worker from the
+    /// previous album before requesting the new one. Cancelling is cooperative
+    /// (the current file read may finish), but the receiver is no longer used.
+    fn cancel_stale(&mut self, next: &Path) {
+        if self.track.as_deref() != Some(next) {
+            if let Some(load) = self.loading.take() {
+                load.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Upload on the render thread. A late cover belongs to the track that
+    /// requested it; never show a stale image for a different album.
     pub(crate) fn texture(
         &mut self,
         track: &Path,
         album: &Album,
         compositor: &mut Compositor,
     ) -> Option<(TexId, [u32; 2])> {
-        if let Some(load) = &self.loading {
-            let expected = self.track.as_deref() == Some(track)
-                && !load.cancel.load(Ordering::Relaxed);
-            if !expected {
-                load.cancel.store(true, Ordering::Relaxed);
-            }
-            let received = match load.result.try_recv() {
-                Ok(cover) => cover,
-                Err(mpsc::TryRecvError::Disconnected) => None,
-                Err(mpsc::TryRecvError::Empty) => return None,
-            };
-            self.loading = None;
-            if expected {
-                if let Some(cover) = received {
+        self.cancel_stale(track);
+        if let Some(load) = self.loading.take() {
+            match load.result.try_recv() {
+                Ok(Some(cover)) => {
                     let Cover { rgba, w, h, tint } = cover;
                     if let Some(tex) = self.texture {
                         compositor.update_texture(tex, w, h, &rgba);
@@ -117,8 +118,11 @@ impl MusicCover {
                     self.size = Some([w, h]);
                     self.tint = tint;
                 }
-            } else {
-                self.track = None;
+                Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {}
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.loading = Some(load);
+                    return None;
+                }
             }
         }
         if self.track.as_deref() != Some(track) {
@@ -278,6 +282,23 @@ mod tests {
     use crate::music_library::Library;
     use std::fs;
     use std::time::Duration;
+
+    #[test]
+    fn reused_cover_slot_cancels_stale_decode_without_waiting_for_old_result() {
+        let mut cover = MusicCover::default();
+        let (sender, result) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        cover.track = Some(PathBuf::from("Music/Old/01.mp3"));
+        cover.loading = Some(Load { cancel: cancel.clone(), result });
+        // Keep the sender alive: the old worker has not completed.
+        assert!(!cancel.load(Ordering::Relaxed));
+        cover.cancel_stale(Path::new("Music/New/01.mp3"));
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(cover.loading.is_none(),
+            "new album must be free to start without waiting for the previous worker");
+        assert!(sender.send(None).is_err(),
+            "dropped receiver must discard a late old result");
+    }
 
     #[test]
     fn ready_cover_can_be_borrowed_without_redecoding_or_matching_wrong_album() {

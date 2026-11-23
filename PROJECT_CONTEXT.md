@@ -4,6 +4,38 @@
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
 > Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
 
+## 2026-11-23 Native video installer target correction (IMPORTANT)
+
+- The first native-video ZIP (`Slot-Brick-Native-Video-ARM64-bc2627f-20261123.zip`)
+  contained a **working verified ELF payload**, but the included
+  `Install-Slot-Native-Video.ps1` incorrectly pointed to
+  `F:\\Slot\\System\\slot` (the **text/shell launcher wrapper**) instead of
+  `F:\\Slot\\System\\slot-native` (the actual AArch64 ELF).
+  User's PowerShell output was
+  `INSTALL STOPPED: Invalid ELF magic; refusing to overwrite Slot`.
+  Because this was the initial preflight ELF check, the SD card remained
+  **unchanged by that failed native-video installation**.
+- Corrected **standalone** script
+  `Install-Slot-Native-Video-Correct-Target-v2-20261123.txt`
+  works against the user's **already extracted existing ZIP folder**:
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <renamed.ps1> -Action Install -SdRoot F:\\ -PackageDir <extracted-zip-folder>`.
+  It targets only `Slot/System/slot-native`, confirms the
+  `Slot/System/slot` wrapper is present, hashes it before/after without
+  modification, validates current/new AArch64 ELF headers and
+  SHA256, backs up original `slot-native`, and supports
+  `-Action Revert` via its manifest. It refuses the system drive.
+  The ZIP's binary SHA256 is
+  `f0094a3430fc260005b0f598dc2ad3a0d1c7cc966de544095947c36ba01ce79c`,
+  independently checked after extracting ZIP. No additional 8MB
+  download or Rust rebuild is needed.
+- Static file/path, SHA256, ELF header and exact-source validation passed
+  on the corrected script. **Windows PowerShell installation and device
+  video performance have not yet been tested**. Do not claim otherwise.
+- All future Slot music installers MUST explicitly preserve
+  `Slot/System/slot` shell wrapper, and replace **only**
+  `Slot/System/slot-native` ELF. Earlier full Music installers already
+  correctly used `slot-native`; the native-video ZIP installer regressed.
+
 ## 2026-11-23 Native H264 Music video: implemented and ARM64 verified
 
 - The user requested to stop copying NX Redux `ffplay`/SDL stock-firmware

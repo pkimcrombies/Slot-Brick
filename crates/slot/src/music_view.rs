@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_store::BRIGHTNESS_MAX;
 use slot_ui::{
-    menu_marquee_face, menu_marquee_width, menu_text_face,
+    menu_marquee_whole_face, menu_marquee_width, menu_text_face,
     pixel_aligned_texture, UndoFace, QUICK_PITCH,
     QUICK_VALUE_EDGE, STATUS_MARGIN,
 };
@@ -183,17 +183,27 @@ struct CachedFace {
 #[derive(Default)]
 struct TitleMarquee {
     song: Option<PathBuf>,
+    title: Option<String>,
     started: Option<Instant>,
     overflowing: bool,
+    // Rasterize the entire line once, then crop from these RGBA pixels.
+    // Reuse a single GPU texture for the narrow visible viewport.
+    whole: Option<UndoFace>,
+    viewport: Option<TexId>,
+    last_at: Option<u32>,
+    scale: Option<[f32; 2]>,
 }
 
 impl TitleMarquee {
     /// A small pause at each end, then a smooth left/right pass. Returning
     /// None keeps the original static title path for titles that already fit.
     fn offset(&mut self, path: &Path, title: &str, room: u32, now: Instant) -> Option<f32> {
-        if self.song.as_deref() != Some(path) {
+        if self.song.as_deref() != Some(path) || self.title.as_deref() != Some(title) {
             self.song = Some(path.to_path_buf());
+            self.title = Some(title.to_owned());
             self.started = Some(now);
+            self.whole = None;
+            self.last_at = None;
         }
         let overflow = (menu_marquee_width(title, TITLE_MARQUEE_PX) - room as f32).max(0.0);
         self.overflowing = overflow > 1.0;
@@ -212,10 +222,56 @@ impl TitleMarquee {
         Some((overflow - t * TITLE_MARQUEE_BACKWARD_PX_PER_SEC).max(0.0))
     }
 
+    /// Crop a pre-rendered title at the current offset. On later frames this
+    /// is only a compact row-by-row RGBA copy and one texture update.
+    fn cropped_face(
+        &mut self,
+        title: &str,
+        offset: f32,
+        room: u32,
+        scale: [f32; 2],
+        compositor: &mut Compositor,
+    ) -> Face {
+        if self.whole.is_none() || self.scale != Some(scale) {
+            self.whole = Some(menu_marquee_whole_face(
+                title, TITLE_MARQUEE_PX, scale, MUSIC_SELECTION_INK,
+            ));
+            self.scale = Some(scale);
+            self.last_at = None;
+        }
+        let whole = self.whole.as_ref().expect("rasterized title");
+        let w = (room as f32 * scale[0]).round().max(1.0) as u32;
+        let h = whole.h;
+        let max_at = whole.w.saturating_sub(w);
+        let at = ((offset.max(0.0) * scale[0]).round() as u32).min(max_at);
+        if self.viewport.is_none() || self.last_at != Some(at) {
+            let mut rgba = vec![0u8; (w * h * 4) as usize];
+            let copy = w.min(whole.w.saturating_sub(at)) as usize * 4;
+            for row in 0..h {
+                let src = (row * whole.w + at) as usize * 4;
+                let dst = (row * w) as usize * 4;
+                rgba[dst..dst + copy].copy_from_slice(&whole.rgba[src..src + copy]);
+            }
+            if let Some(texture) = self.viewport {
+                compositor.update_texture(texture, w, h, &rgba);
+            } else {
+                self.viewport = Some(compositor.create_texture(w, h, &rgba));
+            }
+            self.last_at = Some(at);
+        }
+        Face {
+            tex: self.viewport.expect("marquee viewport texture"),
+            size: [room, (TITLE_MARQUEE_PX as f32 * 1.4).ceil() as u32],
+        }
+    }
+
     fn reset(&mut self) {
         self.song = None;
+        self.title = None;
         self.started = None;
         self.overflowing = false;
+        self.whole = None;
+        self.last_at = None;
     }
 }
 
@@ -552,6 +608,14 @@ impl MusicView {
         if music.locked() {
             let _ = self.lock_icon(music, compositor);
         }
+        // Build the viewport before borrowing the text painter. No glyph
+        // rasterization occurs on subsequent frames of the same song.
+        let title_face = title_offset.map(|offset| {
+            let song = music.song(music.track.as_ref().expect("playing title"));
+            self.title_marquee.cropped_face(
+                &song.title, offset, PLAYING_INFO_W, scale, compositor,
+            )
+        });
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -572,7 +636,7 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon, title_offset);
+                p.playing(music, track, cover, repeat_icon, title_face);
             } else {
                 p.empty_now_playing();
             }
@@ -866,7 +930,7 @@ impl Painter<'_> {
     }
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
-               repeat_icon: Option<TexId>, title_offset: Option<f32>) {
+               repeat_icon: Option<TexId>, title_face: Option<Face>) {
         self.music_tabs(0);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
@@ -896,16 +960,7 @@ impl Painter<'_> {
         // Only the title scrolls when wider than its allotted column.
         // The viewport is cropped in RGBA before upload, so Hangul and long
         // Latin text never overpaint the album art or right screen margin.
-        if let Some(offset) = title_offset {
-            let scroll = offset.round();
-            let key = format!(
-                "title-marquee/{}/{}/{}/{:?}/{}", TITLE_MARQUEE_PX,
-                PLAYING_INFO_W, scroll as i32, MUSIC_SELECTION_INK, song.title
-            );
-            let face = self.texture(key, |scale| {
-                menu_marquee_face(&song.title, TITLE_MARQUEE_PX, PLAYING_INFO_W,
-                    scale, MUSIC_SELECTION_INK, scroll)
-            });
+        if let Some(face) = title_face {
             self.place(face, PLAYING_INFO_X, 128.0);
         } else {
             self.text_with_room(
@@ -922,19 +977,23 @@ impl Painter<'_> {
         let (current, total) = music.playing_position().expect("active track");
         let position = format!("{} of {}", current + 1, total);
         self.text_with_room(
-            &position, 16, [PLAYING_INFO_X, 277.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
+            &position, 16, [PLAYING_INFO_X, 326.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
         );
+        // No redundant 'playing' label under the track counter. Preserve
+        // useful paused/loading/error messages when playback needs attention.
         let state = match track.status {
-            Status::Loading => "loading",
-            Status::Playing => "playing",
-            Status::Paused => "paused",
-            Status::Finished => "finished",
-            Status::Unreadable => "could not play this track",
-            Status::NoAudio => "audio output unavailable",
+            Status::Playing => None,
+            Status::Loading => Some("loading"),
+            Status::Paused => Some("paused"),
+            Status::Finished => Some("finished"),
+            Status::Unreadable => Some("could not play this track"),
+            Status::NoAudio => Some("audio output unavailable"),
         };
-        self.text_with_room(
-            state, 15, [PLAYING_INFO_X, 306.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
-        );
+        if let Some(state) = state {
+            self.text_with_room(
+                state, 15, [PLAYING_INFO_X, 358.0], MUSIC_MUTED_INK, PLAYING_INFO_W,
+            );
+        }
 
         // Progress tracks the decoder position. Up/Down seek ten seconds;
         // Left/Right change tracks; shoulders switch Music sections.
@@ -1008,7 +1067,7 @@ impl Painter<'_> {
 
     fn music_tabs(&mut self, selected: usize) {
         let mut x = EDGE;
-        for (index, title) in ["now playing", "albums", "artists", "settings"].iter().enumerate() {
+        for (index, title) in ["now", "albums", "artists", "settings"].iter().enumerate() {
             let ink = if index == selected { MUSIC_TEXT_INK } else { MUSIC_MUTED_INK };
             let width = self.text_ink(title, 23, [x, TITLE_TOP], ink);
             x += width as f32 + 20.0;

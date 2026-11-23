@@ -19,7 +19,7 @@ pub mod fonts;
 pub mod frames;
 pub mod frontend;
 mod music;
-pub use music::VideoHandoff;
+mod music_video;
 mod music_cover;
 mod music_library;
 mod music_m4a;

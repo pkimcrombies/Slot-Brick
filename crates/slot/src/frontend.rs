@@ -1034,7 +1034,9 @@ impl Frontend {
         if matches!(self.session.app().phase(), Phase::Music) {
             if let Some(music) = self.session.app().music() {
                 let draws = self.music_view.render(music, compositor, self.quick_menu_scale);
+                let lock_icon = self.music_view.hud_lock_icon();
                 self.session.app_mut().set_music_draws(draws);
+                self.session.app_mut().set_music_lock_face(lock_icon);
             }
         }
         sync_named_texts(self.session.app_mut(), compositor, &mut self.overlay_tex, self.quick_menu_scale);

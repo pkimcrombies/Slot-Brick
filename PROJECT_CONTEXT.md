@@ -128,7 +128,8 @@
   Playback controls: A pause/resume, Left/Right previous/next song,
   Up/Down seek +10/-10 seconds, L1/R1 switch all four Music tabs,
   and X changes repeat mode. B opens the playing album's song list
-  without stopping playback; HOME/Menu is the only exit from Music.
+  without stopping playback; HOME/Menu exits Music **unless locked**.
+  The hardware volume-key chord acts as Music Lock instead of mute.
   **Music sleep/resume + dim (2026-11-23, pending device validation):**
   Physical backlight dimming is optional, applies only while Music is actively
   playing and the settings screen is closed. Previously it halved the
@@ -277,6 +278,38 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Artists letters + Music lock (not yet device-built):**
+  The Artists root no longer treats D-pad Left as a tab shortcut to
+  Albums. D-pad Left/Right (and ShelfLeft/ShelfRight) jump to the
+  previous/next *available* artist initial; empty letters are skipped,
+  both ends wrap, and a one-letter/empty artist library preserves its
+  position. Up/Down still move one artist, A opens an artist, and L1/R1
+  exclusively switch Music tabs. Albums list no longer uses D-pad Right
+  for implicit tab navigation. Existing coverflow D-pad behaviour
+  (Left/Right covers, Up/Down album letter jumps) stays unchanged.
+
+  **VolUp + VolDown within 200ms** previously emitted MuteToggle and
+  changed global mute/volume. Now in Music only it toggles a temporary
+  hold lock without muting. The existing pre-chord volume-step snapshot
+  is restored on toggle so a lock gesture does not alter loudness.
+  Lock applies across all Music tabs and ignores navigation, repeat,
+  seeking, playback, volume, brightness and HOME; the same chord
+  unlocks it. A small unlabelled padlock appears in the Music tab row.
+  While locked, the existing Music dim brightness level (default 1)
+  is applied immediately, regardless of pause or configured dim
+  timeout; ignored keypresses never restore brightness. While locked,
+  Music will not automatically idle-suspend, even when paused.
+  Physical PowerTap/PowerHold/Lid transitions remain available for
+  sleep/shutdown safety; existing power-menu navigation is preserved.
+  On unlock, the prior normal/idle brightness policy resumes. Lock is
+  in-memory only: never persisted or carried to a new Music launch,
+  but survives kernel sleep/wake within the retained Music session.
+  Global mute functionality outside Music remains unchanged.
+  Regression tests check letter jumps, empty/same-letter sets,
+  volume restoration, ignored locked controls, HOME, sleep/wake,
+  and immediate dim policy. Rust/ARM64 and hardware checks pending.
+
 
 - **2026-11-23 Now Playing controls/layout/marquee (pending validation):**
   Album art enlarged 214->250 logical pixels, x=24, y=112; the metadata

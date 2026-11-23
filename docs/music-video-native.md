@@ -1,6 +1,7 @@
 # Native Music video player — replacement for NX Redux ffplay
 
-Status: design / implementation pending, **no hardware playback validated**.
+Status: **implemented and compiled for native ARM64**, host tests passed;
+**no Brick Pro hardware playback validated**.
 Target: TrimUI Brick Pro running Slot OS; branch `feature/psp-replaces-ps1`.
 Rationale: native Slot OS image intentionally lacks NX Redux stock firmware's
 legacy SDL, udev, OpenSSL 1.1, console helpers, etc. SDL hints did not prevent
@@ -23,7 +24,7 @@ were explicitly rejected by the user.
   stop/reset on Y switch, suspend, track change, and seek. Error states
   must return to art without crashing the Music player.
 
-## Proposed codec path
+## Implemented codec path
 
 - `mp4` Rust crate: demux non-fragmented local MP4 and obtain H.264
   samples, codec configuration (avcC), presentation timestamps and
@@ -40,35 +41,35 @@ were explicitly rejected by the user.
 - YUV420 frame -> RGB(A) conversion off the render thread. Upload to a
   **single reused GPU texture** with
   `Compositor::update_texture(tex, w, h, rgba)`; render using
-  `Draw::Texture` with aspect-fit to the output screen. Existing Slot
+  `Draw::Tex` with aspect-fit to the output screen. Existing Slot
   renderer supplies GLES2 and avoids any extra display backend.
 - Start with a *known-good 480p/30 fps H.264 sidecar* and measure
   CPU, frame drops, elapsed time drift and memory. Fall back to
   360p/24 fps or lower resolution if the CPU cannot keep pace;
   do not imply 1080p support without measurements.
 
-## Required pre-install verification
+## Pre-install verification
 
-1. Host unit tests for MP4 avcC sample parsing, SPS/PPS setup, presentation
-   timestamps, frame ordering, keyframe seeks, cancellation and malformed
-   media. Create a tiny reproducible sample fixture.
-2. Build native Rust unit tests and the Brick Pro ARM64 target in the
-   repo's pinned Docker environment. Check ELF dynamic libraries;
-   this path should need none beyond the current Slot runtime.
-3. Produce an installer pinned to an exact reviewed commit with full
-   backup and restoration and keep stock Slot OS media intact.
-4. Device test video startup; 30fps playback and MP3 continuity;
+1. Compiled and passed the complete Slot host/simulator Rust library tests,
+   including Music Y-toggle and YUV420 conversion, in GitHub Actions run
+   https://github.com/pkimcrombies/Slot-Brick/actions/runs/45115112228.
+2. Built an actual ARM64 Slot binary using the repository's pinned Docker
+   toolchain and confirmed AArch64 ELF with only the normal Slot runtime
+   libraries. A dedicated additional run generates and decodes Baseline and
+   Main/B-frame H.264 MP4 fixtures before packaging.
+3. Prepared a source-commit-pinned installer with SHA256-verified ARM64
+   binary, backup, byte-for-byte rollback, and no firmware/system changes.
+4. Still required on-device: video startup; 30fps playback and MP3 continuity;
    Y-to-artwork; seeking; track change; physical lock; suspend/wake;
    quit/error fallback; CPU/thermals. Report results honestly.
 
 ## Current branch housekeeping
 
-The prior experimental external handoff lives in
-`music.rs`, `session.rs`, `device_app.rs`, `frontend.rs`, and the
-`video-player` subdirectory of the SD card. Remove/replace it only in
-the **next tested build**; avoid changing the user's current functioning
-Music player between tests. A separate, reversible cleanup may remove
-unneeded ffplay files after the native video path is proven.
+The prior external ffplay handoff was removed from the live Music and Brick
+runtime code. Previously installed `video-player` files on the SD card
+remain unused and are **not automatically removed**: keep them untouched
+until a native-video hardware test passes. The installer modifies only the
+`Slot/System/slot` executable after saving a checksum-verified original.
 
 References:
 - https://docs.rs/crate/rust_h264/0.6.1

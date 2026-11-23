@@ -645,6 +645,35 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Last bounded SDL udev bypass experiment
+
+- User requested one final low-risk attempt, then a native Slot OS video
+  player path if unsuccessful. Latest player log: after bz2 and OpenSSL
+  libraries loaded, SDL_Init reported missing runtime `libudev.so.0`.
+- Upstream SDL2 supports `SDL_JOYSTICK_DISABLE_UDEV=1` and
+  `SDL_HIDAPI_JOYSTICK_DISABLE_UDEV=1` to bypass optional
+  udev-based controller enumeration; Slot parent already polls Y/B/Menu
+  for returning from external player. **This is a hypothesis**, not proof
+  it will bypass all udev use in the bundled SDL.
+- For existing installed binary, standalone installer
+  `Install-Slot-Brick-Video-SDL-Udev-Last-Try-20261123.txt`
+  replaces only `Slot/System/video-player/ffplay` with a tiny LF-only
+  `/bin/sh` wrapper that exports both hints and `exec`s the original
+  ARM64 ELF saved as `ffplay.native`. The installer validates AArch64
+  ELF architecture and SHA256 of preserved binary; avoids Docker,
+  downloads, rebuilds, SD formatting/firmware operations and new
+  library patches. Supports `-Action Revert` to restore the exact
+  ELF player, byte-for-byte. `sh -n` and dummy executable passthrough
+  checks passed offline; **hardware SDL/audio/video not yet tested**.
+- Corresponding environment settings are also set in the source
+  `device_app.rs` for future native Slot builds, so a future full
+  installer need not use a wrapper.
+- On failure after one on-device run, *do not* continue layering
+  NX Redux dependencies. Restore original player and investigate
+  a minimal ffplay alternative built against the Slot OS runtime
+  with SDL joystick/udev disabled at build time, or video decoding
+  into Slot's existing EGL renderer with no external SDL process.
+
 ## 2026-11-23 ffplay SDL initialization failure — stop piecemeal dependency patches
 
 - User has now installed both `libbz2.so.1.0` and private OpenSSL

@@ -118,6 +118,24 @@ pub fn draw_status_bar(
     scale: [f32; 2],
     out: &mut Vec<Draw>,
 ) {
+    draw_status_bar_with_lock(
+        battery, percent, bolt, wifi, update, None, clock, scale, out,
+    );
+}
+
+/// Same status HUD, with an optional Music-only lock glyph directly to the
+/// left of battery. Wi-Fi/update shift left as needed without overlap.
+pub fn draw_status_bar_with_lock(
+    battery: Option<Battery>,
+    percent: Printed,
+    bolt: Option<TexId>,
+    wifi: Option<(TexId, u32, u32)>,
+    update: Option<(TexId, u32, u32)>,
+    lock: Option<(TexId, u32, u32)>,
+    clock: Printed,
+    scale: [f32; 2],
+    out: &mut Vec<Draw>,
+) {
     // Clock uses a dedicated black word texture; don't recolour global HUD text.
     draw_status_text(STATUS_MARGIN, STATUS_TOP_Y, clock, scale, out);
 
@@ -135,6 +153,12 @@ pub fn draw_status_bar(
     );
 
     let mut icon_right = battery_right - status_gauge_width(battery, percent);
+    if let Some((tex, w, h)) = lock {
+        let (w, h) = (w as f32, h as f32);
+        icon_right -= WIFI_GAP + w;
+        let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
+        out.push(pixel_aligned_texture(tex, [icon_right, y], [w, h], scale, 1.0));
+    }
     if let Some((tex, w, h)) = wifi {
         let (w, h) = (w as f32, h as f32);
         icon_right -= WIFI_GAP + w;
@@ -166,6 +190,23 @@ mod status_position_tests {
         assert!(matches!(out.first(), Some(Draw::Rect { x, y, w, h, .. })
             if *x == STATUS_MARGIN && *y == STATUS_TOP_Y
             && *w == 50.0 && *h == HINT_H as f32));
+    }
+
+    #[test]
+    fn music_lock_sits_immediately_left_of_battery_without_moving_the_battery() {
+        let battery = Battery { percent: 91, charge: slot_power::Charge::Discharging };
+        let percent = Printed { face: None, w: 39 };
+        let icon = TexId::from_raw(45);
+        let mut out = Vec::new();
+        draw_status_bar_with_lock(
+            Some(battery), percent, None, None, None, Some((icon, 18, 18)),
+            Printed::default(), [1.0, 1.0], &mut out,
+        );
+        let gauge_left = OUT_W as f32 - STATUS_MARGIN
+            - status_gauge_width(Some(battery), percent);
+        assert!(out.iter().any(|draw| matches!(draw, Draw::Tex { tex, x, y, .. }
+            if *tex == icon && *x + 18.0 + WIFI_GAP <= gauge_left + 0.01
+                && *y > STATUS_TOP_Y)));
     }
 
     #[test]

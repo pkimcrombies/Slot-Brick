@@ -84,6 +84,32 @@ impl Session {
         ring.mix_over(&samples, sfx.kind() as u8);
     }
 
+    /// Handoff to a child process, not a second music decoder. The live
+    /// track and its paused/resume state remain in this Session.
+    pub fn take_video_handoff(&mut self) -> Option<crate::music::VideoHandoff> {
+        if !matches!(self.app.phase(), Phase::Music) { return None; }
+        let ring = self.sink.ring();
+        let handoff = self.app.music_mut()?.take_video_handoff(&ring)?;
+        self.sink.suspend();
+        self.music_active = false;
+        Some(handoff)
+    }
+
+    pub fn complete_video_handoff(&mut self, handoff: &crate::music::VideoHandoff,
+                                   at_seconds: Option<u32>) {
+        let ring = self.sink.ring();
+        let rate = ring.sample_rate();
+        if rate > 0 {
+            if let Err(e) = self.sink.open(rate) {
+                eprintln!("slot: video: audio reopen failed: {e}");
+            }
+        }
+        if let Some(music) = self.app.music_mut() {
+            music.finish_video_handoff(handoff, at_seconds);
+        }
+        self.music_active = false;
+    }
+
     pub fn audio_queued(&self) -> usize {
         self.sink.ring().queued_frames()
     }

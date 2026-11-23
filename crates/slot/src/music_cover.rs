@@ -231,21 +231,21 @@ fn read_cached_thumbnail(path: &Path) -> Option<Cover> {
     Some(Cover { rgba, w, h, tint })
 }
 
-fn write_cached_thumbnail(path: &Path, cover: &Cover) -> std::io::Result<()> {
-    let Some(parent) = path.parent() else { return Ok(()); };
-    std::fs::create_dir_all(parent)?;
+fn write_cached_thumbnail(path: &Path, cover: &Cover) -> Option<()> {
+    let parent = path.parent()?;
+    std::fs::create_dir_all(parent).ok()?;
     let mut encoded = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut encoded, cover.w, cover.h);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(&cover.rgba)?;
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&cover.rgba).ok()?;
     }
     let temp = path.with_extension("part");
-    std::fs::write(&temp, encoded)?;
-    std::fs::rename(&temp, path)?;
-    Ok(())
+    std::fs::write(&temp, encoded).ok()?;
+    std::fs::rename(&temp, path).ok()?;
+    Some(())
 }
 
 fn embedded_cover(path: &Path) -> Option<Cover> {
@@ -378,6 +378,31 @@ mod tests {
     use crate::music_library::Library;
     use std::fs;
     use std::time::Duration;
+
+    #[test]
+    fn small_cover_can_round_trip_to_disk_and_invalid_cache_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("thumb64-v1/abcd.png");
+        let cover = Cover {
+            rgba: vec![23, 45, 67, 255].repeat(64 * 64),
+            w: LIST_THUMBNAIL, h: LIST_THUMBNAIL,
+            tint: Some([23, 45, 67]),
+        };
+        assert_eq!(write_cached_thumbnail(&path, &cover), Some(()));
+        let loaded = read_cached_thumbnail(&path).unwrap();
+        assert_eq!((loaded.w, loaded.h), (64, 64));
+        assert_eq!(loaded.rgba, cover.rgba);
+        std::fs::write(&path, b"broken").unwrap();
+        assert!(read_cached_thumbnail(&path).is_none());
+    }
+
+    #[test]
+    fn small_list_covers_use_separate_cache_mode_from_full_artwork() {
+        assert!(MusicCover::list_thumbnail().small);
+        assert!(!MusicCover::default().small);
+        assert_eq!(THUMBNAIL, 256);
+        assert_eq!(LIST_THUMBNAIL, 64);
+    }
 
     #[test]
     fn reused_cover_slot_cancels_stale_decode_without_waiting_for_old_result() {

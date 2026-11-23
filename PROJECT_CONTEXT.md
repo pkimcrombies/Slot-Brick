@@ -4,6 +4,51 @@
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
 > Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
 
+## 2026-11-23 Native H264 Music video: implemented and ARM64 verified
+
+- The user requested to stop copying NX Redux `ffplay`/SDL stock-firmware
+  dependencies after repeated `libbz2`, OpenSSL 1.1 and `libudev.so.0`
+  failures. **Do not reintroduce the external player.**
+- Native implementation: `crates/slot/src/music_video.rs` uses pinned
+  `mp4=0.14.0` and `rust_h264=0.6.1` Rust crates. Background worker,
+  bounded two-frame queue, MP4 H264 demux, SPS/PPS, B-frame PTS ordering,
+  nearest sync sample seeking, 8-bit YUV420 to RGBA, fullscreen Slot GLES
+  compositor drawing. Existing MP3/M4A decoder continues as sole audio.
+  Y toggles video/art on Now Playing; B, section change, song change,
+  sleep and physical lock preserve original Music behaviour. No ALSA/EGL
+  handoff, SDL, FFmpeg, external libraries or OS changes.
+- Confirmed on GitHub Actions native-video verification run
+  **45116025887**, source revision
+  `bc2627f99b0700adefa5ec6237bc37a3df7c0fbc`:
+  309 Slot Rust unit tests; real generated 320x180 H.264 Constrained
+  Baseline and Main/B-frame MP4 decode + PTS tests; and ARM64
+  `sh brick/docker-build.sh` all passed. Downloaded compiled
+  `slot` ELF AArch64, SHA256
+  `f0094a3430fc260005b0f598dc2ad3a0d1c7cc966de544095947c36ba01ce79c`.
+  Existing `Cargo.lock` was updated in branch by CI.
+- Safe device test ZIP delivered:
+  `Slot-Brick-Native-Video-ARM64-bc2627f-20261123.zip`;
+  contains `Install-Slot-Native-Video.ps1` (valid inside ZIP per
+  PowerShell-as-text skill), pinned ARM64 `slot-native-video` ELF,
+  README and known-good matching 12s 640x360 H.264/MP3 media test pair.
+  The installer only replaces `F:\\Slot\\System\\slot` after verifying
+  an original backup under `Slot/System/native-video-backups`, writes
+  a manifest for `-Action Revert`, and hash-checks installed binary.
+  ZIP may be packaged as `.txt` with identical ZIP bytes for downloads
+  blocked by the client, then rename to `.zip` prior to extraction.
+  Do not touch boot image, games, saves, existing music, older ffplay
+  trial libraries, or firmware.
+- **Device playback is not yet proven**: user must test Y toggle,
+  audio continuity, seek/suspend, real H264 performance and report
+  logs. Codec limited to local non-fragmented 8-bit H264 MP4 up to
+  854x480 and 1GiB. `Slot/Logs/slot.log` logs
+  `slot: native video:` decoding errors (no new video-player.log).
+  Revert installer if rendering or speed is problematic.
+- Docs: `docs/music-video-native.md`. A prior CI failure was
+  due to missing ffmpeg binary on GitHub runner; a separate unrelated
+  flaky cart-art prefetch test was permitted one retry. Final run
+  passed all mandatory checks.
+
 ## Where we work
 
 - Repository: `pkimcrombies/Slot-Brick` (Rust Slot OS port).

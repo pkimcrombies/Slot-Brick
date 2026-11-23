@@ -67,7 +67,7 @@ pub use label_grid::{
 };
 pub use draw::{pixel_aligned_texture, Draw, TexId, OUT_H, OUT_W};
 pub use menu_style::{
-    menu_hint_face_scaled, menu_marquee_face, menu_marquee_width, menu_text_face,
+    menu_hint_face_scaled, menu_marquee_face, menu_marquee_whole_face, menu_marquee_width, menu_text_face,
     MENU_BACKGROUND, MENU_MUTED_INK, MENU_SELECTION_INK,
     MENU_TEXT_INK, SHELF_PINK,
 };

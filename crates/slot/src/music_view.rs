@@ -1246,15 +1246,17 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn repeat_badge_fits_bottom_right_without_covering_progress_or_time() {
-        assert!(REPEAT_BADGE_Y > PLAYING_PROGRESS_Y + 45.0,
-            "repeat must sit below the progress bar and timestamps");
+    fn repeat_badge_aligns_with_end_time_without_covering_timeline() {
+        assert!(PLAYING_PROGRESS_Y + 10.0 < PLAYING_TIME_Y,
+            "timestamps and repeat must sit beneath the progress bar");
         assert_eq!(REPEAT_ICON_SIDE, 20);
-        assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE,
-            "repeat icon must stay inside right margin");
-        assert_eq!(REPEAT_BADGE_Y, 440.0, "repeat icon sits below the time labels");
-        assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - REPEAT_ICON_BOTTOM_MARGIN,
-            "repeat icon must stay inside bottom margin");
+        assert_eq!(REPEAT_BADGE_Y, PLAYING_TIME_Y + 2.0,
+            "repeat and end timestamp share a centered 24px text row");
+        assert!(PLAYING_END_TIME_RIGHT + 8.0 <= REPEAT_BADGE_X,
+            "repeat must have a visible gap beside the end timestamp");
+        assert!(REPEAT_BADGE_X + REPEAT_ICON_SIDE as f32 <= OUT_W as f32 - EDGE);
+        assert!(REPEAT_BADGE_Y + REPEAT_ICON_SIDE as f32 <= OUT_H as f32 - EDGE,
+            "repeat and times respect the same bottom screen margin");
         assert_eq!(REPEAT_ICON_FILES, ["repeat-off.png", "repeat-all.png", "repeat-one.png"]);
     }
 
@@ -1266,19 +1268,50 @@ mod album_thumbnail_layout_tests {
         assert_eq!(ALBUM_TRACK_TITLE_X, EDGE + 44.0);
         assert_eq!(REPEAT_BADGE_X, 596.0,
             "repeat icon aligns with the opposite HUD edge");
-        assert_eq!(REPEAT_BADGE_Y, 440.0,
-            "20px icon retains a 20px bottom margin");
+        assert_eq!(REPEAT_BADGE_Y, 434.0,
+            "Repeat moves up next to the lowered end time");
     }
 
     #[test]
     fn now_playing_art_and_text_are_separate_at_640_by_480() {
         assert_eq!((OUT_W, OUT_H), (640, 480));
-        assert!(PLAYING_COVER_SIDE > 200.0);
+        assert_eq!(PLAYING_COVER_SIDE, 250.0,
+            "artwork expands to use the space above the lowered timeline");
         assert!(PLAYING_COVER_X + PLAYING_COVER_SIDE + 12.0 < PLAYING_INFO_X);
         assert!(PLAYING_INFO_W >= 270);
         assert!(PLAYING_INFO_X + PLAYING_INFO_W as f32 <= OUT_W as f32 - EDGE);
         assert!(PLAYING_COVER_Y + PLAYING_COVER_SIDE < PLAYING_PROGRESS_Y);
         assert!(PLAYING_PROGRESS_Y + 48.0 < OUT_H as f32);
+    }
+
+    #[test]
+    fn title_marquee_pauses_scrolls_and_returns_only_for_long_titles() {
+        let now = Instant::now();
+        let title = "매우 긴 제목 — this is a long album title that cannot fit the display column";
+        let path = Path::new("Music/Artist/01.mp3");
+        let mut marquee = TitleMarquee::default();
+        assert_eq!(marquee.offset(path, "Short", PLAYING_INFO_W, now), None);
+        assert!(!marquee.overflowing);
+        assert_eq!(marquee.offset(path, title, PLAYING_INFO_W, now), Some(0.0));
+        assert!(marquee.overflowing);
+        assert_eq!(marquee.offset(path, title, PLAYING_INFO_W,
+            now + Duration::from_millis(700)), Some(0.0));
+        let scroll = marquee.offset(path, title, PLAYING_INFO_W,
+            now + Duration::from_secs(2)).unwrap();
+        assert!(scroll > 0.0, "title must eventually move to reveal hidden glyphs");
+        marquee.reset();
+        assert!(!marquee.overflowing);
+        assert_eq!(marquee.song, None);
+    }
+
+    #[test]
+    fn progress_and_times_use_bottom_space_without_overlapping_album_art() {
+        assert!(PLAYING_COVER_Y + PLAYING_COVER_SIDE + 32.0 < PLAYING_PROGRESS_Y);
+        assert!(PLAYING_PROGRESS_Y > 400.0);
+        assert!(PLAYING_TIME_Y + 24.0 <= OUT_H as f32 - EDGE);
+        assert!(PLAYING_INFO_X > PLAYING_COVER_X + PLAYING_COVER_SIDE);
+        assert!(PLAYING_END_TIME_RIGHT < REPEAT_BADGE_X);
+        assert!(PLAYING_INFO_W >= 300, "long-title viewport must remain useful");
     }
 
     #[test]

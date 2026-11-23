@@ -1,6 +1,8 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music list: 9 compact rows instead of 6, slim rose scroll indicator, 64px thumbnails with persistent SD PNG cache and up to 21 warm slots; limit concurrent decodes to 3 and refresh pending artwork, keeping Cover Flow/Now Playing at full resolution.
+- Music Lock: use the official UXWing lock PNG at 18px immediately to the left of the battery in the shared top HUD; remove the homemade tab-row padlock.
 - Fix Brick Pro physical mute switch in Music: GPIO 243 now directly locks/unlocks the player and no longer forces Music's output volume to zero; retains global mute outside Music and handles pre-engaged switch and sleep/wake.
 - Fix regression-test fixture: synthetic long MP3 streams can have unknown reported duration; the +/-10-second seek test now validates the actual decode/seek result without requiring a duration header.
 - Music Artists root: Left/Right now jump previous/next populated alphabet group (wrap), never change tabs; L1/R1 remain the tab controls.

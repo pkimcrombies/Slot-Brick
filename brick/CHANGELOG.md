@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music Lock artwork: switch to the UXWing Padlock (locked) and Unlocked (brief unlock confirmation) icons, preserving the centred 18px placement and existing 600ms icon swap; installer replaces the offline PNGs.
 - Music Lock: on unlock, briefly show the matching 18px UXWing Lock Open Line icon in the same top-centre HUD position, then hide it; no fade or movement, relocking immediately restores the closed icon.
 - Fix album-list thumbnail compile error E0308: rename the MP3 ID3 tag-length local to `tag_bytes` so it does not shadow the `u32` thumbnail dimension.
 - Music Now Playing: rename the first tab to `now`, lower X-of-Y counter and hide the redundant `playing` status; make long-title marquee smoother with one pre-rendered title, reusable narrow texture and ~30fps updates.

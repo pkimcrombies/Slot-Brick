@@ -224,6 +224,13 @@ impl MusicView {
         self.flow_motion.active(Instant::now())
     }
 
+    /// Poll pending cover workers promptly while the carousel is on screen.
+    /// When all requests settle, return to the usual low-CPU idle redraw gate.
+    pub(crate) fn cover_flow_loading(&self) -> bool {
+        self.flow_motion.position.is_some()
+            && self.flow_covers.iter().any(MusicCover::is_loading)
+    }
+
     /// Both browsing modes retain their own small GPU caches. Returning the
     /// original texture ID avoids decoding/uploading an image that is already
     /// on screen. The caches themselves own and reuse those texture slots.

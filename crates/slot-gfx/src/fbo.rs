@@ -140,6 +140,11 @@ impl Compositor {
         self.sprites.update_texture(id, w, h, rgba);
     }
 
+    /// Write a complete RGBA frame into an existing texture of the same size.
+    pub fn write_texture_pixels(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
+        self.sprites.write_texture_pixels(id, w, h, rgba);
+    }
+
     pub fn set_blue_light(&mut self, step: u8) {
         self.gain = blue_light_gain(step);
     }

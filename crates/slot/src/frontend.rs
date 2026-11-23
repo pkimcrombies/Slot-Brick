@@ -927,9 +927,9 @@ impl Frontend {
     pub fn needs_render(&self)->bool {
         if self.power_fade.wake_active(Instant::now())
             || self.power_fade.shutdown_active(Instant::now()) {return true}
-        // Native H.264 frames are presented at <=30fps and never wait for
-        // Music's normal 1-second idle refresh gate.
-        if self.native_video.active() && self.last_render.elapsed() >= Duration::from_millis(33) {
+        // Let the normal display pacer schedule each video refresh.
+        // Skipping this path would put the device loop into its 25 ms idle sleep.
+        if self.native_video.active() {
             return true;
         }
         // Cover Flow's 260ms animation must not rely on the idle 1s refresh;
@@ -1108,9 +1108,7 @@ impl Frontend {
         );
         self.draws.clear();
         self.session.app().draw(&mut self.draws);
-        // Video replaces the visible Music UI only while the same MP3/M4A
-        // keeps feeding ALSA. The existing EGL compositor owns the texture;
-        // no external process is launched and Y returns to artwork instantly.
+        // A visible video frame takes over the Music canvas.
         if matches!(self.session.app().phase(), Phase::Music) {
             self.native_video.overlay(compositor, &mut self.draws);
         }

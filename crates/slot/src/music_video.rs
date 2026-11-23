@@ -20,7 +20,8 @@ use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 
 const MAX_PIXELS: usize = 854 * 480;
 const MAX_FILE_BYTES: u64 = 1 << 30;
-const FRAME_AHEAD: f64 = 0.045;
+// Allow half a 60 Hz refresh of lead time when choosing the next frame.
+const FRAME_AHEAD: f64 = 0.008;
 
 pub(crate) struct VideoFrame {
     pub(crate) pts: f64,
@@ -43,8 +44,8 @@ pub(crate) struct MusicVideo {
     cancel: Option<Arc<AtomicBool>>,
     receiver: Option<Receiver<Message>>,
     next: Option<VideoFrame>,
-    texture: Option<TexId>,
-    shown: Option<(u32, u32)>,
+    texture: Option<(TexId, (u32, u32))>,
+    shown: bool,
     clock: f64,
     failed: bool,
     finished: bool,
@@ -68,7 +69,7 @@ impl MusicVideo {
         self.receiver = None;
         self.next = None;
         self.path = None;
-        self.shown = None;
+        self.shown = false;
         self.failed = false;
         self.finished = false;
     }
@@ -125,60 +126,69 @@ impl MusicVideo {
         }
     }
 
-    /// Upload frames on the graphics thread using their presentation times.
+    fn take_due_frame(&mut self) -> Option<VideoFrame> {
+        let receiver = self.receiver.as_ref()?;
+        let mut latest = None;
+        for _ in 0..6 {
+            let message = if let Some(pending) = self.next.take() {
+                Message::Frame(pending)
+            } else {
+                match receiver.try_recv() {
+                    Ok(message) => message,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => Message::Finished,
+                }
+            };
+            match message {
+                Message::Frame(frame) => {
+                    if frame.pts > self.clock + FRAME_AHEAD {
+                        self.next = Some(frame);
+                        break;
+                    }
+                    latest = Some(frame);
+                }
+                Message::Error(err) => {
+                    eprintln!("slot: native video: {err}");
+                    self.failed = true;
+                    self.shown = false;
+                    return None;
+                }
+                Message::Finished => {
+                    self.finished = true;
+                    break;
+                }
+            }
+        }
+        latest.filter(|frame| self.finished || frame.pts + 0.20 >= self.clock)
+    }
+
+    /// Upload at most one frame for each presentation. Sized textures are
+    /// reused across frames and across videos with the same dimensions.
     pub(crate) fn overlay(&mut self, compositor: &mut Compositor, draws: &mut Vec<Draw>) {
         if self.path.is_none() || self.failed {
             return;
         }
-        if let Some(receiver) = &self.receiver {
-            for _ in 0..6 {
-                let message = if let Some(pending) = self.next.take() {
-                    Some(Message::Frame(pending))
-                } else {
-                    match receiver.try_recv() {
-                        Ok(message) => Some(message),
-                        Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => Some(Message::Finished),
-                    }
-                };
-                let Some(message) = message else { break; };
-                match message {
-                    Message::Frame(frame) => {
-                        if frame.pts > self.clock + FRAME_AHEAD {
-                            self.next = Some(frame);
-                            break;
-                        }
-                        // If decoding fell behind, skip stale uploads and
-                        // drain the queue towards the current video clock.
-                        if frame.pts + 0.20 < self.clock && !self.finished {
-                            continue;
-                        }
-                        if let Some(tex) = self.texture {
-                            compositor.update_texture(tex, frame.width, frame.height, &frame.rgba);
-                        } else {
-                            self.texture = Some(compositor.create_texture(
-                                frame.width, frame.height, &frame.rgba,
-                            ));
-                        }
-                        self.shown = Some((frame.width, frame.height));
-                    }
-                    Message::Error(err) => {
-                        eprintln!("slot: native video: {err}");
-                        self.failed = true;
-                        self.shown = None;
-                        break;
-                    }
-                    Message::Finished => {
-                        self.finished = true;
-                        break;
-                    }
+        if let Some(frame) = self.take_due_frame() {
+            let (w, h) = (frame.width, frame.height);
+            let tex = match self.texture {
+                Some((tex, size)) if size == (w, h) => {
+                    compositor.write_texture_pixels(tex, w, h, &frame.rgba);
+                    tex
                 }
-            }
+                Some((tex, _)) => {
+                    compositor.update_texture(tex, w, h, &frame.rgba);
+                    tex
+                }
+                None => compositor.create_texture(w, h, &frame.rgba),
+            };
+            self.texture = Some((tex, (w, h)));
+            self.shown = true;
         }
-        if let (Some(tex), Some((w, h))) = (self.texture, self.shown) {
+        if let Some((tex, (w, h))) = self.texture.filter(|_| self.shown) {
             let factor = (OUT_W as f32 / w as f32).min(OUT_H as f32 / h as f32);
             let width = w as f32 * factor;
             let height = h as f32 * factor;
+            draws.clear();
             draws.push(Draw::Rect {
                 x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
                 colour: [0.0, 0.0, 0.0, 1.0],
@@ -343,6 +353,26 @@ fn yuv420_to_rgba(frame: &Frame) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presentation_keeps_only_the_newest_due_frame() {
+        let (sender, receiver) = mpsc::channel();
+        let mut video = MusicVideo {
+            receiver: Some(receiver),
+            clock: 1.08,
+            ..MusicVideo::default()
+        };
+        for pts in [1.0, 1.0417, 1.0833, 1.125] {
+            sender.send(Message::Frame(VideoFrame {
+                pts, width: 1, height: 1, rgba: vec![0; 4],
+            })).unwrap();
+        }
+
+        assert_eq!(video.take_due_frame().unwrap().pts, 1.0833);
+        assert!(video.take_due_frame().is_none(), "keep future frames for their slot");
+        video.clock = 1.12;
+        assert_eq!(video.take_due_frame().unwrap().pts, 1.125);
+    }
 
     #[test]
     fn frame_yuv420_black_and_white_are_opaque() {

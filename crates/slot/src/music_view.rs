@@ -1551,6 +1551,15 @@ mod album_thumbnail_layout_tests {
         let scroll = marquee.offset(path, title, PLAYING_INFO_W,
             now + Duration::from_secs(2)).unwrap();
         assert!(scroll > 0.0, "title must eventually move to reveal hidden glyphs");
+        // Keep the cached raster and metrics when only time advances.
+        marquee.whole = Some(UndoFace { rgba: vec![0; 16], w: 2, h: 2 });
+        let before = marquee.overflow;
+        let later = now + Duration::from_secs(3);
+        marquee.offset(path, title, PLAYING_INFO_W, later);
+        assert!(marquee.whole.is_some(), "same song must not be rasterized again");
+        assert_eq!(marquee.overflow, before);
+        marquee.offset(path, "Another long English track title to change the identity", PLAYING_INFO_W, later);
+        assert!(marquee.whole.is_none(), "new title invalidates old glyph pixels");
         marquee.reset();
         assert!(!marquee.overflowing);
         assert_eq!(marquee.song, None);

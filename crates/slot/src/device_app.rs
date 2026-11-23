@@ -1,11 +1,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-#[cfg(all(feature = "brick", not(feature = "sim")))]
-use std::process::{Command, Stdio};
-#[cfg(all(feature = "brick", not(feature = "sim")))]
-use slot_input::{Btn, InputSource, RawEvent};
-
 use slot::frontend::Frontend;
 #[cfg(all(feature = "brick", not(feature = "sim")))]
 use slot::input::BrickInput;
@@ -144,108 +139,6 @@ fn sim_sleep(input: &mut BrickInput, frontend: &Frontend, sim: &slot::sim::Share
     }
 }
 
-/// Ask ffplay to shut down cleanly so its patched -posfile can record
-/// the last position. Escalate to SIGKILL only if the child does not exit.
-#[cfg(all(feature = "brick", not(feature = "sim")))]
-fn stop_video_child(child: &mut std::process::Child) {
-    unsafe { libc::kill(child.id() as i32, libc::SIGTERM); }
-    let deadline = Instant::now() + Duration::from_millis(600);
-    while Instant::now() < deadline {
-        if matches!(child.try_wait(), Ok(Some(_))) { return; }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// External ffplay trial: Slot keeps its Music state in memory while the
-/// child owns ALSA and the display. The parent still polls the hardware Y
-/// button, so the child's default Y/aspect mapping cannot trap the user.
-#[cfg(all(feature = "brick", not(feature = "sim")))]
-fn play_external_video(root: &std::path::Path, input: &mut BrickInput,
-                       now: impl Fn() -> u64,
-                       handoff: &slot::VideoHandoff) -> Option<u32> {
-    let player = root.join("System/video-player/ffplay");
-    if !player.is_file() {
-        eprintln!("slot: video: ffplay missing: {}", player.display());
-        return None;
-    }
-    let position_file = std::path::Path::new("/tmp/slot-video-position");
-    let _ = std::fs::remove_file(position_file);
-    let log = root.join("Logs/video-player.log");
-    let output = std::fs::OpenOptions::new()
-        .create(true).append(true).open(&log).ok();
-    let lib = root.join("System/video-player/lib");
-    let old_lib = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
-    let library_path = format!("{}:{}", lib.display(), old_lib.to_string_lossy());
-    eprintln!("slot: video: starting {} at {}s", handoff.path.display(), handoff.at_seconds);
-    let mut command = Command::new(&player);
-    command.args([
-        "-fs", "-autoexit", "-loglevel", "error", "-framedrop", "-fast", "-sn",
-        "-ss",
-    ]);
-    command.arg(handoff.at_seconds.to_string());
-    command.arg("-posfile").arg(position_file);
-    command.arg("-i").arg(&handoff.path);
-    command.env("LD_LIBRARY_PATH", library_path)
-        .env("SDL_NOMOUSE", "1")
-        // SDL2's joystick enumeration uses libudev.so.0 on NX Redux's
-        // stock-firmware runtime, which Slot OS does not ship. The parent
-        // Slot process polls Y for return, so ffplay needs no udev joystick.
-        .env("SDL_JOYSTICK_DISABLE_UDEV", "1")
-        .env("SDL_HIDAPI_JOYSTICK_DISABLE_UDEV", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null());
-    if let Some(output) = output {
-        command.stderr(Stdio::from(output));
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            eprintln!("slot: video: could not launch ffplay: {err}");
-            return None;
-        }
-    };
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                eprintln!("slot: video: player exited: {status}");
-                break;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                eprintln!("slot: video: wait failed: {err}");
-                stop_video_child(&mut child);
-                break;
-            }
-        }
-        // Ignore the first Y press that entered the player. Permit the
-        // second Y, B or Menu to exit, even if ffplay itself ignores them.
-        let mut exit = false;
-        for event in input.poll(now()) {
-            match event {
-                RawEvent::Down(Btn::Y)
-                    if started.elapsed() >= Duration::from_millis(300) =>
-                { exit = true; }
-                RawEvent::Down(Btn::B | Btn::Menu | Btn::Power)
-                    if started.elapsed() >= Duration::from_millis(300) =>
-                { exit = true; }
-                _ => {}
-            }
-        }
-        if exit {
-            eprintln!("slot: video: return button pressed");
-            stop_video_child(&mut child);
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    std::fs::read_to_string(position_file)
-        .ok().and_then(|contents| contents.split_whitespace().next()
-            .and_then(|n| n.parse::<u32>().ok()))
-}
-
 pub fn run() {
     boot_time("started");
     let root = std::env::var_os("SLOT_ROOT")
@@ -360,33 +253,6 @@ pub fn run() {
         }
         let began = Instant::now();
         frontend.advance(&mut input);
-        #[cfg(all(feature = "brick", not(feature = "sim")))]
-        if let Some(video) = frontend.take_external_video() {
-            // Do not let a missing/unsupported binary take the display.
-            let player = root.join("System/video-player/ffplay");
-            let mut ending = None;
-            if player.is_file() {
-                cpu.mode(slot::brick_power::Mode::Boost, frontend.audio_underruns());
-                match surface.release_current() {
-                    Ok(()) => {
-                        ending = play_external_video(&root, &mut input, || frontend.now(), &video);
-                        if let Err(err) = surface.make_current() {
-                            eprintln!("slot: video: EGL restoration failed: {err}");
-                            // Slot OS supervisor will restart the original
-                            // application. Never continue drawing a lost EGL.
-                            cpu.restore();
-                            std::process::exit(66);
-                        }
-                    }
-                    Err(err) => eprintln!("slot: video: EGL release failed: {err}"),
-                }
-            } else {
-                eprintln!("slot: video: no external player at {}", player.display());
-            }
-            frontend.return_from_external_video(&video, ending);
-            pacer = Pacer::new();
-            continue;
-        }
         #[cfg(feature = "brick")]
         if input.exit_requested() {
             cpu.restore();

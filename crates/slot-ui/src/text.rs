@@ -220,6 +220,46 @@ fn block_height(font: &Font, px: f32, lines: usize) -> f32 {
     }
 }
 
+/// Paint one full-length line into a *clipped* viewport. Unlike menu_line,
+/// this deliberately never truncates or shrinks the text. The glyphs outside
+/// the viewport are not rasterized, which keeps the 10fps marquee inexpensive
+/// even for long Korean/Latin metadata.
+pub fn draw_scrolling_line(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    label: &str,
+    px: f32,
+    tracking: f32,
+    left: f32,
+    ink: [u8; 3],
+) {
+    let Some(font) = label_font() else { return };
+    let Some(vm) = font.horizontal_line_metrics(px) else { return };
+    let baseline = (dst_h as f32 - vm.new_line_size) * 0.5 + vm.ascent;
+    let mut coverage = vec![0u8; (dst_w * dst_h) as usize];
+    let mut x = left;
+    for ch in label.chars() {
+        let face = font_for(font, ch);
+        let metrics = face.metrics(ch, px);
+        let gx = (x + metrics.xmin as f32).round() as i32;
+        if gx < dst_w as i32 && gx + metrics.width as i32 > 0 {
+            let (m, cov) = face.rasterize(ch, px);
+            stamp(
+                &mut coverage, dst_w, dst_h, gx,
+                (baseline - (m.height as f32 + m.ymin as f32)).round() as i32,
+                &cov, m.width as u32, m.height as u32,
+            );
+        }
+        x += metrics.advance_width + tracking;
+    }
+    for (i, alpha) in coverage.into_iter().enumerate() {
+        if alpha > 0 {
+            blend(&mut dst[i * 4..i * 4 + 4], alpha as u32, ink);
+        }
+    }
+}
+
 pub fn line_width(font: &Font, line: &str, px: f32, tracking: f32) -> f32 {
     let mut w = 0.0;
     let mut n = 0;

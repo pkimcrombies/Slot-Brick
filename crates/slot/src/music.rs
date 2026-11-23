@@ -351,6 +351,8 @@ pub(crate) struct Music {
     pub(crate) track: Option<Track>,
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
+    /// Session-only hold switch (VolUp + VolDown chord); never persisted.
+    locked: bool,
     discard_audio: bool,
     /// Cover Flow is the default root album browser. X toggles the former list.
     cover_flow: bool,
@@ -385,6 +387,7 @@ impl Music {
             }],
             track: None,
             now_playing_view: false,
+            locked: false,
             discard_audio: false,
             cover_flow: true,
             settings: MusicSettings::default(),
@@ -442,6 +445,13 @@ impl Music {
         requested.min(self.settings.max_volume)
     }
     pub(crate) fn music_settings_open(&self) -> bool { self.settings_view }
+    pub(crate) fn locked(&self) -> bool { self.locked }
+
+    /// Only the Music mute chord toggles the hold switch; locking never
+    /// pauses, seeks, mutes or changes the playback position.
+    pub(crate) fn toggle_lock(&mut self) {
+        self.locked = !self.locked;
+    }
     pub(crate) fn settings_cursor(&self) -> usize { self.settings_row }
     pub(crate) fn settings_max_volume(&self) -> u8 { self.settings.max_volume }
     pub(crate) fn settings_album_view(&self) -> &'static str {
@@ -567,6 +577,29 @@ impl Music {
         }
         let current_album = self.album_order[self.cursor().min(self.album_order.len() - 1)];
         let current = slot_store::initial(&self.library.albums[current_album].title);
+        let letters: Vec<char> = starts.keys().copied().collect();
+        let position = letters.iter().position(|&letter| letter == current).unwrap_or(0);
+        let next = if forward {
+            (position + 1) % letters.len()
+        } else {
+            (position + letters.len() - 1) % letters.len()
+        };
+        self.select_row(starts[&letters[next]]);
+    }
+
+    /// When browsing the Artists root, D-pad Left/Right jumps between
+    /// available starting letters. Keep the artist sort/album membership as
+    /// scanned, and preserve the cursor within the Artists tab.
+    fn jump_artist_letter(&mut self, forward: bool) {
+        if !self.is_root() || !self.viewing_artists() { return; }
+        let mut starts = std::collections::BTreeMap::<char, usize>::new();
+        for (row, artist) in self.library.artists.iter().enumerate() {
+            starts.entry(slot_store::initial(&artist.name)).or_insert(row);
+        }
+        if starts.len() < 2 { return; }
+        let current = slot_store::initial(&self.library.artists[
+            self.cursor().min(self.library.artists.len() - 1)
+        ].name);
         let letters: Vec<char> = starts.keys().copied().collect();
         let position = letters.iter().position(|&letter| letter == current).unwrap_or(0);
         let next = if forward {
@@ -857,15 +890,12 @@ impl Music {
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
-            // Keep the old D-pad behaviour in list mode: Left from Artists
-            // returns to Albums and Right from Albums opens Artists.
-            // Only L1/R1 cycle the four top-level Music sections.
-            Action::GbaDown(Btn::Left) if self.is_root() && self.viewing_artists() => {
-                self.browse[0] = Location { page: Page::Albums, cursor: 0 };
-            }
-            Action::GbaDown(Btn::Right) if self.is_root() && !self.viewing_artists() => {
-                self.browse[0] = Location { page: Page::Artists, cursor: 0 };
-            }
+            // In Artists the D-pad skips alphabet groups, never Music tabs.
+            // L1/R1 exclusively change tabs, even in Albums list mode.
+            Action::GbaDown(Btn::Left) | Action::ShelfLeft
+                if self.is_root() && self.viewing_artists() => self.jump_artist_letter(false),
+            Action::GbaDown(Btn::Right) | Action::ShelfRight
+                if self.is_root() && self.viewing_artists() => self.jump_artist_letter(true),
             Action::GbaDown(Btn::A) if self.row_count() > 0 => match self.location().page {
                 Page::Album(_) => self.start(self.cursor()),
                 Page::Artists => self.open_page(Page::Artist(self.cursor())),
@@ -1321,6 +1351,75 @@ mod tests {
         music.open_page(Page::Album(0));
         assert!(music.album_for_row(0).is_none());
     }
+    #[test]
+    fn artists_root_left_right_jump_available_initials_not_albums_tab() {
+        use crate::music_library::Artist;
+        let names = ["#mix", "Amber", "Ari", "Byron", "Dora", "Zane"];
+        let mut music = Music::with_library(Library {
+            albums: vec![],
+            artists: names.iter().map(|name| Artist {
+                name: (*name).into(), albums: vec![],
+            }).collect(),
+        });
+        music.browse[0].page = Page::Artists;
+        assert_eq!(music.label(), "artists");
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.row(music.cursor()).0, "Amber");
+        music.input(Action::GbaDown(Btn::Down)); // Within A, not a tab switch
+        assert_eq!(music.row(music.cursor()).0, "Ari");
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.row(music.cursor()).0, "Byron");
+        music.input(Action::ShelfRight);
+        assert_eq!(music.row(music.cursor()).0, "Dora",
+            "alphabet navigation must skip letters without artists");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.row(music.cursor()).0, "Byron");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.row(music.cursor()).0, "Amber");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.row(music.cursor()).0, "#mix");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.row(music.cursor()).0, "Zane",
+            "previous wraps to the last available group");
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.row(music.cursor()).0, "#mix",
+            "next wraps to the first available group");
+        assert_eq!(music.label(), "artists", "left/right cannot change Music tab");
+        music.input(Action::GbaDown(Btn::L1));
+        assert_eq!(music.label(), "albums", "L1 still controls tabs");
+    }
+
+    #[test]
+    fn artists_alphabet_jumps_ignore_empty_and_one_letter_sets() {
+        use crate::music_library::Artist;
+        let mut empty = Music::with_library(Library::default());
+        empty.browse[0].page = Page::Artists;
+        empty.input(Action::GbaDown(Btn::Right));
+        assert_eq!(empty.cursor(), 0);
+        let mut one = Music::with_library(Library {
+            albums: vec![],
+            artists: ["Amber", "Ari"].iter().map(|name| Artist {
+                name: (*name).into(), albums: vec![],
+            }).collect(),
+        });
+        one.browse[0].page = Page::Artists;
+        one.select_row(1);
+        one.input(Action::GbaDown(Btn::Left));
+        one.input(Action::GbaDown(Btn::Right));
+        assert_eq!(one.cursor(), 1, "single-initial artists must not reset cursor");
+    }
+
+    #[test]
+    fn session_lock_is_not_a_saved_music_setting_or_a_pause_action() {
+        let mut music = Music::with_library(Library::default());
+        assert!(!music.locked());
+        music.toggle_lock();
+        assert!(music.locked());
+        assert!(!music.playing());
+        music.toggle_lock();
+        assert!(!music.locked());
+    }
+
     #[test]
     fn cover_flow_up_down_jumps_available_letters_and_wraps() {
         let make_album = |title: &str| Album {

@@ -285,7 +285,11 @@
   and the album-keyed worker results are only uploaded on the render thread.
   A slot can immediately cancel/drop a stale in-flight request and start
   decoding its new album instead of waiting for the previous worker to
-  complete. New regression tests cover prefetch range edges, unique
+  complete. While the carousel has pending artwork, the frontend polls
+  about every 100ms rather than waiting for its normal 1-second idle
+  redraw, so ready covers are presented without another button press.
+  Once loading settles, no extra frames are requested. New regression
+  tests cover prefetch range edges, unique
   modulo slot ownership, and cooperative cancellation. Estimated peak
   cached GPU RGBA memory is ~3.75 MiB for 15x256x256 textures (previous
   7 slots ~1.75 MiB), plus decoder buffers. No persistent on-disk artwork

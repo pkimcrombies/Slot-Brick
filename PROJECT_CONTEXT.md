@@ -37,7 +37,17 @@
 - For each build-worthy change, provide the existing **one-command PowerShell
   installer** workflow: exact Git commit, regression tests, ARM64 build, backup,
   replace and SHA-256 verification. Distribute standalone PowerShell as `.txt`
-  for renaming to `.ps1`. Never silently overwrite a working installation.
+  for renaming to `.ps1`. **Every time an installer is delivered, the
+  supplied PowerShell command MUST include the `.txt` -> `.ps1` rename
+  and the execution in the same copy/pasteable command block**. Never require
+  the user to rename it manually or give only a bare `.ps1` execution line.
+  For example (replace the filename with the actual delivered file):
+  ```powershell
+  $name = 'Install-Slot-Brick-Example'
+  Rename-Item -LiteralPath "$HOME\Downloads\$name.txt" -NewName "$name.ps1" -ErrorAction Stop
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HOME\Downloads\$name.ps1"
+  ```
+  Never silently overwrite a working installation.
 - Latest code changes on this branch (as of 2026-11-22): `3dfb0d4`
   sleep fade, `f055987` power test expectations, `1e45f95` classic song
   list, `e9b77ac` Cover Flow labels/counter removal, `d66b63c` reused

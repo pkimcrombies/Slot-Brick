@@ -1774,6 +1774,21 @@ mod power_render_tests {
         Frontend::boot(Box::new(slot_power::SimPlatform::at(dir.into())))
     }
     #[test]
+    fn locked_music_dims_immediately_and_unlock_restores_idle_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::root::ensure(dir.path());
+        let mut music = crate::music::Music::open(dir.path());
+        assert_eq!(music_dim_target(&music, Duration::ZERO), None);
+        music.toggle_lock();
+        assert_eq!(music_dim_target(&music, Duration::ZERO), Some(1),
+            "locked Music dims immediately, regardless of playback/idle state");
+        assert_eq!(music_dim_target(&music, Duration::from_secs(3600)), Some(1));
+        music.toggle_lock();
+        assert_eq!(music_dim_target(&music, Duration::ZERO), None,
+            "unlock restores normal brightness unless the idle policy applies");
+    }
+
+    #[test]
     fn idle_shelf_dozes_after_limit_only() {
         let dir=tempfile::tempdir().unwrap();let mut f=booted(dir.path());
         assert!(matches!(f.app().phase(),Phase::Shelf));

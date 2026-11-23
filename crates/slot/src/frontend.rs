@@ -1228,7 +1228,7 @@ impl Frontend {
         let was_doze = matches!(self.session.app().phase(), Phase::Doze { .. });
         if self.native_video.ended() {
             if let Some(music) = self.session.app_mut().music_mut() {
-                music.close_video();
+                music.exit_video(self.native_video.completed());
             }
         }
         self.session.feed(events, now);

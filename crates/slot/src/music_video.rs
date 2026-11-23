@@ -12,6 +12,7 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender, TryRecvError},
     Arc,
 };
+use std::time::{Duration, Instant};
 
 use mp4::{MediaType, Mp4Reader};
 use rust_h264::decoder::{ChromaFormat, Frame, OrderedDecoder};
@@ -36,6 +37,14 @@ enum Message {
     Finished,
 }
 
+#[derive(Default)]
+struct PresentationStats {
+    shown: u32,
+    late: u32,
+    superseded: u32,
+    max_delay: f64,
+}
+
 /// An instance is owned by Frontend and outlives any individual Music track.
 /// No worker ever owns the audio ring or graphics context.
 #[derive(Default)]
@@ -49,6 +58,7 @@ pub(crate) struct MusicVideo {
     clock: f64,
     failed: bool,
     finished: bool,
+    stats: PresentationStats,
 }
 
 impl MusicVideo {
@@ -60,7 +70,18 @@ impl MusicVideo {
         self.failed || self.finished
     }
 
+    pub(crate) fn completed(&self) -> bool {
+        self.finished && !self.failed
+    }
+
     pub(crate) fn stop(&mut self) {
+        let stats = std::mem::take(&mut self.stats);
+        if stats.shown > 0 || stats.late > 0 {
+            eprintln!(
+                "slot: native video presentation: {} displayed, {} too late, {} superseded, worst delay {:.1} ms",
+                stats.shown, stats.late, stats.superseded, stats.max_delay * 1000.0,
+            );
+        }
         if let Some(cancel) = self.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -145,7 +166,14 @@ impl MusicVideo {
                         self.next = Some(frame);
                         break;
                     }
-                    latest = Some(frame);
+                    self.stats.max_delay = self.stats.max_delay.max(self.clock - frame.pts);
+                    if frame.pts + 0.20 < self.clock {
+                        self.stats.late += 1;
+                        continue;
+                    }
+                    if latest.replace(frame).is_some() {
+                        self.stats.superseded += 1;
+                    }
                 }
                 Message::Error(err) => {
                     eprintln!("slot: native video: {err}");
@@ -159,7 +187,7 @@ impl MusicVideo {
                 }
             }
         }
-        latest.filter(|frame| self.finished || frame.pts + 0.20 >= self.clock)
+        latest
     }
 
     /// Upload at most one frame for each presentation. Sized textures are
@@ -183,6 +211,7 @@ impl MusicVideo {
             };
             self.texture = Some((tex, (w, h)));
             self.shown = true;
+            self.stats.shown += 1;
         }
         if let Some((tex, (w, h))) = self.texture.filter(|_| self.shown) {
             let factor = (OUT_W as f32 / w as f32).min(OUT_H as f32 / h as f32);
@@ -233,6 +262,56 @@ fn seek_sync_sample(
     }
 }
 
+fn open_mp4(path: &Path) -> Result<Mp4Reader<BufReader<File>>, String> {
+    let file = File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    if size == 0 || size > MAX_FILE_BYTES {
+        return Err("video file is empty or exceeds 1 GiB".into());
+    }
+    let mp4 = Mp4Reader::read_header(BufReader::new(file), size)
+        .map_err(|e| format!("MP4 header: {e}"))?;
+    if mp4.is_fragmented() {
+        return Err("fragmented MP4 is not yet supported".into());
+    }
+    Ok(mp4)
+}
+
+fn video_track(mp4: &Mp4Reader<BufReader<File>>) -> Result<&mp4::Mp4Track, String> {
+    mp4.tracks().values()
+        .filter(|track| matches!(track.media_type(), Ok(MediaType::H264)))
+        .min_by_key(|track| track.track_id())
+        .ok_or_else(|| "no H.264 video track in MP4".into())
+}
+
+pub(crate) fn duration(path: &Path) -> Option<f64> {
+    let mp4 = open_mp4(path).ok()?;
+    let track = video_track(&mp4).ok()?;
+    let ticks = track.trak.mdia.mdhd.duration;
+    (ticks > 0 && track.timescale() > 0).then(|| ticks as f64 / f64::from(track.timescale()))
+}
+
+#[derive(Default)]
+struct DecodeStats {
+    samples: u32,
+    frames: u32,
+    read: Duration,
+    decode: Duration,
+    colour: Duration,
+}
+
+impl Drop for DecodeStats {
+    fn drop(&mut self) {
+        if self.frames == 0 {
+            return;
+        }
+        let ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0 / f64::from(self.frames);
+        eprintln!(
+            "slot: native video worker: {} samples, {} frames, average {:.1} ms read + {:.1} ms decode + {:.1} ms colour per frame",
+            self.samples, self.frames, ms(self.read), ms(self.decode), ms(self.colour),
+        );
+    }
+}
+
 /// Decode bounded local MP4/H.264 access units, carrying true MP4 PTS values
 /// through picture reordering. All MP4 data stays on disk except one packet.
 fn decode_file(
@@ -241,20 +320,9 @@ fn decode_file(
     sender: &SyncSender<Message>,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let file = File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let size = file.metadata().map_err(|e| e.to_string())?.len();
-    if size == 0 || size > MAX_FILE_BYTES {
-        return Err("video file is empty or exceeds 1 GiB".into());
-    }
-    let mut mp4 = Mp4Reader::read_header(BufReader::new(file), size)
-        .map_err(|e| format!("MP4 header: {e}"))?;
-    if mp4.is_fragmented() {
-        return Err("fragmented MP4 is not yet supported".into());
-    }
-    let (track_id, track) = mp4.tracks().iter()
-        .find(|(_, track)| matches!(track.media_type(), Ok(MediaType::H264)))
-        .ok_or("no H.264 video track in MP4")?;
-    let track_id = *track_id;
+    let mut mp4 = open_mp4(path)?;
+    let track = video_track(&mp4)?;
+    let track_id = track.track_id();
     let count = track.sample_count();
     let timescale = track.timescale();
     let width = usize::from(track.width());
@@ -287,33 +355,42 @@ fn decode_file(
         decoder.decode_nal_with_meta(&nal, 0.0)
             .map_err(|e| format!("codec configuration: {e:?}"))?;
     }
+    let mut stats = DecodeStats::default();
     for sample_id in first..=count {
         if cancel.load(Ordering::Relaxed) { return Ok(()); }
+        let started = Instant::now();
         let sample = mp4.read_sample(track_id, sample_id)
             .map_err(|e| format!("sample {sample_id}: {e}"))?
             .ok_or_else(|| format!("missing sample {sample_id}"))?;
+        stats.samples += 1;
+        stats.read += started.elapsed();
         let pts_ticks = i128::from(sample.start_time) + i128::from(sample.rendering_offset);
         let pts = pts_ticks.max(0) as f64 / f64::from(timescale);
         for nal in parse_avcc(&sample.bytes, length_size) {
             if cancel.load(Ordering::Relaxed) { return Ok(()); }
+            let started = Instant::now();
             let frames = decoder.decode_nal_with_meta(&nal, pts)
                 .map_err(|e| format!("decode sample {sample_id}: {e:?}"))?;
+            stats.decode += started.elapsed();
             for (frame, frame_pts) in frames {
-                send_frame(frame, frame_pts, at, sender)?;
+                send_frame(frame, frame_pts, at, sender, &mut stats)?;
             }
         }
     }
     for (frame, frame_pts) in decoder.flush_with_meta() {
         if cancel.load(Ordering::Relaxed) { return Ok(()); }
-        send_frame(frame, frame_pts, at, sender)?;
+        send_frame(frame, frame_pts, at, sender, &mut stats)?;
     }
     Ok(())
 }
 
 fn send_frame(frame: Frame, pts: f64, begin: f64,
-              sender: &SyncSender<Message>) -> Result<(), String> {
+              sender: &SyncSender<Message>, stats: &mut DecodeStats) -> Result<(), String> {
     if pts + 0.08 < begin { return Ok(()); }
+    let started = Instant::now();
     let rgba = yuv420_to_rgba(&frame)?;
+    stats.frames += 1;
+    stats.colour += started.elapsed();
     sender.send(Message::Frame(VideoFrame {
         pts, width: frame.width, height: frame.height, rgba,
     })).map_err(|_| "viewer closed".to_string())
@@ -334,17 +411,26 @@ fn yuv420_to_rgba(frame: &Frame) -> Result<Vec<u8>, String> {
         return Err("decoder returned a truncated YUV frame".into());
     }
     let mut rgba = vec![255u8; pixels * 4];
-    for y in 0..h {
-        for x in 0..w {
-            let luma = frame.y[y * w + x] as i32 - 16;
-            let chroma = (y / 2) * cw + x / 2;
-            let u = frame.u[chroma] as i32 - 128;
-            let v = frame.v[chroma] as i32 - 128;
-            let c = 298 * luma.max(0);
-            let offset = (y * w + x) * 4;
-            rgba[offset] = ((c + 409 * v + 128) >> 8).clamp(0, 255) as u8;
-            rgba[offset + 1] = ((c - 100 * u - 208 * v + 128) >> 8).clamp(0, 255) as u8;
-            rgba[offset + 2] = ((c + 516 * u + 128) >> 8).clamp(0, 255) as u8;
+    for (row, (luma, output)) in frame.y[..pixels].chunks_exact(w)
+        .zip(rgba.chunks_exact_mut(w * 4)).enumerate()
+    {
+        let chroma = (row / 2) * cw..(row / 2 + 1) * cw;
+        let chroma_pairs = frame.u[chroma.clone()].iter().zip(&frame.v[chroma]);
+        for ((&u, &v), (luma_pair, output_pair)) in chroma_pairs
+            .zip(luma.chunks(2).zip(output.chunks_mut(8)))
+        {
+            // Horizontal neighbours share chroma in YUV420.
+            let u = i32::from(u) - 128;
+            let v = i32::from(v) - 128;
+            let red = 409 * v + 128;
+            let green = -100 * u - 208 * v + 128;
+            let blue = 516 * u + 128;
+            for (&y, pixel) in luma_pair.iter().zip(output_pair.chunks_exact_mut(4)) {
+                let brightness = 298 * (i32::from(y) - 16).max(0);
+                pixel[0] = ((brightness + red) >> 8).clamp(0, 255) as u8;
+                pixel[1] = ((brightness + green) >> 8).clamp(0, 255) as u8;
+                pixel[2] = ((brightness + blue) >> 8).clamp(0, 255) as u8;
+            }
         }
     }
     Ok(rgba)
@@ -353,6 +439,24 @@ fn yuv420_to_rgba(frame: &Frame) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn odd_sized_yuv420_uses_the_correct_chroma_for_every_pixel() {
+        let frame = Frame {
+            width: 3, height: 3,
+            y: vec![16, 64, 128, 235, 81, 145, 22, 150, 210],
+            u: vec![90, 240, 128, 54],
+            v: vec![240, 16, 128, 200],
+            pic_order_cnt: 0,
+            chroma_format: ChromaFormat::Yuv420,
+            bit_depth: 8,
+        };
+        assert_eq!(yuv420_to_rgba(&frame).unwrap(), [
+            179, 0, 0, 255, 235, 0, 0, 255, 0, 178, 255, 255,
+            255, 179, 178, 255, 255, 0, 0, 255, 0, 197, 255, 255,
+            7, 7, 7, 255, 156, 156, 156, 255, 255, 196, 77, 255,
+        ]);
+    }
 
     #[test]
     fn presentation_keeps_only_the_newest_due_frame() {

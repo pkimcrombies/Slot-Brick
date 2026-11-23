@@ -11,10 +11,11 @@ were explicitly rejected by the user.
 ## Minimal acceptable experience
 
 - Same-stem `Music/Artist/Song.mp3` + `Song.mp4` detection already exists.
-- Now Playing starts with the song and album art. Y pauses the song and
-  opens the companion video from the beginning, using the MP4's soundtrack.
-  Y again, video end, or a decode error returns to the song at its former
-  position. The physical hold switch still blocks Y.
+- Now Playing starts with the song and album art. Y switches to the MP4
+  and its soundtrack. Switching with Y carries the current percentage
+  across when both durations are known. Without a duration, the video
+  starts at zero and returning resumes the parked song. A decode error
+  preserves the song position. The physical hold switch still blocks Y.
 - A pauses the current media. Up/Down seek within the current media. Track
   changes return to album artwork. Silent videos use their own elapsed
   time. Both modes use Slot's existing audio output.
@@ -70,6 +71,11 @@ ffmpeg -n -i original.mp4 -map 0:v:0 -map '0:a:0?' -sn -dn \
 Back up the original companion before replacing it. Install the converted
 file beside the song with the same basename. Keep the MP4's soundtrack
 when converting. Conversion runs on the computer.
+
+For choppy playback, play a representative section and press Y to close
+the video. In `Slot/Logs/slot.log`, the worker reports the average time
+spent reading, decoding and converting pixels. The presentation summary
+counts displayed frames and frames dropped when they arrived too late.
 
 ## Pre-install verification
 

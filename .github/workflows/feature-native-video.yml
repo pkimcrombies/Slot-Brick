@@ -42,10 +42,10 @@ jobs:
         env:
           SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-baseline-h264.mp4
         run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests::decodes_real_h264_mp4_fixture_with_presentation_timestamps -- --nocapture
-      - name: Play AAC soundtrack from MP4
+      - name: Test AAC soundtrack and percentage switching
         env:
           SLOT_NATIVE_VIDEO_SOUNDTRACK_FIXTURE: /tmp/slot-baseline-h264.mp4
-        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::native_video_plays_its_embedded_soundtrack_from_the_start
+        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::native_video_
       - name: Decode real Main H264 B-frames
         env:
           SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-main-bframes-h264.mp4

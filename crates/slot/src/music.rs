@@ -205,7 +205,9 @@ struct VideoPlayback {
     path: PathBuf,
     audio: Option<Playback>,
     audio_ending: bool,
+    duration: Option<f64>,
     position: f64,
+    parked_song_frame: Option<u64>,
     paused: bool,
     pending_seek_seconds: i32,
     restart_decoder: bool,
@@ -218,11 +220,42 @@ impl VideoPlayback {
             path,
             audio: None,
             audio_ending: false,
+            duration: None,
             position: 0.0,
+            parked_song_frame: None,
             paused: false,
             pending_seek_seconds: 0,
             restart_decoder: true,
             last_update: None,
+        }
+    }
+
+    fn start(&mut self, song: Option<&Playback>, ring: &Ring) {
+        self.duration = crate::music_video::duration(&self.path);
+        self.parked_song_frame = song.map(|song| song.audible_frame(ring));
+        if let (Some(duration), Some(song), Some(frame)) = (self.duration, song, self.parked_song_frame) {
+            if song.decoder.duration != 0 {
+                let fraction = frame as f64 / song.decoder.duration as f64;
+                self.position = duration * fraction.clamp(0.0, 1.0);
+            }
+        }
+        ring.discard();
+        if ring.sample_rate() != 0 {
+            self.audio = Decoder::open_mp4_audio(&self.path)
+                .map(|decoder| Playback::new(decoder, ring.sample_rate()));
+            if self.position > 0.0 {
+                self.seek_soundtrack(ring);
+            }
+        }
+    }
+
+    fn seek_soundtrack(&mut self, ring: &Ring) {
+        if let Some(audio) = self.audio.as_mut() {
+            let frame = (self.position * f64::from(audio.decoder.rate)) as u64;
+            self.audio_ending = audio.seek_to(frame, ring).unwrap_or_else(|| {
+                ring.discard();
+                true
+            });
         }
     }
 
@@ -234,18 +267,11 @@ impl VideoPlayback {
         if seek != 0 {
             self.position = (self.position + f64::from(seek)).max(0.0);
             self.restart_decoder = true;
+            self.seek_soundtrack(ring);
         }
         if let Some(audio) = self.audio.as_mut() {
             let rate = f64::from(audio.decoder.rate);
-            if seek != 0 {
-                let frame = (self.position * rate) as u64;
-                if let Some(at_end) = audio.seek_to(frame, ring) {
-                    self.audio_ending = at_end;
-                } else {
-                    ring.discard();
-                    self.audio_ending = true;
-                }
-            } else if self.paused && ring.queued_frames() > 0 {
+            if self.paused && ring.queued_frames() > 0 {
                 self.position = audio.audible_frame(ring) as f64 / rate;
                 self.audio_ending = audio.seek_by(0, ring).unwrap_or(self.audio_ending);
                 ring.discard();
@@ -447,6 +473,7 @@ pub(crate) struct Music {
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
     video: Option<VideoPlayback>,
+    resume_song_at: Option<u64>,
     /// Session-only hold switch (VolUp + VolDown chord); never persisted.
     locked: bool,
     discard_audio: bool,
@@ -484,6 +511,7 @@ impl Music {
             track: None,
             now_playing_view: false,
             video: None,
+            resume_song_at: None,
             locked: false,
             discard_audio: false,
             cover_flow: true,
@@ -867,6 +895,7 @@ impl Music {
             self.select_row(index);
         }
         self.close_video();
+        self.resume_song_at = None;
         self.track = Some(Track {
             album,
             index,
@@ -945,7 +974,7 @@ impl Music {
             }
             if let Some(video) = &mut self.video {
                 match action {
-                    Action::GbaDown(Btn::Y) => self.close_video(),
+                    Action::GbaDown(Btn::Y) => self.exit_video(true),
                     Action::GbaDown(Btn::A) => video.paused = !video.paused,
                     Action::GbaDown(Btn::Up | Btn::Down) => {
                         let by = if action == Action::GbaDown(Btn::Up) { 10 } else { -10 };
@@ -1062,11 +1091,27 @@ impl Music {
         Some((&video.path, video.position, restart))
     }
 
-    pub(crate) fn close_video(&mut self) {
-        if self.video.take().is_some_and(|video| video.last_update.is_some()) {
-            // The video owned the ring. Discard its buffered soundtrack
-            // before letting the parked song write to the ring again.
-            self.discard_audio = true;
+    fn close_video(&mut self) {
+        self.exit_video(false);
+    }
+
+    pub(crate) fn exit_video(&mut self, match_progress: bool) {
+        let Some(video) = self.video.take().filter(|video| video.last_update.is_some()) else {
+            return;
+        };
+        // Discard any MP4 samples before letting the song write to the ring.
+        self.discard_audio = true;
+        self.resume_song_at = video.parked_song_frame;
+        if match_progress {
+            if let (Some(duration), Some(song)) = (
+                video.duration,
+                self.track.as_ref().and_then(|track| track.playback.as_ref()),
+            ) {
+                if song.decoder.duration != 0 {
+                    let fraction = (video.position / duration).clamp(0.0, 1.0);
+                    self.resume_song_at = Some((fraction * song.decoder.duration as f64) as u64);
+                }
+            }
         }
     }
 
@@ -1097,19 +1142,18 @@ impl Music {
         if std::mem::take(&mut self.discard_audio) {
             ring.discard();
         }
+        if let Some(frame) = self.resume_song_at.take() {
+            if let Some(track) = self.track.as_mut() {
+                if let Some(at_end) = track.playback.as_mut().and_then(|song| song.seek_to(frame, ring)) {
+                    track.ending = at_end;
+                }
+            }
+        }
         let volume = self.effective_volume(level);
         if let Some(video) = self.video.as_mut() {
             if video.last_update.is_none() {
-                // Park the song at the audible position before the MP4
-                // soundtrack takes ownership of the same output ring.
-                if let Some(track) = self.track.as_mut() {
-                    track.rewind_buffered_audio(ring);
-                }
-                ring.discard();
-                if ring.sample_rate() != 0 {
-                    video.audio = Decoder::open_mp4_audio(&video.path)
-                        .map(|decoder| Playback::new(decoder, ring.sample_rate()));
-                }
+                let song = self.track.as_ref().and_then(|track| track.playback.as_ref());
+                video.start(song, ring);
             }
             video.update(ring, volume);
             return;
@@ -1305,6 +1349,52 @@ mod tests {
         music.input(Action::GbaDown(Btn::Y));
         music.update_audio(&ring, 70);
         assert!(music.native_video().unwrap().1 < 0.1, "Y starts a fresh video again");
+    }
+
+    #[test]
+    fn native_video_carries_fraction_between_different_length_media() {
+        let Ok(fixture) = std::env::var("SLOT_NATIVE_VIDEO_SOUNDTRACK_FIXTURE") else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let album = root.path().join("Music/Album");
+        fs::create_dir_all(&album).unwrap();
+        let song = album.join("01.mp3");
+        silent_mp3(&song, 2);
+        let frames = fs::read(&song).unwrap();
+        fs::write(&song, frames.repeat(120)).unwrap();
+        let video_path = song.with_extension("mp4");
+        fs::copy(fixture, &video_path).unwrap();
+        let soundtrack = M4aDecoder::open(&video_path).unwrap();
+        let video_length = soundtrack.duration as f64 / f64::from(soundtrack.rate);
+        assert!(video_length > 1.0);
+
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::A));
+        music.input(Action::GbaDown(Btn::Y));
+        let ring = Ring::new(0);
+        ring.reopen(48_000);
+        ring.set_idle(true);
+        music.update_audio(&ring, 70);
+        let playback = music.track.as_mut().unwrap().playback.as_mut().unwrap();
+        // Raw synthetic MP3 frames lack a duration header. Supply the test
+        // track's known length so this exercises a different playback time.
+        playback.decoder.duration = 30 * u64::from(playback.decoder.rate);
+        music.input(Action::GbaDown(Btn::Up));
+        music.update_audio(&ring, 70);
+        music.input(Action::GbaDown(Btn::Y));
+        music.update_audio(&ring, 70);
+        let (_, position, restart) = music.native_video().expect("video selected");
+        assert!(restart);
+        assert!((position - video_length / 3.0).abs() < 0.15, "video started at {position}s");
+
+        music.video.as_mut().unwrap().position = video_length * 0.75;
+        music.input(Action::GbaDown(Btn::Y));
+        music.update_audio(&ring, 70);
+        assert!(music.native_video().is_none());
+        let playback = music.track.as_ref().unwrap().playback.as_ref().unwrap();
+        let position = playback.audible_frame(&ring) as f64 / f64::from(playback.decoder.rate);
+        assert!((position - 22.5).abs() < 0.3, "song resumed at {position}s");
     }
 
     #[test]

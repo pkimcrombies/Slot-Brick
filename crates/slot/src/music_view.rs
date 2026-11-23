@@ -10,7 +10,7 @@ use slot_ui::{
 };
 
 use crate::music::{Music, RepeatMode, Status, Track};
-use crate::music_cover::{MusicCover, LIST_THUMBNAIL};
+use crate::music_cover::{MusicCover, LIST_THUMBNAIL, THUMBNAIL};
 
 // Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
 // less stark than pure white. System menus and the launcher keep their
@@ -1119,6 +1119,27 @@ mod album_thumbnail_layout_tests {
     use super::*;
 
     #[test]
+    fn album_list_uses_nine_rows_and_twenty_one_distinct_warm_slots() {
+        assert_eq!(ROWS, 9);
+        assert_eq!(ROW_H, 40.0);
+        assert_eq!(LIST_THUMBNAIL, 64);
+        assert_eq!(LIST_CACHE_SLOTS, 21);
+        assert_eq!(list_prefetch_range(12, 50), 2..23);
+        assert_eq!(list_prefetch_range(0, 50), 0..11);
+        assert_eq!(list_prefetch_range(49, 50), 39..50);
+        for cursor in 0..50 {
+            let slots: std::collections::HashSet<usize> =
+                list_prefetch_range(cursor, 50)
+                    .map(|index| index % LIST_CACHE_SLOTS).collect();
+            assert_eq!(slots.len(), list_prefetch_range(cursor, 50).len(),
+                "each album in the warm window must own a unique slot");
+        }
+        assert!(LIST_TOP + ROWS as f32 * ROW_H <= OUT_H as f32 - 12.0);
+        assert!(LIST_SCROLL_X > OUT_W as f32 - EDGE);
+        assert!(LIST_SCROLL_X + 2.0 < OUT_W as f32);
+    }
+
+    #[test]
     fn album_thumbnails_fit_existing_rows_without_overlapping_text() {
         assert!(ALBUM_COVER_SIDE <= ROW_H);
         assert!(ALBUM_TEXT_X >= EDGE + ALBUM_COVER_SIDE);
@@ -1239,12 +1260,12 @@ mod album_thumbnail_layout_tests {
         assert_eq!(view.ready_album_art(first), Some((tex, [256, 192])));
         assert_eq!(view.ready_album_art(other), None);
 
-        // When the album was reached through the regular Albums/Artists list,
-        // its independent thumbnail cache is equally reusable.
+        // Tiny list thumbnails must never be stretched to the 250px
+        // Now Playing cover; it requests a separate full-quality texture.
         view.flow_covers[2] = MusicCover::default();
         let tex = TexId::from_raw(42);
-        view.album_covers[0] = MusicCover::loaded_for_test(first, tex, [256, 128]);
-        assert_eq!(view.ready_album_art(first), Some((tex, [256, 128])));
+        view.album_covers[0] = MusicCover::loaded_for_test(first, tex, [64, 32]);
+        assert_eq!(view.ready_album_art(first), None);
         assert_eq!(view.ready_album_art(other), None);
     }
 
@@ -1292,9 +1313,10 @@ mod album_thumbnail_layout_tests {
         assert_eq!(view.ready_album_tint(other), None);
         view.flow_covers[3] = MusicCover::default();
         view.album_covers[1] = MusicCover::tinted_for_test(
-            first, TexId::from_raw(34), [256, 192], [210, 95, 60],
+            first, TexId::from_raw(34), [64, 48], [210, 95, 60],
         );
-        assert_eq!(view.ready_album_tint(first), Some([210, 95, 60]));
+        assert_eq!(view.ready_album_tint(first), None,
+            "tiny list-thumb colour belongs to list cache, not Now Playing");
         assert_eq!(view.ready_album_tint(other), None);
     }
 

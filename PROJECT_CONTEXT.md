@@ -662,7 +662,8 @@
 - The device loop temporarily unbinds its EGL context, spawns
   `Slot/System/video-player/ffplay` as an external process with
   `-fs -autoexit -posfile` and the same-stem local file, polling
-  physical controls. Y, B, Menu or Power terminates the child; natural
+  physical controls. Y, B, Menu or Power sends SIGTERM to the child
+  (600ms to write final position, then SIGKILL fallback); natural
   video completion also returns. Rebind EGL and reopen ALSA, force
   a new UI frame. If EGL cannot be rebound, exit with existing code 66
   so Slot OS restarts safely. The first 300ms are debounced.

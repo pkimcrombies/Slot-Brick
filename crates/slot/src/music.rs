@@ -12,6 +12,8 @@ use crate::music_m4a::{is_m4a, M4aDecoder};
 use crate::resample::Resampler;
 
 const CHUNK: usize = 512;
+/// Number of track rows visible on the classic album-song screen.
+pub(crate) const ALBUM_VISIBLE_ROWS: usize = 7;
 
 pub(crate) fn companion_video(audio: &Path) -> Option<PathBuf> {
     ["mp4", "m4v"].into_iter().map(|ext| audio.with_extension(ext))
@@ -364,6 +366,19 @@ enum Page {
 struct Location {
     page: Page,
     cursor: usize,
+    /// First visible row, maintained independently of the song selection.
+    first_visible: usize,
+}
+
+impl Location {
+    fn new(page: Page, cursor: usize) -> Self {
+        let first_visible = if matches!(page, Page::Album(_)) {
+            cursor.saturating_sub(ALBUM_VISIBLE_ROWS - 1)
+        } else {
+            0
+        };
+        Self { page, cursor, first_visible }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -557,10 +572,7 @@ impl Music {
         let mut music = Self {
             library,
             scan: None,
-            browse: vec![Location {
-                page: Page::Albums,
-                cursor: 0,
-            }],
+            browse: vec![Location::new(Page::Albums, 0)],
             track: None,
             now_playing_view: false,
             video: None,
@@ -742,7 +754,7 @@ impl Music {
     }
 
     fn open_page(&mut self, page: Page) {
-        self.browse.push(Location { page, cursor: 0 });
+        self.browse.push(Location::new(page, 0));
     }
 
     pub(crate) fn label(&self) -> &str {
@@ -767,10 +779,46 @@ impl Music {
     }
 
     fn select_row(&mut self, cursor: usize) {
-        self.browse
-            .last_mut()
-            .expect("the library has a root page")
-            .cursor = cursor;
+        let location = self.browse.last_mut().expect("the library has a root page");
+        location.cursor = cursor;
+        if matches!(location.page, Page::Album(_)) {
+            // Normal Up/Down browsing still scrolls one row at a time.
+            if cursor < location.first_visible {
+                location.first_visible = cursor;
+            } else if cursor >= location.first_visible.saturating_add(ALBUM_VISIBLE_ROWS) {
+                location.first_visible = cursor + 1 - ALBUM_VISIBLE_ROWS;
+            }
+        }
+    }
+
+    /// The visible seven-song window is shared by rendering and page input.
+    pub(crate) fn album_track_window(&self) -> (usize, usize) {
+        let count = self.row_count();
+        if count == 0 {
+            return (0, 0);
+        }
+        let first = self.location().first_visible.min(count.saturating_sub(ALBUM_VISIBLE_ROWS));
+        (first, (first + ALBUM_VISIBLE_ROWS).min(count))
+    }
+
+    /// Left/Right move a full visible page without starting another song.
+    fn jump_track_page(&mut self, forward: bool) {
+        if !self.showing_tracks() {
+            return;
+        }
+        let count = self.row_count();
+        if count == 0 {
+            return;
+        }
+        let location = self.browse.last_mut().expect("the album has a location");
+        if forward {
+            location.cursor = location.cursor.saturating_add(ALBUM_VISIBLE_ROWS).min(count - 1);
+            location.first_visible = location.first_visible.saturating_add(ALBUM_VISIBLE_ROWS)
+                .min(count.saturating_sub(ALBUM_VISIBLE_ROWS));
+        } else {
+            location.cursor = location.cursor.saturating_sub(ALBUM_VISIBLE_ROWS);
+            location.first_visible = location.first_visible.saturating_sub(ALBUM_VISIBLE_ROWS);
+        }
     }
 
     /// Up/Down on Albums Cover Flow jump to the next/previous *available*
@@ -870,15 +918,9 @@ impl Music {
         let root_cursor = self.track.as_ref().and_then(|track| {
             self.album_order.iter().position(|&album| album == track.album)
         }).unwrap_or(0);
-        self.browse = vec![Location {
-            page: Page::Albums,
-            cursor: root_cursor,
-        }];
+        self.browse = vec![Location::new(Page::Albums, root_cursor)];
         if let Some(track) = &self.track {
-            self.browse.push(Location {
-                page: Page::Album(track.album),
-                cursor: track.index,
-            });
+            self.browse.push(Location::new(Page::Album(track.album), track.index));
         }
     }
 
@@ -907,7 +949,7 @@ impl Music {
             _ => None,
         };
         if let Some(page) = page {
-            self.browse = vec![Location { page, cursor: 0 }];
+            self.browse = vec![Location::new(page, 0)];
         }
     }
 
@@ -1121,11 +1163,16 @@ impl Music {
             }
             Action::GbaDown(Btn::Up) if self.cover_flow() => self.jump_album_letter(false),
             Action::GbaDown(Btn::Down) if self.cover_flow() => self.jump_album_letter(true),
-            // The album list, Artists and track lists still move one row at a time.
+            // Up/Down remain one-row navigation; Left/Right page through songs.
             Action::GbaDown(Btn::Up) => self.select_row(self.cursor().saturating_sub(1)),
             Action::GbaDown(Btn::Down) if self.cursor() + 1 < self.row_count() => {
                 self.select_row(self.cursor() + 1)
             }
+            // The album-song screen advances by exactly one visible seven-row set.
+            Action::GbaDown(Btn::Left) | Action::ShelfLeft
+                if self.showing_tracks() => self.jump_track_page(false),
+            Action::GbaDown(Btn::Right) | Action::ShelfRight
+                if self.showing_tracks() => self.jump_track_page(true),
             // In Artists the D-pad skips alphabet groups, never Music tabs.
             // L1/R1 exclusively change tabs, even in Albums list mode.
             Action::GbaDown(Btn::Left) | Action::ShelfLeft
@@ -1801,6 +1848,87 @@ mod tests {
         assert!(music.discard_audio,
             "lowering the cap must discard already-buffered louder samples");
         assert_eq!(music.effective_volume(95), 50);
+    }
+
+    #[test]
+    fn album_song_left_right_pages_seven_rows_and_up_down_stay_single_step() {
+        let songs = (0..30).map(|i| Song {
+            path: PathBuf::from(format!("song-{i:02}.mp3")),
+            title: format!("song {i}"),
+            artist: "artist".into(),
+            disc: 1,
+            track: Some((i + 1) as u16),
+        }).collect();
+        let mut music = Music::with_library(Library {
+            albums: vec![Album {
+                title: "album".into(),
+                artist: "artist".into(),
+                release_date: None,
+                songs,
+            }],
+            artists: vec![],
+        });
+        music.open_page(Page::Album(0));
+        assert_eq!(music.album_track_window(), (0, 7));
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 0, "left at the beginning cannot underflow");
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.cursor(), 7);
+        assert_eq!(music.album_track_window(), (7, 14),
+            "right must show the next seven rows, not a single new row");
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.cursor(), 8);
+        assert_eq!(music.album_track_window(), (7, 14),
+            "one-row movement within a page should not move the viewport");
+        music.input(Action::ShelfRight);
+        assert_eq!(music.cursor(), 15);
+        assert_eq!(music.album_track_window(), (14, 21));
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.cursor(), 14);
+        assert_eq!(music.album_track_window(), (14, 21));
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 7);
+        assert_eq!(music.album_track_window(), (7, 14));
+        music.input(Action::ShelfLeft);
+        assert_eq!(music.cursor(), 0);
+        assert_eq!(music.album_track_window(), (0, 7));
+        music.select_row(29);
+        assert_eq!(music.album_track_window(), (23, 30));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.cursor(), 29, "right at the end cannot overflow");
+        assert_eq!(music.album_track_window(), (23, 30));
+        assert!(music.track.is_none(), "paging the list must not start playback");
+    }
+
+    #[test]
+    fn album_song_page_jumps_handle_empty_and_short_albums() {
+        let mut music = Music::with_library(Library {
+            albums: vec![Album {
+                title: "short".into(),
+                artist: "artist".into(),
+                release_date: None,
+                songs: (0..3).map(|i| Song {
+                    path: PathBuf::from(format!("{i}.mp3")),
+                    title: format!("song {i}"),
+                    artist: "artist".into(),
+                    disc: 1,
+                    track: Some((i + 1) as u16),
+                }).collect(),
+            }],
+            artists: vec![],
+        });
+        music.open_page(Page::Album(0));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.cursor(), 2);
+        assert_eq!(music.album_track_window(), (0, 3));
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 0);
+        music.library.albums[0].songs.clear();
+        music.select_row(0);
+        music.input(Action::GbaDown(Btn::Right));
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.cursor(), 0);
+        assert_eq!(music.album_track_window(), (0, 0));
     }
 
     #[test]

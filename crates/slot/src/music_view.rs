@@ -9,7 +9,7 @@ use slot_ui::{
     QUICK_VALUE_EDGE, STATUS_MARGIN,
 };
 
-use crate::music::{Music, RepeatMode, Status, Track};
+use crate::music::{Music, RepeatMode, Status, Track, ALBUM_VISIBLE_ROWS};
 use crate::music_cover::{MusicCover, LIST_THUMBNAIL, THUMBNAIL};
 
 // Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
@@ -98,7 +98,6 @@ const SETTINGS_FIRST_ROW_Y: f32 = 108.0;
 const SETTINGS_ROW_STEP: f32 = QUICK_PITCH;
 const SETTINGS_ROW_H: f32 = 44.0;
 const SETTINGS_VALUE_X: f32 = QUICK_VALUE_EDGE;
-const ALBUM_VISIBLE_ROWS: usize = 7;
 const ALBUM_TRACK_TITLE_X: f32 = EDGE + 44.0;
 // A gentle tonal step beneath the header, not a separate white panel.
 const ALBUM_HEADER_BACKGROUND: [f32; 4] = [239.0 / 255.0, 234.0 / 255.0, 225.0 / 255.0, 1.0];
@@ -815,7 +814,7 @@ impl Painter<'_> {
         let album = music.browsed_album();
         let total = music.row_count();
         let cursor = music.cursor();
-        let (first, end) = album_window(cursor, total);
+        let (first, end) = music.album_track_window();
 
         // Edge-to-edge header, rather than a framed panel. The same warm
         // background is used for every album, regardless of cover artwork.
@@ -1325,16 +1324,6 @@ fn playing_gradient_rgba(accent: [u8; 3]) -> Vec<u8> {
 /// Position a track row within the visible full-width list.
 fn album_row_y(index: usize, first: usize) -> f32 {
     ALBUM_LIST_TOP + (index - first) as f32 * ALBUM_TRACK_ROW_H
-}
-
-/// Keep the selected song visible without changing its index. Long albums
-/// scroll one classic full-width row at a time after the first seven songs.
-fn album_window(cursor: usize, count: usize) -> (usize, usize) {
-    if count == 0 {
-        return (0, 0);
-    }
-    let first = cursor.min(count - 1).saturating_sub(ALBUM_VISIBLE_ROWS - 1);
-    (first, (first + ALBUM_VISIBLE_ROWS).min(count))
 }
 
 /// ClassiPod Original spacing, adapted to the 640x480 Brick screen:
@@ -1856,17 +1845,6 @@ mod album_thumbnail_layout_tests {
         assert_eq!(ALBUM_VISIBLE_ROWS, 7);
         assert!(ALBUM_TRACK_TITLE_X > EDGE + 35.0);
         assert!(ALBUM_TRACK_TITLE_X < OUT_W as f32 / 3.0);
-    }
-
-    #[test]
-    fn album_window_is_stable_for_short_albums_and_scrolls_with_selection() {
-        assert_eq!(album_window(0, 0), (0, 0));
-        assert_eq!(album_window(0, 1), (0, 1));
-        assert_eq!(album_window(5, 6), (0, 6));
-        assert_eq!(album_window(6, 20), (0, 7));
-        assert_eq!(album_window(7, 20), (1, 8));
-        assert_eq!(album_window(19, 20), (13, 20));
-        assert_eq!(album_window(500, 20), (13, 20));
     }
 
     #[test]

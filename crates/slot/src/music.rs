@@ -447,10 +447,14 @@ impl Music {
     pub(crate) fn music_settings_open(&self) -> bool { self.settings_view }
     pub(crate) fn locked(&self) -> bool { self.locked }
 
-    /// Only the Music mute chord toggles the hold switch; locking never
-    /// pauses, seeks, mutes or changes the playback position.
+    /// Both the physical mute switch and the Music-only volume chord can
+    /// control hold. Locking never changes playback, volume, or mute.
+    pub(crate) fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+    }
+
     pub(crate) fn toggle_lock(&mut self) {
-        self.locked = !self.locked;
+        self.set_locked(!self.locked);
     }
     pub(crate) fn settings_cursor(&self) -> usize { self.settings_row }
     pub(crate) fn settings_max_volume(&self) -> u8 { self.settings.max_volume }

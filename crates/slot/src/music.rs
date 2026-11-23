@@ -196,6 +196,9 @@ pub(crate) struct Track {
     pub(crate) status: Status,
     playback: Option<Playback>,
     ending: bool,
+    // Button events are UI-thread only. Seek is applied by update_audio,
+    // where the decoder and audio Ring are available together.
+    pending_seek_seconds: i32,
 }
 
 impl Track {
@@ -731,6 +734,7 @@ impl Music {
             status: Status::Loading,
             playback: None,
             ending: false,
+            pending_seek_seconds: 0,
         });
         self.discard_audio = true;
     }
@@ -805,13 +809,19 @@ impl Music {
                         }
                         Status::Loading => {}
                     },
-                    // Left/right select tracks. No seek gestures in the
-                    // child-friendly player; shoulders remain section tabs.
+                    // Left/right select tracks. Up/down seek by ten seconds
+                    // without interrupting play/pause state or changing tabs.
                     Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
                         self.switch(index, false)
                     }
                     Action::GbaDown(Btn::Right) | Action::ShelfRight => {
                         self.switch(index, true)
+                    },
+                    Action::GbaDown(Btn::Up) | Action::GbaDown(Btn::Down)
+                        if matches!(track.status, Status::Playing | Status::Paused | Status::Loading) => {
+                        let by = if action == Action::GbaDown(Btn::Up) { 10 } else { -10 };
+                        track.pending_seek_seconds =
+                            track.pending_seek_seconds.saturating_add(by).clamp(-3600, 3600);
                     },
                     Action::GbaDown(Btn::X) => {
                         self.settings.repeat = self.settings.repeat.step(true);
@@ -925,6 +935,18 @@ impl Music {
                 Status::Unreadable
             };
         }
+        // Resolve queued seeking against the *audible* playback position.
+        // This also works while paused, but never implicitly resumes a song.
+        if matches!(track.status, Status::Playing | Status::Paused) {
+            let seconds = std::mem::take(&mut track.pending_seek_seconds);
+            if seconds != 0 {
+                if let Some(playback) = track.playback.as_mut() {
+                    if let Some(at_end) = playback.seek_by(seconds, ring) {
+                        track.ending = at_end;
+                    }
+                }
+            }
+        }
         if track.status != Status::Playing {
             return;
         }
@@ -946,6 +968,44 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_playing_up_down_queue_ten_second_seeks_without_changing_track_or_pause() {
+        let album = Album {
+            title: "Album".into(), artist: "Artist".into(), release_date: None,
+            songs: vec![Song {
+                path: PathBuf::from("missing.mp3"), title: "Track".into(),
+                artist: "Artist".into(), disc: 1, track: Some(1),
+            }],
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![album], artists: vec![],
+        });
+        music.open_page(Page::Album(0));
+        music.start(0);
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 0);
+        music.input(Action::GbaDown(Btn::Up));
+        music.input(Action::GbaDown(Btn::Up));
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 10);
+        assert_eq!(music.playing_position(), Some((0, 1)));
+        // The selected track was Loading; preserve queued input until audio opens.
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Loading);
+        music.track.as_mut().unwrap().status = Status::Paused;
+        music.input(Action::GbaDown(Btn::Down));
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 0);
+        assert_eq!(music.track.as_ref().unwrap().status, Status::Paused);
+        music.input(Action::GbaDown(Btn::Up));
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 10);
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.playing_position(), Some((0, 1)),
+            "seeking does not change the track or album");
+        music.input(Action::GbaDown(Btn::B));
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 10,
+            "browsing other sections does not flush the queued seek");
+        music.input(Action::GbaDown(Btn::L1));
+        assert!(music.showing_now_playing());
+    }
 
     #[test]
     fn settings_persist_and_bad_values_do_not_override_defaults() {

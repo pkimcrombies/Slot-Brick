@@ -67,6 +67,55 @@ fn menu_line_face(
     (UndoFace { rgba, w, h }, [width, height])
 }
 
+/// Natural menu text width before ellipsizing. Used only to decide whether
+/// Now Playing needs the animated horizontal title viewport.
+pub fn menu_marquee_width(label: &str, px: u32) -> f32 {
+    let Some(font) = text::label_font() else { return 0.0 };
+    let tracking = (px as f32 * 0.10).round();
+    text::line_width(font, &label.to_lowercase(), px as f32, tracking) + 8.0
+}
+
+/// An unclipped song title rendered *inside* a fixed, width-bounded viewport.
+/// Scroll offset is in logical pixels. Only the viewport image is allocated,
+/// not a giant texture spanning the full metadata string.
+pub fn menu_marquee_face(
+    label: &str, px: u32, room: u32, [sx, sy]: [f32; 2],
+    ink: [u8; 3], scroll: f32,
+) -> (UndoFace, [u32; 2]) {
+    let logical_h = (px as f32 * 1.4).ceil() as u32;
+    let w = (room as f32 * sx).round().max(1.0) as u32;
+    let h = (logical_h as f32 * sy).round().max(1.0) as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let physical_px = px as f32 * sy;
+    let tracking = (px as f32 * 0.10).round() * sy;
+    text::draw_scrolling_line(
+        &mut rgba, w, h, &label.to_lowercase(), physical_px,
+        tracking, 4.0 * sx - scroll * sx, ink,
+    );
+    (UndoFace { rgba, w, h }, [room, logical_h])
+}
+
+#[cfg(test)]
+mod marquee_tests {
+    use super::*;
+
+    #[test]
+    fn long_mixed_korean_titles_render_inside_bounded_viewport() {
+        let title = "아주 긴 노래 제목 a very long English song title";
+        let natural = menu_marquee_width(title, 26);
+        assert!(natural > 200.0);
+        let (at_start, size) =
+            menu_marquee_face(title, 26, 200, [1.0, 1.0], MENU_SELECTION_INK, 0.0);
+        let (scrolled, size2) =
+            menu_marquee_face(title, 26, 200, [1.0, 1.0], MENU_SELECTION_INK, 135.0);
+        assert_eq!(size, [200, 37]);
+        assert_eq!(size2, size);
+        assert_eq!((at_start.w, at_start.h), (200, 37));
+        assert_eq!(at_start.rgba.len(), (200 * 37 * 4) as usize);
+        assert_ne!(at_start.rgba, scrolled.rgba, "scrolling reveals a different span of text");
+    }
+}
+
 pub fn menu_hint_face_scaled(key: &str, label: &str, scale: [f32; 2]) -> (UndoFace, u32) {
     crate::plate::hint_face_scaled(key, label, scale, text::Case::Lower)
 }

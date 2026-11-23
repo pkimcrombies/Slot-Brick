@@ -645,6 +645,40 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 ffplay SDL initialization failure — stop piecemeal dependency patches
+
+- User has now installed both `libbz2.so.1.0` and private OpenSSL
+  1.1 libraries successfully. In `video-player(2).log`, lines 1–17
+  are accumulated older libbz2 and libssl failures; the **latest**
+  lines 18–29 show repeated:
+  `sh: setterm: not found` and
+  `Could not initialize SDL - Failed loading libudev.so.0:
+  libudev.so.0: cannot open shared object file`.
+  The `(Did you set the DISPLAY variable?)` line is ffplay's generic
+  SDL_Init error suffix; no evidence an X11 server is required.
+- This is now **SDL runtime initialization**, not a missing ELF
+  startup dependency, and the MP4 codec has **not been invoked**.
+  `setterm` appears nonfatal relative to SDL's precise udev error,
+  but should be audited too.
+- The bundled NX Redux `ffplay` invokes SDL_Init with
+  `SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER |
+  SDL_INIT_JOYSTICK`; SDL can dynamically load libudev
+  (outside ELF DT_NEEDED). NX Redux's official installation docs
+  state explicitly that it relies on libraries bundled in the
+  TrimUI stock firmware. Slot OS is a minimal custom rootfs whose
+  Dockerfile includes `libsystemd0` but not legacy `libudev.so.0`.
+- **Do not issue another single-library installer.** Before further
+  SD changes, inventory recursive ELF DT_NEEDED dependencies for
+  ffplay and private libs *plus SDL's dlopen requirements*, identify
+  the display backend/input library and ownership handoff, and
+  produce one complete, version-pinned runtime built for Slot OS.
+  If the NX binary cannot be made compatible, rebuild ffplay/SDL
+  against Slot OS or choose a native video backend. Real device
+  SDL initialization, video rendering, audio, and Y-return must be
+  verified separately. It is not reasonable to call this feature
+  installed or working yet. Restore prior Music installer if
+  user wishes to opt out; music should otherwise remain unaffected.
+
 ## 2026-11-23 OpenSSL runtime package URL correction
 
 - The first `Install-Slot-Brick-Video-OpenSSL11-Fix-20261123.txt`

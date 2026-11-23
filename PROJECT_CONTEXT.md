@@ -645,6 +645,21 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Video badge installer compile correction (still unverified)
+
+- The installer pinned to `31be697` stopped safely at `regression-tests`
+  with Rust parsing errors (E0308-like precedence symptoms):
+  an `as f32` cast directly before `<` in two
+  `youtube_badge_is_small_inside_the_top_left_of_the_cover` assertions
+  was interpreted as generic arguments. Parenthesized both casts.
+- Prior installer did download and PNG-validate all eight assets; it did
+  **not** reach ARM64 build or change the SD. After committing this note,
+  generate a fresh installer pinned to the resulting exact branch HEAD,
+  with the previous test/build/backup/SHA safeguards and the standard
+  copy-paste rename from `.txt` to `.ps1`.
+- The existing `embedded_cover` and `SETTINGS_ROW_H` dead-code
+  warnings were not compilation blockers and were left untouched.
+
 ## 2026-11-23 Music video-available cover badge (build/device verification pending)
 
 - New first-stage **visual indicator only** on native Music Now Playing:

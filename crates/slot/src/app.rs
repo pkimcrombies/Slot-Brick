@@ -2096,6 +2096,36 @@ impl App {
     }
 
     pub fn apply(&mut self, action: Action) {
+        // Music's VolUp+VolDown mute chord becomes a session-only hold switch.
+        // Intercept before adjust() can mute, or any Music input can navigate.
+        // A held device must still allow the physical Power/Lid controls.
+        // When the power menu is open, its controls must remain usable.
+        if matches!(self.phase, Phase::Music) && self.power_menu.is_none() {
+            if action == Action::MuteToggle {
+                // The volume chord sends one/two volume steps before the mute
+                // gesture is recognized. Undo those steps without toggling mute.
+                let now = self.now();
+                if let Some((volume, muted, _)) = self.vol_before.iter()
+                    .find(|(_, _, at)| now.saturating_sub(*at) <= MUTE_CHORD_MS)
+                    .copied()
+                {
+                    *self.level_mut() = volume;
+                    *self.muted_mut() = muted;
+                }
+                self.vol_before.clear();
+                if let Some(music) = self.music.as_mut() {
+                    music.toggle_lock();
+                }
+                return;
+            }
+            if self.music.as_ref().is_some_and(crate::music::Music::locked)
+                && !matches!(action,
+                    Action::PowerPress | Action::PowerTap | Action::PowerHold
+                    | Action::PowerOff | Action::LidClose | Action::LidOpen)
+            {
+                return;
+            }
+        }
         #[cfg(feature = "brick")]
         if let Some(wifi)=&mut self.wifi {
             if matches!(action,Action::PowerTap|Action::PowerHold|Action::LidClose) && wifi.busy() {
@@ -6817,6 +6847,65 @@ mod quiet_poweroff_tests {
         app.wake();
         assert_eq!(writes.lock().unwrap().last().copied(), Some(5),
             "waking must restore the configured brightness");
+    }
+
+    #[test]
+    fn music_mute_chord_toggles_lock_without_muting_or_leaving_music() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.music = Some(crate::music::Music::open(root.path()));
+        app.phase = Phase::Music;
+        let initial_volume = app.volume();
+        let initial_mute = app.muted();
+        // Gesture emits a volume step before it recognizes the chord.
+        app.apply(Action::VolumeUp);
+        app.apply(Action::MuteToggle);
+        assert!(app.music().unwrap().locked());
+        assert_eq!(app.volume(), initial_volume, "chord must not raise volume");
+        assert_eq!(app.muted(), initial_mute, "chord must not mute audio");
+        app.apply(Action::GbaDown(Btn::R1));
+        assert!(app.music().unwrap().showing_now_playing(),
+            "locked Music must ignore shoulder navigation");
+        app.apply(Action::VolumeDown);
+        assert_eq!(app.volume(), initial_volume, "locked Music ignores volume buttons");
+        app.apply(Action::QuickMenu);
+        assert!(matches!(app.phase(), Phase::Music),
+            "HOME must not accidentally exit locked Music");
+        app.apply(Action::MuteToggle);
+        assert!(!app.music().unwrap().locked());
+        assert_eq!(app.volume(), initial_volume);
+        assert_eq!(app.muted(), initial_mute);
+        app.apply(Action::GbaDown(Btn::R1));
+        assert!(!app.music().unwrap().showing_now_playing(),
+            "unlock restores the original Music navigation");
+        app.apply(Action::QuickMenu);
+        assert!(matches!(app.phase(), Phase::QuickMenu { .. }));
+    }
+
+    #[test]
+    fn music_lock_retains_physical_sleep_wake_and_power_controls() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.music = Some(crate::music::Music::open(root.path()));
+        app.phase = Phase::Music;
+        app.apply(Action::MuteToggle);
+        assert!(app.music().unwrap().locked());
+        app.apply(Action::LidClose);
+        assert!(matches!(app.phase(), Phase::Doze { .. }));
+        app.apply(Action::LidOpen);
+        assert!(matches!(app.phase(), Phase::Music));
+        assert!(app.music().unwrap().locked(),
+            "sleep/wake must preserve hold, and volume chord can unlock");
+        app.apply(Action::MuteToggle);
+        assert!(!app.music().unwrap().locked());
     }
 
     #[test]

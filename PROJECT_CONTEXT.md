@@ -278,6 +278,27 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+
+- **2026-11-23 Music Now Playing smoother title marquee and labels:**
+  Music's first tab is visually called **"now"** (tab order and
+  navigation unchanged). While playing, the redundant "playing"
+  status below "X of Y" is hidden. X-of-Y moves from y=277 to y=326.
+  Paused, loading and genuine errors still show at y=358.
+  Progress/time and Repeat positions are unchanged.
+
+  Long titles previously recalculated widths, rasterized every glyph
+  and uploaded a new 26px image on every ~80ms animation frame.
+  New implementation computes width once per song, rasterizes full
+  text into a bounded RGBA buffer once, and crops a compact fixed-width
+  viewport into one reused GPU texture. Frame requests increase to
+  ~30fps (33ms) only while the long-title marquee is active.
+  Scroll speeds are 38/40 px/sec forward/back; resting at each end.
+  A changed track/scale invalidates the whole-title raster.
+  New regression tests cover viewport edge clamping, raster reuse and
+  title changes. Audio and album covers are unaffected.
+  Real Brick Pro runtime performance and regression tests remain
+  unverified until the user's guarded installer runs.
+
 ## Test/build/install guardrails
 
 - **2026-11-23 Music HUD lock icon + album-list performance overhaul:**

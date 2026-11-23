@@ -278,6 +278,41 @@
   print meaningful per-stage errors, and keep full SHA pinning before install.
 
 ## Test/build/install guardrails
+## Test/build/install guardrails
+
+- **2026-11-23 Music HUD lock icon + album-list performance overhaul:**
+  A downloaded UXWing `lock-icon` PNG is staged as
+  `Slot/System/music-icons/lock.png`, decoded/resampled to a black 18px
+  native texture and rendered only while Music Lock is active. It sits
+  immediately to the left of the battery gauge in the **shared top HUD**,
+  with Wi-Fi/update icons shifted left as needed. The former handmade
+  padlock in the Music tab row has been removed; all lock, mute and
+  physical-switch behaviour remains unchanged. `slot-ui::footer` now
+  offers `draw_status_bar_with_lock` while retaining the existing
+  `draw_status_bar` signature for the shelf and other screens.
+
+  Albums **list** uses 9 rows of 40px (instead of 6 rows of 48px) and
+  smaller 34px drawn covers, with 21 rolling 64px GPU thumbnail slots
+  (cursor ±10) rather than 6 reused full 256px images. It requests the
+  nine visible albums first, prefetches up to ten on either side, and
+  limits concurrent new list-cover decode requests to three. While workers
+  are pending, the frontend refreshes at 100ms; when warm it returns
+  to normal low-CPU idle rendering. A slender 2px rose scrollbar at the
+  right indicates list position and size; long titles use the available
+  column without overlapping the rail. Image decoding remains off-thread.
+  Optimised 64px PNGs are stored automatically on SD at
+  `Slot/Cache/Music/thumb64-v1/*.png`. Filename keys include file
+  paths, sizes and modification times of every album candidate track,
+  so updates produce new cache entries. Failed disk writes do not block
+  artwork display. Previous cache files can be deleted safely.
+  **Cover Flow remains 256px**, and Now Playing no longer enlarges tiny
+  64px list textures to 250px; it reuses full Cover Flow art or decodes
+  one full-quality source. This first-run conversion will still do real
+  work, but repeat browsing should use the smaller PNGs. Regressions
+  cover cache round trips, invalid PNGs, sizes, modulo window ownership,
+  layout and shared-HUD lock positioning. Hardware build/performance
+  validation remains pending.
+
 
 - **2026-11-23 physical mute switch / Music Lock correction (hardware
   test pending):** Earlier Music Lock remapped only the

@@ -32,6 +32,7 @@ fn repeat_icon_ink(mode: RepeatMode) -> [u8; 3] {
 }
 const MUSIC_PROGRESS_TRACK: [f32; 4] = [0.84, 0.83, 0.82, 1.0];
 const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
+const HUD_LOCK_SIDE: u32 = 18;
 
 // Match the shared top-left clock, rather than the 32px quick-menu inset.
 const EDGE: f32 = STATUS_MARGIN;
@@ -235,6 +236,8 @@ pub(crate) struct MusicView {
     repeat_icons_loaded: bool,
     repeat_icons: [Option<TexId>; 3],
     title_marquee: TitleMarquee,
+    lock_icon_loaded: bool,
+    lock_icon: Option<TexId>,
 }
 
 impl Default for MusicView {
@@ -251,6 +254,8 @@ impl Default for MusicView {
             repeat_icons_loaded: false,
             repeat_icons: [None; 3],
             title_marquee: TitleMarquee::default(),
+            lock_icon_loaded: false,
+            lock_icon: None,
         }
     }
 }
@@ -295,6 +300,30 @@ impl MusicView {
             RepeatMode::One => 2,
         };
         self.repeat_icons[index]
+    }
+
+    /// Use UXWing's downloaded lock.png from Slot/System/music-icons.
+    /// The icon is uploaded once at 18px and tinted to the common HUD ink.
+    fn lock_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
+        if !self.lock_icon_loaded {
+            self.lock_icon_loaded = true;
+            if let Some(root) = music.icon_root() {
+                let path = root.join("System/music-icons/lock.png");
+                if let Some(bytes) = std::fs::read(path).ok()
+                    .filter(|bytes| bytes.len() <= 4 << 20) {
+                    if let Some(pixels) = decode_lock_icon(&bytes) {
+                        self.lock_icon = Some(compositor.create_texture(
+                            HUD_LOCK_SIDE, HUD_LOCK_SIDE, &pixels,
+                        ));
+                    }
+                }
+            }
+        }
+        self.lock_icon
+    }
+
+    pub(crate) fn hud_lock_icon(&self) -> Option<(TexId, u32, u32)> {
+        self.lock_icon.map(|id| (id, HUD_LOCK_SIDE, HUD_LOCK_SIDE))
     }
 
     /// Only long titles need the additional low-frequency redraws.
@@ -505,6 +534,9 @@ impl MusicView {
             self.title_marquee.reset();
             None
         };
+        if music.locked() {
+            let _ = self.lock_icon(music, compositor);
+        }
         let mut p = Painter {
             cache: &mut self.cache,
             index: 0,
@@ -536,12 +568,25 @@ impl MusicView {
         } else {
             p.browser(music, &album_art);
         }
-        // A quiet icon only; the locked state needs no message or hint bar.
-        if music.locked() {
-            p.lock_indicator();
-        }
         p.draws
     }
+}
+
+/// Downsample the user-selected UXWing lock icon to a single black 18px
+/// texture. The downloadable PNG has a transparent background; this also
+/// supports the common black-on-white downloads by removing white pixels.
+fn decode_lock_icon(png: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = crate::cart_art::png_size(png)?;
+    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
+    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
+    let mut pixels = slot_ui::cover_rgba(&rgba, w, h, HUD_LOCK_SIDE, HUD_LOCK_SIDE)?;
+    for px in pixels.chunks_exact_mut(4) {
+        let darkness = 255 - ((u16::from(px[0]) + u16::from(px[1])
+            + u16::from(px[2])) / 3) as u8;
+        px[3] = ((u16::from(px[3]) * u16::from(darkness)) / 255) as u8;
+        px[..3].fill(0);
+    }
+    Some(pixels)
 }
 
 /// UXWing PNG assets are downsized to a single 32px texture per mode.
@@ -944,17 +989,6 @@ impl Painter<'_> {
         let key = format!("{px}/120/{ink:?}/{text}");
         let face = self.texture(key, |scale| menu_text_face(text, px, 120, scale, ink));
         self.place(face, right - face.size[0] as f32, y);
-    }
-
-    fn lock_indicator(&mut self) {
-        let ink = MUSIC_TEXT_INK.map(|channel| channel as f32 / 255.0);
-        let color = [ink[0], ink[1], ink[2], 1.0];
-        let (x, y) = (MUSIC_LOCK_X, MUSIC_LOCK_Y);
-        // Draw the padlock directly: no external PNG or font glyph required.
-        self.rect([x + 4.0, y], [2.0, 8.0], color);
-        self.rect([x + 12.0, y], [2.0, 8.0], color);
-        self.rect([x + 5.0, y - 2.0], [8.0, 2.0], color);
-        self.rect([x + 2.0, y + 8.0], [14.0, 10.0], color);
     }
 
     fn music_tabs(&mut self, selected: usize) {
@@ -1372,11 +1406,10 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn locked_music_indicator_is_in_the_tab_row_and_off_the_hud() {
-        assert!(MUSIC_LOCK_X >= OUT_W as f32 - EDGE - 20.0);
-        assert!(MUSIC_LOCK_X + 18.0 <= OUT_W as f32 - EDGE);
-        assert!(MUSIC_LOCK_Y > TITLE_TOP);
-        assert!(MUSIC_LOCK_Y + 18.0 < 90.0);
+    fn uxwing_lock_icon_uses_compact_hud_size() {
+        assert_eq!(HUD_LOCK_SIDE, 18);
+        let view = MusicView::default();
+        assert!(view.hud_lock_icon().is_none());
     }
 
     #[test]

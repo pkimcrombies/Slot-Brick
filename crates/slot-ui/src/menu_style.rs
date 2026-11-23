@@ -119,6 +119,30 @@ mod marquee_tests {
     use super::*;
 
     #[test]
+    fn full_title_raster_matches_the_previous_first_viewport() {
+        let title = "매우 긴 제목 — this title keeps scrolling smoothly";
+        let room = 200;
+        let whole = menu_marquee_whole_face(
+            title, 26, [1.0, 1.0], MENU_SELECTION_INK,
+        );
+        let (old, _) = menu_marquee_face(
+            title, 26, room, [1.0, 1.0], MENU_SELECTION_INK, 0.0,
+        );
+        assert!(whole.w > room);
+        assert_eq!(whole.h, old.h);
+        for y in 0..whole.h {
+            let old_start = (y * room * 4) as usize;
+            let whole_start = (y * whole.w * 4) as usize;
+            let len = (room * 4) as usize;
+            assert_eq!(
+                &whole.rgba[whole_start..whole_start + len],
+                &old.rgba[old_start..old_start + len],
+                "cached title crop must retain the same glyph placement"
+            );
+        }
+    }
+
+    #[test]
     fn long_mixed_korean_titles_render_inside_bounded_viewport() {
         let title = "아주 긴 노래 제목 a very long English song title";
         let natural = menu_marquee_width(title, 26);

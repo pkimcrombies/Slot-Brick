@@ -916,6 +916,12 @@ impl Frontend {
         // stop requesting extra frames as soon as the movement completes.
         if matches!(self.app().phase(), Phase::Music)
             && self.music_view.cover_flow_animating() {return true}
+        // Completed background decodes are polled every 100ms until the
+        // 15-cover prefetch window is warm, then the ordinary idle redraw
+        // gate takes over. Otherwise artwork may pop in only on a key press.
+        if matches!(self.app().phase(), Phase::Music)
+            && self.music_view.cover_flow_loading()
+            && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.

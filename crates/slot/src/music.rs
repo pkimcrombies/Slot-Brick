@@ -1548,9 +1548,12 @@ mod tests {
         music.input(Action::GbaDown(Btn::X));
         assert!(!music.cover_flow());
         music.input(Action::GbaDown(Btn::Right));
-        assert!(music.viewing_artists(), "list mode retains the existing root tab controls");
+        assert!(!music.viewing_artists(),
+            "D-pad cannot switch tabs even in the album list");
+        music.input(Action::GbaDown(Btn::R1));
+        assert!(music.viewing_artists(), "R1 is now the only right tab switch");
         music.input(Action::GbaDown(Btn::L1));
-        assert!(music.cover_flow() == false && !music.viewing_artists());
+        assert!(!music.cover_flow() && !music.viewing_artists());
     }
 
     use std::fs;
@@ -1719,16 +1722,16 @@ mod tests {
             "albums with the same title use the album artist to distinguish them"
         );
         assert_eq!(music.row(1), ("Mixtape", Some("Various Artists")));
-        // This test covers the legacy list navigation. Cover Flow is the new
-        // default, where Right advances an album instead of changing tabs.
+        // The list view no longer switches tabs with the D-pad. L1/R1
+        // alone switch sections; artists root uses left/right for letters.
         music.input(Action::GbaDown(Btn::X));
         assert!(!music.cover_flow());
         music.input(Action::GbaDown(Btn::Right));
-        assert_eq!(music.label(), "artists");
-        music.input(Action::GbaDown(Btn::Left));
         assert_eq!(music.label(), "albums");
         music.input(Action::GbaDown(Btn::R1));
         assert_eq!(music.label(), "artists");
+        music.input(Action::GbaDown(Btn::Left));
+        assert_eq!(music.label(), "artists", "Left must stay within Artists");
         assert_eq!(music.row_count(), 2);
         music.input(Action::GbaDown(Btn::Down));
         assert_eq!(music.row(music.cursor()).0, "Various Artists");

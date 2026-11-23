@@ -45,6 +45,7 @@ struct PresentationStats {
     superseded: u32,
     max_delay: f64,
     upload: Duration,
+    first_picture: Duration,
 }
 
 /// An instance is owned by Frontend and outlives any individual Music track.
@@ -57,6 +58,7 @@ pub(crate) struct MusicVideo {
     next: Option<VideoFrame>,
     shown: Option<(u32, u32)>,
     clock: f64,
+    started_at: Option<Instant>,
     failed: bool,
     finished: bool,
     stats: PresentationStats,
@@ -71,17 +73,20 @@ impl MusicVideo {
         self.failed || self.finished
     }
 
-    pub(crate) fn completed(&self) -> bool {
-        self.finished && !self.failed
+    pub(crate) fn picture_ready(&self) -> bool {
+        // A buffered frame can start the soundtrack even if its own PTS
+        // is still in the future. This also handles a video with lead-in.
+        self.stats.shown > 0 || self.next.is_some()
     }
 
     pub(crate) fn stop(&mut self) {
         let stats = std::mem::take(&mut self.stats);
         if stats.shown > 0 || stats.late > 0 {
             eprintln!(
-                "slot: native video presentation: {} displayed, {} too late, {} superseded, worst delay {:.1} ms, average upload {:.1} ms",
+                "slot: native video presentation: {} displayed, {} too late, {} superseded, worst delay {:.1} ms, average upload {:.1} ms, first picture {:.1} ms",
                 stats.shown, stats.late, stats.superseded, stats.max_delay * 1000.0,
                 stats.upload.as_secs_f64() * 1000.0 / f64::from(stats.shown.max(1)),
+                stats.first_picture.as_secs_f64() * 1000.0,
             );
         }
         if let Some(cancel) = self.cancel.take() {
@@ -93,11 +98,15 @@ impl MusicVideo {
         self.next = None;
         self.path = None;
         self.shown = None;
+        self.started_at = None;
         self.failed = false;
         self.finished = false;
     }
 
     fn start(&mut self, path: PathBuf, at: f64) {
+        // On a seek, keep the old picture visible until the new one is
+        // ready. Readiness uses the new decoder's presentation stats.
+        let previous_picture = self.shown.filter(|_| self.path.as_deref() == Some(path.as_path()));
         self.stop();
         // The decoded planes are compact enough to buffer a few frames
         // through a short CPU decode spike without delaying presentation.
@@ -127,6 +136,8 @@ impl MusicVideo {
                 self.cancel = Some(cancel);
                 self.receiver = Some(receiver);
                 self.clock = at;
+                self.shown = previous_picture;
+                self.started_at = Some(Instant::now());
             }
             Err(err) => {
                 self.path = Some(path);
@@ -211,16 +222,22 @@ impl MusicVideo {
             self.stats.upload += started.elapsed();
             self.shown = Some((w, h));
             self.stats.shown += 1;
+            if let Some(started) = self.started_at.take() {
+                self.stats.first_picture = started.elapsed();
+            }
         }
+        if self.failed {
+            return;
+        }
+        draws.clear();
+        draws.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
+            colour: [0.0, 0.0, 0.0, 1.0],
+        });
         if let Some((w, h)) = self.shown {
             let factor = (OUT_W as f32 / w as f32).min(OUT_H as f32 / h as f32);
             let width = w as f32 * factor;
             let height = h as f32 * factor;
-            draws.clear();
-            draws.push(Draw::Rect {
-                x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
-                colour: [0.0, 0.0, 0.0, 1.0],
-            });
             draws.push(Draw::Video {
                 x: (OUT_W as f32 - width) * 0.5,
                 y: (OUT_H as f32 - height) * 0.5,
@@ -422,8 +439,10 @@ mod tests {
         let mut video = MusicVideo {
             receiver: Some(receiver),
             clock: 1.08,
+            shown: Some((1, 1)),
             ..MusicVideo::default()
         };
+        assert!(!video.picture_ready(), "the picture held during a seek is not a new frame");
         for pts in [1.0, 1.0417, 1.0833, 1.125] {
             sender.send(Message::Frame(VideoFrame {
                 pts, width: 1, height: 1, planes: [vec![16], vec![128], vec![128]],
@@ -431,6 +450,7 @@ mod tests {
         }
 
         assert_eq!(video.take_due_frame().unwrap().pts, 1.0833);
+        assert!(video.picture_ready(), "a buffered future picture releases the soundtrack");
         assert!(video.take_due_frame().is_none(), "keep future frames for their slot");
         video.clock = 1.12;
         assert_eq!(video.take_due_frame().unwrap().pts, 1.125);

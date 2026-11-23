@@ -11,14 +11,14 @@ were explicitly rejected by the user.
 ## Minimal acceptable experience
 
 - Same-stem `Music/Artist/Song.mp3` + `Song.mp4` detection already exists.
-- Now Playing starts with the song and album art. Y switches to the MP4
-  and its soundtrack. Switching with Y carries the current percentage
-  across when both durations are known. Without a duration, the video
-  starts at zero and returning resumes the parked song. A decode error
-  preserves the song position. The physical hold switch still blocks Y.
-- A pauses the current media. Up/Down seek within the current media. Track
-  changes return to album artwork. Silent videos use their own elapsed
-  time. Both modes use Slot's existing audio output.
+- Y on Now Playing pauses the song and opens the companion MP4 from the
+  beginning with its soundtrack. In the movie player, Left and Right
+  seek ten seconds, A pauses or resumes, and Y, B or Menu closes it.
+  Closing or finishing the movie returns to the song, paused at the
+  position it was left. The physical hold switch still blocks Y.
+- The movie freezes its clock and soundtrack while the first picture
+  loads or the decoder seeks. Silent videos use their own elapsed time.
+  Both modes use Slot's existing audio output.
 - Use Slot's own EGL ES2 / texture uploads and screen pipeline. Do **not**
   run ffplay, SDL2, a separate display process, or a helper needing
   legacy stock-firmware shared libraries.
@@ -73,7 +73,8 @@ when converting. Conversion runs on the computer.
 For choppy playback, play a representative section and press Y to close
 the video. In `Slot/Logs/slot.log`, the worker reports the average time
 spent reading and decoding. The presentation summary reports texture
-upload time, displayed frames and frames that arrived too late.
+upload time, time to the first picture, displayed frames and frames
+that arrived too late.
 
 ## Pre-install verification
 

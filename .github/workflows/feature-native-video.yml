@@ -42,10 +42,12 @@ jobs:
         env:
           SLOT_NATIVE_VIDEO_FIXTURE: /tmp/slot-baseline-h264.mp4
         run: cargo +1.96 test -p slot --no-default-features --features sim --lib music_video::tests::decodes_real_h264_mp4_fixture_with_presentation_timestamps -- --nocapture
-      - name: Test AAC soundtrack and percentage switching
+      - name: Test movie controls and AAC soundtrack
         env:
           SLOT_NATIVE_VIDEO_SOUNDTRACK_FIXTURE: /tmp/slot-baseline-h264.mp4
-        run: cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::native_video_
+        run: |
+          cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::native_video_plays_its_embedded_soundtrack_from_the_start
+          cargo +1.96 test -p slot --no-default-features --features sim --lib music::tests::now_playing_y_opens_video_and_leaves_the_song_paused_on_exit
       - name: Verify YUV colour and texture updates in OpenGL ES
         env:
           EGL_PLATFORM: surfaceless

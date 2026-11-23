@@ -68,6 +68,11 @@ impl MusicCover {
         self.track.as_deref() == Some(track)
     }
 
+    /// Pending covers are polled more often only while Cover Flow is visible.
+    pub(crate) fn is_loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn loaded_for_test(track: &Path, tex: TexId, size: [u32; 2]) -> Self {
         Self {
@@ -290,11 +295,12 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         cover.track = Some(PathBuf::from("Music/Old/01.mp3"));
         cover.loading = Some(Load { cancel: cancel.clone(), result });
+        assert!(cover.is_loading());
         // Keep the sender alive: the old worker has not completed.
         assert!(!cancel.load(Ordering::Relaxed));
         cover.cancel_stale(Path::new("Music/New/01.mp3"));
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(cover.loading.is_none(),
+        assert!(!cover.is_loading(),
             "new album must be free to start without waiting for the previous worker");
         assert!(sender.send(None).is_err(),
             "dropped receiver must discard a late old result");

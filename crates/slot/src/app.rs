@@ -2114,6 +2114,15 @@ impl App {
                 }
                 self.vol_before.clear();
                 if let Some(music) = self.music.as_mut() {
+                    // The physical switch is authoritative while engaged:
+                    // a shortcut cannot unlock a switch-held player.
+                    #[cfg(feature = "brick")]
+                    if self.brick_mute == Some(true) {
+                        music.set_locked(true);
+                    } else {
+                        music.toggle_lock();
+                    }
+                    #[cfg(not(feature = "brick"))]
                     music.toggle_lock();
                 }
                 return;
@@ -2385,7 +2394,16 @@ impl App {
         match row {
             QuickRow::Music => {
                 if let Some(root) = &self.root {
-                    self.music = Some(crate::music::Music::open(root));
+                    let mut music = crate::music::Music::open(root);
+                    // If Music is opened while the physical mute switch is
+                    // already ON, enter hold immediately and do not silence
+                    // the music. Merely reading an unchanged GPIO must not
+                    // be required to initialise lock state.
+                    #[cfg(feature = "brick")]
+                    if self.brick_mute == Some(true) {
+                        music.set_locked(true);
+                    }
+                    self.music = Some(music);
                     self.phase = Phase::Music;
                 }
             }
@@ -2744,8 +2762,17 @@ impl App {
         if self.vol_before.len() == 2 {
             self.vol_before.remove(0);
         }
+        // Remember the software mute bit, not the *effective* mute which
+        // may come from the Brick's physical switch. Otherwise the volume
+        // chord inadvertently copies hardware mute into persistent state,
+        // leaving Music silent even when its GPIO mute is overridden.
+        let software_muted = if self.headphones {
+            self.state.muted_hp
+        } else {
+            self.state.muted
+        };
         self.vol_before
-            .push((self.level(), self.muted(), self.now()));
+            .push((self.level(), software_muted, self.now()));
     }
 
     fn mute_toggle(&mut self) {
@@ -2821,9 +2848,19 @@ impl App {
 
     #[cfg(feature = "brick")]
     pub fn set_brick_mute(&mut self, muted: bool) {
-        if self.brick_mute == Some(muted) {return;}
+        if self.brick_mute == Some(muted) { return; }
         let initial = self.brick_mute.is_none();
         self.brick_mute = Some(muted);
+        if matches!(self.phase, Phase::Music) {
+            // The physical switch is Music's hold switch. Do not set
+            // software mute, change volume or show a volume HUD.
+            if let Some(music) = self.music.as_mut() {
+                music.set_locked(muted);
+            }
+            return;
+        }
+        // Outside Music the switch retains the original hardware-mute
+        // semantics. Preserve the existing unmute-on-release behaviour.
         if !muted && !initial {
             self.state.muted = false;
             self.state.muted_hp = false;
@@ -2834,7 +2871,12 @@ impl App {
     }
     pub fn muted(&self) -> bool {
         #[cfg(feature = "brick")]
-        if self.brick_mute == Some(true) {return true;}
+        if self.brick_mute == Some(true)
+            && !matches!(self.phase, Phase::Music) {
+            return true;
+        }
+        // Music bypasses only the GPIO hardware-mute flag, not a genuine
+        // software mute that the user explicitly selected elsewhere.
         if self.headphones {
             self.state.muted_hp
         } else {

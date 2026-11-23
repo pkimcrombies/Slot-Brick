@@ -652,8 +652,10 @@
   (https://uxwing.com/unlocked-icon/) for the brief unlocked state,
   replacing Lock Line and Lock Open Line.
 - Only the two offline asset download URLs need to change: keep
-  `Slot/System/music-icons/lock.png` and `unlock.png`, HUD-centred 18px,
-  black-tinted by the current native decoder. No changes to lock state,
+  `Slot/System/music-icons/lock.png` and `unlock.png`, HUD-centred 18px.
+  The native lock-only PNG decoder now preserves their **original colours**
+  (necessary to retain the yellow body/keyhole contrast), unlike earlier
+  black-tinted line artwork. No changes to lock state,
   600ms hold, input handling, rendering schedule, or other Music icons.
 - Installer **must** use the two newly selected UXWing image URLs,
   validate PNG signatures/dimensions, back up and checksum both assets,
@@ -671,8 +673,8 @@
   Locking again cancels the open indication instantly and restores the
   closed lock. Unlock works immediately regardless of this visual feedback.
 - The closed icon is `Slot/System/music-icons/lock.png` and the open icon
-  is `Slot/System/music-icons/unlock.png`. Both use the same black-tinted
-  cached GPU decoder. The MusicView owns a short render deadline; the
+  is `Slot/System/music-icons/unlock.png`. Both retain their original
+  transparent PNG colours in one-time cached GPU textures. The MusicView owns a short render deadline; the
   shared Shelf/game status positions and audio/input behaviour stay as-is.
   Ensure any supplied guarded installer downloads, validates, backs up,
   and SHA-verifies the additional `unlock.png` asset before installing.

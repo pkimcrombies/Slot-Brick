@@ -25,6 +25,7 @@ const FRAME_QUEUE: usize = 5;
 // Allow half a 60 Hz refresh of lead time when choosing the next frame.
 const FRAME_AHEAD: f64 = 0.008;
 const KEEP_FRAME_WITHIN: f64 = 0.050;
+const MOVIE_FADE: Duration = Duration::from_millis(180);
 
 pub(crate) struct VideoFrame {
     pub(crate) pts: f64,
@@ -49,6 +50,30 @@ struct PresentationStats {
     first_picture: Duration,
 }
 
+#[derive(Clone, Copy)]
+struct MoviePicture {
+    size: (u32, u32),
+    since: Instant,
+    fading_from: Option<f32>,
+}
+
+impl MoviePicture {
+    fn new(size: (u32, u32), now: Instant) -> Self {
+        Self { size, since: now, fading_from: None }
+    }
+
+    fn opacity(&self, now: Instant) -> f32 {
+        let t = (now.saturating_duration_since(self.since).as_secs_f32()
+            / MOVIE_FADE.as_secs_f32()).min(1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        self.fading_from.map_or(eased, |from| from * (1.0 - eased))
+    }
+
+    fn close(self, now: Instant) -> Self {
+        Self { since: now, fading_from: Some(self.opacity(now)), ..self }
+    }
+}
+
 /// An instance is owned by Frontend and outlives any individual Music track.
 /// No worker ever owns the audio ring or graphics context.
 #[derive(Default)]
@@ -57,7 +82,7 @@ pub(crate) struct MusicVideo {
     cancel: Option<Arc<AtomicBool>>,
     receiver: Option<Receiver<Message>>,
     next: Option<VideoFrame>,
-    shown: Option<(u32, u32)>,
+    picture: Option<MoviePicture>,
     clock: f64,
     started_at: Option<Instant>,
     failed: bool,
@@ -68,6 +93,10 @@ pub(crate) struct MusicVideo {
 impl MusicVideo {
     pub(crate) fn active(&self) -> bool {
         self.path.is_some() && !self.failed && !self.finished
+    }
+
+    pub(crate) fn needs_render(&self) -> bool {
+        self.active() || self.picture.is_some_and(|picture| picture.fading_from.is_some())
     }
 
     pub(crate) fn ended(&self) -> bool {
@@ -98,7 +127,7 @@ impl MusicVideo {
         self.receiver = None;
         self.next = None;
         self.path = None;
-        self.shown = None;
+        self.picture = None;
         self.started_at = None;
         self.failed = false;
         self.finished = false;
@@ -107,7 +136,7 @@ impl MusicVideo {
     fn start(&mut self, path: PathBuf, at: f64) {
         // On a seek, keep the old picture visible until the new one is
         // ready. Readiness uses the new decoder's presentation stats.
-        let previous_picture = self.shown.filter(|_| self.path.as_deref() == Some(path.as_path()));
+        let previous_picture = self.picture.filter(|_| self.path.as_deref() == Some(path.as_path()));
         self.stop();
         // The decoded planes are compact enough to buffer a few frames
         // through a short CPU decode spike without delaying presentation.
@@ -137,7 +166,7 @@ impl MusicVideo {
                 self.cancel = Some(cancel);
                 self.receiver = Some(receiver);
                 self.clock = at;
-                self.shown = previous_picture;
+                self.picture = previous_picture;
                 self.started_at = Some(Instant::now());
             }
             Err(err) => {
@@ -152,7 +181,9 @@ impl MusicVideo {
     pub(crate) fn sync(&mut self, selected: Option<(&Path, f64, bool)>) {
         let Some((path, position, restart)) = selected else {
             if self.path.is_some() {
+                let picture = self.picture;
                 self.stop();
+                self.picture = picture.map(|picture| picture.close(Instant::now()));
             }
             return;
         };
@@ -200,7 +231,6 @@ impl MusicVideo {
                 Message::Error(err) => {
                     eprintln!("slot: native video: {err}");
                     self.failed = true;
-                    self.shown = None;
                     return None;
                 }
                 Message::Finished => {
@@ -214,43 +244,54 @@ impl MusicVideo {
 
     /// Upload at most one frame for each presentation, using compact YUV planes.
     pub(crate) fn overlay(&mut self, compositor: &mut Compositor, draws: &mut Vec<Draw>) {
-        if self.path.is_none() || self.failed {
-            return;
-        }
-        if let Some(frame) = self.take_due_frame() {
+        let frame = if self.path.is_some() && !self.failed {
+            self.take_due_frame()
+        } else {
+            None
+        };
+        if let Some(frame) = frame {
             let (w, h) = (frame.width, frame.height);
             let started = Instant::now();
             if let Err(error) = compositor.upload_video_420(w, h, frame.planes.each_ref().map(Vec::as_slice)) {
                 eprintln!("slot: native video: {error}");
-                self.shown = None;
+                self.picture = None;
                 self.failed = true;
                 return;
             }
             self.stats.upload += started.elapsed();
-            self.shown = Some((w, h));
+            self.picture.get_or_insert_with(|| MoviePicture::new((w, h), Instant::now())).size = (w, h);
             self.stats.shown += 1;
             if let Some(started) = self.started_at.take() {
                 self.stats.first_picture = started.elapsed();
             }
         }
-        if self.failed {
+        let Some(picture) = self.picture else { return };
+        let alpha = picture.opacity(Instant::now());
+        if alpha == 0.0 {
+            if picture.fading_from.is_some() {
+                self.picture = None;
+            }
             return;
         }
-        draws.clear();
-        draws.push(Draw::Rect {
-            x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32,
-            colour: [0.0, 0.0, 0.0, 1.0],
-        });
-        if let Some((w, h)) = self.shown {
-            let factor = (OUT_W as f32 / w as f32).min(OUT_H as f32 / h as f32);
-            let width = w as f32 * factor;
-            let height = h as f32 * factor;
-            draws.push(Draw::Video {
-                x: (OUT_W as f32 - width) * 0.5,
-                y: (OUT_H as f32 - height) * 0.5,
-                w: width, h: height,
-            });
+        if alpha == 1.0 {
+            draws.clear();
         }
+        let (w, h) = picture.size;
+        let canvas = (OUT_W as f32, OUT_H as f32);
+        let factor = (canvas.0 / w as f32).min(canvas.1 / h as f32);
+        let (w, h) = (w as f32 * factor, h as f32 * factor);
+        let (x, y) = ((canvas.0 - w) * 0.5, (canvas.1 - h) * 0.5);
+        // Only blend the uncovered bars. A full black rectangle would
+        // darken the art twice where the movie itself crossfades.
+        for [x, y, w, h] in [
+            [0.0, 0.0, x, canvas.1], [x + w, 0.0, x, canvas.1],
+            [x, 0.0, w, y], [x, y + h, w, y],
+        ] {
+            if w > 0.0 && h > 0.0 {
+                draws.push(Draw::Rect { x, y, w, h, colour: [0.0, 0.0, 0.0, alpha] });
+            }
+        }
+        draws.push(Draw::Video { x, y, w, h, alpha });
     }
 }
 
@@ -441,12 +482,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn movie_picture_fades_in_and_reverses_without_flashing() {
+        let start = Instant::now();
+        let picture = MoviePicture::new((640, 360), start);
+        let halfway = start + MOVIE_FADE / 2;
+        assert_eq!(picture.opacity(start), 0.0);
+        assert!((picture.opacity(halfway) - 0.5).abs() < 1e-6);
+        assert_eq!(picture.opacity(start + MOVIE_FADE), 1.0);
+
+        let closing = picture.close(halfway);
+        assert_eq!(closing.opacity(halfway), picture.opacity(halfway));
+        assert!((closing.opacity(halfway + MOVIE_FADE / 2) - 0.25).abs() < 1e-6);
+        assert_eq!(closing.opacity(halfway + MOVIE_FADE), 0.0);
+    }
+
+    #[test]
     fn presentation_keeps_only_the_newest_due_frame() {
         let (sender, receiver) = mpsc::channel();
         let mut video = MusicVideo {
             receiver: Some(receiver),
             clock: 1.08,
-            shown: Some((1, 1)),
+            picture: Some(MoviePicture::new((1, 1), Instant::now())),
             ..MusicVideo::default()
         };
         assert!(!video.picture_ready(), "the picture held during a seek is not a new frame");
@@ -469,7 +525,7 @@ mod tests {
         let mut video = MusicVideo {
             receiver: Some(receiver),
             clock: 1.084,
-            shown: Some((1, 1)),
+            picture: Some(MoviePicture::new((1, 1), Instant::now())),
             stats: PresentationStats { shown: 1, ..PresentationStats::default() },
             ..MusicVideo::default()
         };

@@ -124,10 +124,10 @@ impl Compositor {
                         self.game.draw_still(tex, &self.quad);
                     }
                 }
-                Draw::Video { x, y, w, h } => {
+                Draw::Video { x, y, w, h, alpha } => {
                     self.sprites.draw(&items[from..i], &self.quad);
                     if let Some(video) = &self.video {
-                        video.draw([x, y, w, h], &self.quad);
+                        video.draw([x, y, w, h], alpha, &self.quad);
                     }
                 }
                 _ => continue,

@@ -382,19 +382,14 @@ pub(crate) struct MusicView {
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
     playing_backdrop: Option<PlayingBackdrop>,
-    repeat_icons_loaded: bool,
-    repeat_icons: [Option<TexId>; 3],
+    repeat_icons: [MusicIcon; 3],
     title_marquee: TitleMarquee,
-    lock_icon_loaded: bool,
-    lock_icon: Option<TexId>,
-    unlock_icon_loaded: bool,
-    unlock_icon: Option<TexId>,
+    lock_icon: MusicIcon,
+    unlock_icon: MusicIcon,
     lock_feedback: LockFeedback,
     lock_glyph: Option<LockGlyph>,
-    playback_icons_loaded: bool,
-    playback_icons: [Option<TexId>; 2],
-    youtube_icon_loaded: bool,
-    youtube_icon: Option<TexId>,
+    playback_icons: [MusicIcon; 2],
+    youtube_icon: MusicIcon,
     video_badge: VideoBadgeCache,
 }
 
@@ -409,152 +404,70 @@ impl Default for MusicView {
             flow_motion: FlowMotion::default(),
             flow_placeholder: None,
             playing_backdrop: None,
-            repeat_icons_loaded: false,
-            repeat_icons: [None; 3],
+            repeat_icons: std::array::from_fn(|_| MusicIcon::default()),
             title_marquee: TitleMarquee::default(),
-            lock_icon_loaded: false,
-            lock_icon: None,
-            unlock_icon_loaded: false,
-            unlock_icon: None,
+            lock_icon: MusicIcon::default(),
+            unlock_icon: MusicIcon::default(),
             lock_feedback: LockFeedback::default(),
             lock_glyph: None,
-            playback_icons_loaded: false,
-            playback_icons: [None; 2],
-            youtube_icon_loaded: false,
-            youtube_icon: None,
+            playback_icons: std::array::from_fn(|_| MusicIcon::default()),
+            youtube_icon: MusicIcon::default(),
             video_badge: VideoBadgeCache::default(),
         }
     }
 }
 
-impl MusicView {
-    /// Load official repeat PNGs once from the SD card, not from the network.
-    /// Missing/invalid files fall back to Slot's built-in simple arrow symbol.
-    fn repeat_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
-        if !self.repeat_icons_loaded {
-            self.repeat_icons_loaded = true;
-            if let Some(root) = music.icon_root() {
-                let folder = root.join("System/music-icons");
-                for (index, name) in REPEAT_ICON_FILES.iter().enumerate() {
-                    let path = folder.join(name);
-                    let Some(bytes) = std::fs::read(path).ok().filter(|b| b.len() <= 4 << 20) else {
-                        continue;
-                    };
-                    let Some(mut pixels) = decode_repeat_icon(&bytes) else { continue };
-                    let mode = match index {
-                        0 => RepeatMode::Off,
-                        1 => RepeatMode::All,
-                        _ => RepeatMode::One,
-                    };
-                    let ink = repeat_icon_ink(mode);
-                    // UXWing's black symbols become neutral grey or HUD black while
-                    // retaining antialiased edges. White pixels are transparent.
-                    for pixel in pixels.chunks_exact_mut(4) {
-                        let darkness = 255 - ((u16::from(pixel[0]) + u16::from(pixel[1])
-                            + u16::from(pixel[2])) / 3) as u8;
-                        pixel[3] = ((u16::from(pixel[3]) * u16::from(darkness)) / 255) as u8;
-                        pixel[..3].copy_from_slice(&ink);
-                    }
-                    self.repeat_icons[index] = Some(compositor.create_texture(
-                        REPEAT_ICON_SIDE, REPEAT_ICON_SIDE, &pixels,
-                    ));
+#[derive(Default)]
+struct MusicIcon {
+    size: [u32; 2],
+    texture: Option<TexId>,
+}
+
+impl MusicIcon {
+    fn load(
+        &mut self, music: &Music, file: &str, side: u32, scale: [f32; 2],
+        ink: Option<[u8; 3]>, compositor: &mut Compositor,
+    ) -> Option<TexId> {
+        // Match pixel_aligned_texture so one sampled texel covers one
+        // compositor pixel, even at the Brick Pro's 1.6× scale.
+        let size = music_icon_size(side, scale);
+        if self.size != size {
+            self.size = size;
+            let pixels = music.icon_root()
+                .and_then(|root| std::fs::read(root.join("System/music-icons").join(file)).ok())
+                .filter(|bytes| bytes.len() <= 4 << 20)
+                .and_then(|bytes| decode_music_icon(&bytes, size, ink));
+            let [w, h] = size;
+            self.texture = pixels.map(|pixels| match self.texture {
+                Some(id) => {
+                    compositor.update_texture(id, w, h, &pixels);
+                    id
                 }
-            }
+                None => compositor.create_texture_nearest(w, h, &pixels),
+            });
         }
-        let index = match music.repeat_mode() {
+        self.texture
+    }
+}
+
+impl MusicView {
+    fn repeat_icon(&mut self, music: &Music, scale: [f32; 2], compositor: &mut Compositor) -> Option<TexId> {
+        let mode = music.repeat_mode();
+        let index = match mode {
             RepeatMode::Off => 0,
             RepeatMode::All => 1,
             RepeatMode::One => 2,
         };
-        self.repeat_icons[index]
-    }
-
-    /// Use UXWing's downloaded lock.png from Slot/System/music-icons.
-    /// The icon is uploaded once at 18px and tinted to the common HUD ink.
-    fn lock_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
-        if !self.lock_icon_loaded {
-            self.lock_icon_loaded = true;
-            if let Some(root) = music.icon_root() {
-                let path = root.join("System/music-icons/lock.png");
-                if let Some(bytes) = std::fs::read(path).ok()
-                    .filter(|bytes| bytes.len() <= 4 << 20) {
-                    if let Some(pixels) = decode_lock_icon(&bytes) {
-                        self.lock_icon = Some(compositor.create_texture(
-                            HUD_LOCK_SIDE, HUD_LOCK_SIDE, &pixels,
-                        ));
-                    }
-                }
-            }
-        }
-        self.lock_icon
-    }
-
-    /// Same UXWing 18px outline style as the closed padlock.
-    fn unlock_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
-        if !self.unlock_icon_loaded {
-            self.unlock_icon_loaded = true;
-            if let Some(root) = music.icon_root() {
-                let path = root.join("System/music-icons/unlock.png");
-                if let Some(bytes) = std::fs::read(path).ok()
-                    .filter(|bytes| bytes.len() <= 4 << 20) {
-                    if let Some(pixels) = decode_lock_icon(&bytes) {
-                        self.unlock_icon = Some(compositor.create_texture(
-                            HUD_LOCK_SIDE, HUD_LOCK_SIDE, &pixels,
-                        ));
-                    }
-                }
-            }
-        }
-        self.unlock_icon
-    }
-
-    /// Load playback images from SD once and reuse GPU textures on every frame.
-    fn playback_icon(&mut self, music: &Music, status: Status,
-                     compositor: &mut Compositor) -> Option<TexId> {
-        let index = playback_icon_index(status)?;
-        if !self.playback_icons_loaded {
-            self.playback_icons_loaded = true;
-            if let Some(root) = music.icon_root() {
-                let folder = root.join("System/music-icons");
-                for (i, file) in PLAYBACK_ICON_FILES.iter().enumerate() {
-                    let Some(bytes) = std::fs::read(folder.join(file)).ok()
-                        .filter(|bytes| bytes.len() <= 4 << 20) else { continue };
-                    let Some(pixels) = decode_status_icon(&bytes, PLAYBACK_ICON_SIDE) else {
-                        continue;
-                    };
-                    self.playback_icons[i] = Some(compositor.create_texture(
-                        PLAYBACK_ICON_SIDE, PLAYBACK_ICON_SIDE, &pixels,
-                    ));
-                }
-            }
-        }
-        self.playback_icons[index]
-    }
-
-    /// Downloaded by the installer, decoded once and kept in GPU memory.
-    /// Keep UXWing's red-and-white artwork and transparent background.
-    fn youtube_icon(&mut self, music: &Music, compositor: &mut Compositor) -> Option<TexId> {
-        if !self.youtube_icon_loaded {
-            self.youtube_icon_loaded = true;
-            if let Some(root) = music.icon_root() {
-                let path = root.join("System/music-icons").join(VIDEO_BADGE_FILE);
-                if let Some(bytes) = std::fs::read(path).ok()
-                    .filter(|bytes| bytes.len() <= 4 << 20) {
-                    if let Some(pixels) = decode_youtube_icon(&bytes) {
-                        self.youtube_icon = Some(compositor.create_texture(
-                            VIDEO_BADGE_SIDE, VIDEO_BADGE_SIDE, &pixels,
-                        ));
-                    }
-                }
-            }
-        }
-        self.youtube_icon
+        self.repeat_icons[index].load(
+            music, REPEAT_ICON_FILES[index], REPEAT_ICON_SIDE, scale,
+            Some(repeat_icon_ink(mode)), compositor,
+        )
     }
 
     pub(crate) fn hud_lock_icon(&self) -> Option<(TexId, u32, u32)> {
         let id = match self.lock_glyph {
-            Some(LockGlyph::Closed) => self.lock_icon,
-            Some(LockGlyph::Open) => self.unlock_icon,
+            Some(LockGlyph::Closed) => self.lock_icon.texture,
+            Some(LockGlyph::Open) => self.unlock_icon.texture,
             None => None,
         }?;
         Some((id, HUD_LOCK_SIDE, HUD_LOCK_SIDE))
@@ -770,20 +683,25 @@ impl MusicView {
         };
         let repeat_icon = if music.showing_now_playing()
             && music.track.is_some() && !music.music_settings_open() {
-            self.repeat_icon(music, compositor)
+            self.repeat_icon(music, scale, compositor)
         } else {
             None
         };
         let playback_icon = if music.showing_now_playing() && !music.music_settings_open() {
             music.track.as_ref()
-                .and_then(|track| self.playback_icon(music, track.status, compositor))
+                .and_then(|track| playback_icon_index(track.status))
+                .and_then(|index| self.playback_icons[index].load(
+                    music, PLAYBACK_ICON_FILES[index], PLAYBACK_ICON_SIDE, scale, Some([0; 3]), compositor,
+                ))
         } else {
             None
         };
         let video_badge_icon = if music.showing_now_playing() && !music.music_settings_open() {
             if let Some(track) = music.track.as_ref() {
                 if self.video_badge.available_for(&music.song(track).path) {
-                    self.youtube_icon(music, compositor)
+                    self.youtube_icon.load(
+                        music, VIDEO_BADGE_FILE, VIDEO_BADGE_SIDE, scale, None, compositor,
+                    )
                 } else {
                     None
                 }
@@ -809,8 +727,12 @@ impl MusicView {
         };
         self.lock_glyph = self.lock_feedback.update(music.locked(), Instant::now());
         match self.lock_glyph {
-            Some(LockGlyph::Closed) => { let _ = self.lock_icon(music, compositor); }
-            Some(LockGlyph::Open) => { let _ = self.unlock_icon(music, compositor); }
+            Some(LockGlyph::Closed) => {
+                self.lock_icon.load(music, "lock.png", HUD_LOCK_SIDE, scale, None, compositor);
+            }
+            Some(LockGlyph::Open) => {
+                self.unlock_icon.load(music, "unlock.png", HUD_LOCK_SIDE, scale, None, compositor);
+            }
             None => {}
         }
         // Build the viewport before borrowing the text painter. No glyph
@@ -856,45 +778,24 @@ impl MusicView {
     }
 }
 
-/// Use the user's exact UXWing Padlock/Unlocked artwork, including its
-/// coloured body and keyhole contrast. The earlier black tint collapsed both
-/// details into one dark silhouette. PNG transparency is retained.
-fn decode_lock_icon(png: &[u8]) -> Option<Vec<u8>> {
-    let (w, h) = crate::cart_art::png_size(png)?;
-    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
-    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
-    slot_ui::cover_rgba(&rgba, w, h, HUD_LOCK_SIDE, HUD_LOCK_SIDE)
+fn music_icon_size(side: u32, scale: [f32; 2]) -> [u32; 2] {
+    scale.map(|factor| ((side as f32 * factor).round() as u32).max(1))
 }
 
-/// Keep the original red/white YouTube logo, including transparent pixels.
-fn decode_youtube_icon(png: &[u8]) -> Option<Vec<u8>> {
+/// Keep the original artwork or convert a monochrome glyph into an ink mask.
+fn decode_music_icon(png: &[u8], [width, height]: [u32; 2], ink: Option<[u8; 3]>) -> Option<Vec<u8>> {
     let (w, h) = crate::cart_art::png_size(png)?;
     if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
     let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
-    slot_ui::cover_rgba(&rgba, w, h, VIDEO_BADGE_SIDE, VIDEO_BADGE_SIDE)
-}
-
-/// Tint the official UXWing glyph black, retaining alpha and hiding white.
-fn decode_status_icon(png: &[u8], side: u32) -> Option<Vec<u8>> {
-    let (w, h) = crate::cart_art::png_size(png)?;
-    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
-    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
-    let mut pixels = slot_ui::cover_rgba(&rgba, w, h, side, side)?;
-    for px in pixels.chunks_exact_mut(4) {
-        let darkness = 255 - ((u16::from(px[0]) + u16::from(px[1])
-            + u16::from(px[2])) / 3) as u8;
-        px[3] = ((u16::from(px[3]) * u16::from(darkness)) / 255) as u8;
-        px[..3].fill(0);
+    let mut pixels = slot_ui::cover_rgba(&rgba, w, h, width, height)?;
+    if let Some(ink) = ink {
+        for px in pixels.chunks_exact_mut(4) {
+            let darkness = 255 - (px[..3].iter().map(|&channel| u16::from(channel)).sum::<u16>() / 3);
+            px[3] = ((u16::from(px[3]) * darkness) / 255) as u8;
+            px[..3].copy_from_slice(&ink);
+        }
     }
     Some(pixels)
-}
-
-/// UXWing PNG assets are downsized to a single 32px texture per mode.
-fn decode_repeat_icon(png: &[u8]) -> Option<Vec<u8>> {
-    let (w, h) = crate::cart_art::png_size(png)?;
-    if w > 1024 || h > 1024 || w == 0 || h == 0 { return None; }
-    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
-    slot_ui::cover_rgba(&rgba, w, h, REPEAT_ICON_SIDE, REPEAT_ICON_SIDE)
 }
 
 struct Painter<'a> {
@@ -1117,10 +1018,9 @@ impl Painter<'_> {
     fn repeat_badge(&mut self, mode: RepeatMode, icon: Option<TexId>) {
         let (x, y) = (REPEAT_BADGE_X, REPEAT_BADGE_Y);
         if let Some(tex) = icon {
-            self.draws.push(Draw::Tex {
-                x, y, w: REPEAT_ICON_SIDE as f32, h: REPEAT_ICON_SIDE as f32,
-                tex, alpha: 1.0,
-            });
+            self.draws.push(pixel_aligned_texture(
+                tex, [x, y], [REPEAT_ICON_SIDE as f32; 2], self.scale, 1.0,
+            ));
             return;
         }
         let ink = repeat_icon_ink(mode);
@@ -1677,9 +1577,11 @@ mod album_thumbnail_layout_tests {
                 0, 0, 0, 255, 255, 255, 255, 0,
             ]).unwrap();
         }
-        let decoded = decode_repeat_icon(&png_bytes).expect("valid transparent PNG");
-        assert_eq!(decoded.len(), (REPEAT_ICON_SIDE * REPEAT_ICON_SIDE * 4) as usize);
-        assert!(decode_repeat_icon(b"not a png").is_none());
+        let size = music_icon_size(REPEAT_ICON_SIDE, [1.6; 2]);
+        assert_eq!(size, [32, 32]);
+        let decoded = decode_music_icon(&png_bytes, size, Some([0; 3])).expect("valid transparent PNG");
+        assert_eq!(decoded.len(), 32 * 32 * 4);
+        assert!(decode_music_icon(b"not a png", size, None).is_none());
     }
 
     #[test]
@@ -1735,10 +1637,11 @@ mod album_thumbnail_layout_tests {
                 255, 215, 48, 255, 255, 215, 48, 255,
             ]).unwrap();
         }
-        let pixels = decode_lock_icon(&png_bytes).expect("valid coloured UXWing PNG");
-        assert_eq!(pixels.len(), (HUD_LOCK_SIDE * HUD_LOCK_SIDE * 4) as usize);
+        let size = music_icon_size(HUD_LOCK_SIDE, [1.6; 2]);
+        assert_eq!(size, [29, 29]);
+        let pixels = decode_music_icon(&png_bytes, size, None).expect("valid coloured UXWing PNG");
+        assert_eq!(pixels.len(), 29 * 29 * 4);
         assert_eq!(&pixels[0..4], &[255, 215, 48, 255]);
-        assert!(decode_lock_icon(b"not a png").is_none());
     }
 
     #[test]
@@ -1780,10 +1683,11 @@ mod album_thumbnail_layout_tests {
                 255, 0, 0, 255, 255, 0, 0, 255,
             ]).unwrap();
         }
-        let pixels = decode_youtube_icon(&png_bytes).expect("valid logo PNG");
-        assert_eq!(pixels.len(), (VIDEO_BADGE_SIDE * VIDEO_BADGE_SIDE * 4) as usize);
+        let size = music_icon_size(VIDEO_BADGE_SIDE, [1.6; 2]);
+        assert_eq!(size, [35, 35]);
+        let pixels = decode_music_icon(&png_bytes, size, None).expect("valid logo PNG");
+        assert_eq!(pixels.len(), 35 * 35 * 4);
         assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
-        assert!(decode_youtube_icon(b"not a png").is_none());
     }
 
     #[test]
@@ -1860,12 +1764,13 @@ mod album_thumbnail_layout_tests {
                 0, 0, 0, 0, 0, 0, 0, 255,
             ]).unwrap();
         }
-        let decoded = decode_status_icon(&png_bytes, PLAYBACK_ICON_SIDE)
+        let size = music_icon_size(PLAYBACK_ICON_SIDE, [1.6; 2]);
+        assert_eq!(size, [32, 32]);
+        let decoded = decode_music_icon(&png_bytes, size, Some([0; 3]))
             .expect("valid transparent playback PNG");
-        assert_eq!(decoded.len(), (PLAYBACK_ICON_SIDE * PLAYBACK_ICON_SIDE * 4) as usize);
+        assert_eq!(decoded.len(), 32 * 32 * 4);
         assert!(decoded.chunks_exact(4).any(|pixel| pixel[3] == 0));
         assert!(decoded.chunks_exact(4).all(|pixel| pixel[..3] == [0, 0, 0]));
-        assert!(decode_status_icon(b"not a png", PLAYBACK_ICON_SIDE).is_none());
     }
 
     #[test]

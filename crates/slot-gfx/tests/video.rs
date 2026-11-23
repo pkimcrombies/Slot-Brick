@@ -7,7 +7,7 @@ fn video_shader_converts_planes_and_updates_the_same_texture() {
     let surface = FbdevSurface::offscreen((OUT_W, OUT_H)).expect("offscreen GLES");
     let mut compositor = Compositor::new(&surface).expect("Slot compositor");
     let start = (10, 20);
-    let draw = Draw::Video { x: 10.0, y: 20.0, w: 3.0, h: 3.0 };
+    let draw = Draw::Video { x: 10.0, y: 20.0, w: 3.0, h: 3.0, alpha: 1.0 };
     let pixels = |compositor: &Compositor, x: usize, y: usize| {
         let rgba = compositor.read_frame();
         let offset = ((start.1 + y) * OUT_W as usize + start.0 + x) * 4;
@@ -38,4 +38,11 @@ fn video_shader_converts_planes_and_updates_the_same_texture() {
     compositor.draw_list(&[draw]);
     near(pixels(&compositor, 0, 0), [255, 255, 255]);
     assert!(compositor.upload_video_420(3, 3, [&[16; 9], &[128; 3], &[128; 4]]).is_err());
+
+    compositor.begin_frame();
+    compositor.draw_list(&[
+        Draw::Rect { x: 0.0, y: 0.0, w: OUT_W as f32, h: OUT_H as f32, colour: [1.0, 0.0, 0.0, 1.0] },
+        Draw::Video { x: 10.0, y: 20.0, w: 3.0, h: 3.0, alpha: 0.5 },
+    ]);
+    near(pixels(&compositor, 0, 0), [255, 128, 128]);
 }

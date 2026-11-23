@@ -93,7 +93,7 @@ fn quad(d: &Draw) -> Quad {
         | Draw::Tex { x, y, w, h, .. }
         | Draw::Turned { x, y, w, h, .. }
         | Draw::CoverFlow { x, y, w, h, .. }
-        | Draw::Video { x, y, w, h } => Quad { x, y, w, h },
+        | Draw::Video { x, y, w, h, .. } => Quad { x, y, w, h },
         Draw::Game | Draw::Shot { .. } => Quad {
             x: 0.0,
             y: 0.0,
@@ -143,8 +143,9 @@ fn as_lip(d: &Draw) -> Option<Quad> {
 fn alpha(d: &Draw) -> f32 {
     match *d {
         Draw::Rect { colour, .. } => colour[3],
-        Draw::Tex { alpha, .. } | Draw::Turned { alpha, .. } | Draw::CoverFlow { alpha, .. } => alpha,
-        Draw::Game | Draw::Shot { .. } | Draw::Video { .. } => 1.0,
+        Draw::Tex { alpha, .. } | Draw::Turned { alpha, .. } | Draw::CoverFlow { alpha, .. }
+        | Draw::Video { alpha, .. } => alpha,
+        Draw::Game | Draw::Shot { .. } => 1.0,
     }
 }
 

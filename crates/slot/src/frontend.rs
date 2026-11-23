@@ -929,7 +929,7 @@ impl Frontend {
             || self.power_fade.shutdown_active(Instant::now()) {return true}
         // Let the normal display pacer schedule each video refresh.
         // Skipping this path would put the device loop into its 25 ms idle sleep.
-        if self.native_video.active() {
+        if self.native_video.needs_render() {
             return true;
         }
         // Cover Flow's 260ms animation must not rely on the idle 1s refresh;
@@ -1046,7 +1046,7 @@ impl Frontend {
         sync_quick_clock(self.session.app_mut(), compositor, &mut self.quick_clock, self.quick_menu_scale);
         if matches!(self.session.app().phase(), Phase::Music) {
             if let Some(music) = self.session.app().music() {
-                let draws = self.music_view.render(music, compositor, self.quick_menu_scale);
+                let draws = self.music_view.render(music, compositor, self.clocks.status_scale);
                 let lock_icon = self.music_view.hud_lock_icon();
                 self.session.app_mut().set_music_draws(draws);
                 self.session.app_mut().set_music_lock_face(lock_icon);
@@ -1201,12 +1201,12 @@ impl Frontend {
     }
 
     fn sync_native_video(&mut self) {
-        let video = if matches!(self.session.app().phase(), Phase::Music) {
-            self.session.app_mut().music_mut().and_then(|music| music.native_video())
+        if matches!(self.session.app().phase(), Phase::Music) {
+            let video = self.session.app_mut().music_mut().and_then(|music| music.native_video());
+            self.native_video.sync(video);
         } else {
-            None
-        };
-        self.native_video.sync(video);
+            self.native_video.stop();
+        }
     }
 
     pub fn advance(&mut self, input: &mut dyn InputSource) {

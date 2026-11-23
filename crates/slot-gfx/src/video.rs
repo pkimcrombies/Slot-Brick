@@ -14,6 +14,7 @@ uniform sampler2D u_y;
 uniform sampler2D u_cb;
 uniform sampler2D u_cr;
 uniform vec2 u_chroma_scale;
+uniform float u_alpha;
 varying vec2 v_uv;
 void main() {
     vec2 uv = v_uv * u_chroma_scale;
@@ -24,7 +25,7 @@ void main() {
     vec3 rgb = (vec3(298.0 * y)
         + vec3(409.0, -208.0, 0.0) * cr
         + vec3(0.0, -100.0, 516.0) * cb) / 256.0;
-    FRAG_COLOR = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+    FRAG_COLOR = vec4(clamp(rgb, 0.0, 1.0), u_alpha);
 }
 "#;
 
@@ -33,6 +34,7 @@ pub(crate) struct VideoPass {
     textures: [gl::types::GLuint; 3],
     rect: gl::types::GLint,
     chroma_scale: gl::types::GLint,
+    alpha: gl::types::GLint,
     size: Option<(u32, u32)>,
 }
 
@@ -54,6 +56,7 @@ impl VideoPass {
             textures,
             rect: uniform("u_rect"),
             chroma_scale: uniform("u_chroma_scale"),
+            alpha: uniform("u_alpha"),
             size: None,
         })
     }
@@ -115,19 +118,26 @@ impl VideoPass {
         Ok(())
     }
 
-    pub(crate) fn draw(&self, rect: [f32; 4], quad: &Quad) {
+    pub(crate) fn draw(&self, rect: [f32; 4], alpha: f32, quad: &Quad) {
         if self.size.is_none() {
             return;
         }
         unsafe {
-            gl::Disable(gl::BLEND);
+            if alpha < 1.0 {
+                gl::Enable(gl::BLEND);
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            } else {
+                gl::Disable(gl::BLEND);
+            }
             gl::UseProgram(self.program);
             gl::Uniform4fv(self.rect, 1, rect.as_ptr());
+            gl::Uniform1f(self.alpha, alpha);
             for (index, texture) in self.textures.into_iter().enumerate() {
                 gl::ActiveTexture(gl::TEXTURE0 + index as u32);
                 gl::BindTexture(gl::TEXTURE_2D, texture);
             }
             quad.draw();
+            gl::Disable(gl::BLEND);
             gl::ActiveTexture(gl::TEXTURE0);
         }
     }

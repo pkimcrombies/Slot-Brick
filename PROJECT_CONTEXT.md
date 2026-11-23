@@ -645,11 +645,28 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 User-selected lock icon replacement (build/device verification pending)
+
+- The user chose **UXWing Padlock** (https://uxwing.com/padlock-icon/)
+  for the locked state and **UXWing Unlocked**
+  (https://uxwing.com/unlocked-icon/) for the brief unlocked state,
+  replacing Lock Line and Lock Open Line.
+- Only the two offline asset download URLs need to change: keep
+  `Slot/System/music-icons/lock.png` and `unlock.png`, HUD-centred 18px,
+  black-tinted by the current native decoder. No changes to lock state,
+  600ms hold, input handling, rendering schedule, or other Music icons.
+- Installer **must** use the two newly selected UXWing image URLs,
+  validate PNG signatures/dimensions, back up and checksum both assets,
+  pin the exact current feature-branch commit, and ship as `.txt` with a
+  command that renames it to `.ps1` before execution.
+- No successful build or Brick Pro device installation was established
+  by this documentation/installer-only change.
+
 ## 2026-11-23 Brief Music unlock confirmation (build/device verification pending)
 
 - User explicitly prefers **no animation**. When Music unlocks, swap the
-  centred closed 18px UXWing Lock Line glyph immediately to the matching
-  18px UXWing Lock Open Line (https://uxwing.com/lock-open-line-icon/).
+  centred closed 18px UXWing Padlock glyph immediately to the matching
+  18px UXWing Unlocked icon (https://uxwing.com/unlocked-icon/).
   Hold open glyph for ~600ms, then remove it from HUD. No fade or movement.
   Locking again cancels the open indication instantly and restores the
   closed lock. Unlock works immediately regardless of this visual feedback.
@@ -670,8 +687,8 @@
   failed (33/34 passed) because raster alignment consumed half a pixel
   of the required 10px lock/battery gap. The installer correctly left SD
   untouched. A follow-up centring request supersedes the adjacent-battery
-  placement entirely: Music Lock now uses the **UXWing Lock Line** icon
-  (https://uxwing.com/lock-line-icon/) at 18px, in the centre of the
+  placement entirely: Music Lock now uses the **UXWing Padlock** icon
+  (https://uxwing.com/padlock-icon/) at 18px, in the centre of the
   shared top HUD. Clock, battery, Wi-Fi and update positions must remain
   identical to the Shelf. A new test checks centre placement and verifies
   the rest of the entire status HUD is byte-for-byte identical at scales

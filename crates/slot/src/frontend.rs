@@ -936,6 +936,11 @@ impl Frontend {
             && (self.music_view.cover_flow_loading()
                 || self.music_view.album_list_loading())
             && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
+        // The open-padlock confirmation is static but must be cleared after
+        // its short hold; no special refresh once the hold expires.
+        if matches!(self.app().phase(), Phase::Music)
+            && self.music_view.unlock_feedback_pending()
+            && self.last_render.elapsed() >= Duration::from_millis(80) {return true}
         // A cached title viewport is cheap to update and can animate at
         // ~30fps instead of the previous stepping 12.5fps glyph reraster.
         // Static titles and other tabs still use the normal idle gate.

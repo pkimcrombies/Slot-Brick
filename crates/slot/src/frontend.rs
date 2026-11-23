@@ -254,6 +254,7 @@ pub struct Frontend {
     quick_clock: QuickClock,
     quick_menu_scale: [f32; 2],
     music_view: crate::music_view::MusicView,
+    native_video: crate::music_video::MusicVideo,
     overlay_tex: OverlayTex,
     #[cfg(feature = "brick")]
     wifi_tex: Option<TexId>,
@@ -580,6 +581,7 @@ impl Frontend {
             quick_clock: QuickClock::default(),
             quick_menu_scale: [1.0, 1.0],
             music_view: crate::music_view::MusicView::default(),
+            native_video: crate::music_video::MusicVideo::default(),
             overlay_tex: OverlayTex::default(),
             #[cfg(feature = "brick")]
             wifi_tex: None,
@@ -912,7 +914,7 @@ impl Frontend {
     pub fn power_mode(&self) -> crate::brick_power::Mode {
         use crate::brick_power::Mode;
         if matches!(self.app().phase(),Phase::Doze{..}) {return Mode::Standby}
-        if self.rebuild.is_some() || self.app().link_active() || self.session.actually_fast_forwarding() || self.session.actually_rewinding() {return Mode::Boost}
+        if self.native_video.active() || self.rebuild.is_some() || self.app().link_active() || self.session.actually_fast_forwarding() || self.session.actually_rewinding() {return Mode::Boost}
         match self.app().phase() {
             Phase::Playing{..} if self.session.observed_speed()==Some(crate::emu::Speed::Normal)=>Mode::Game,
             Phase::Shelf|Phase::QuickMenu{..}|Phase::Music if self.last_input.elapsed()>Duration::from_secs(2)=>Mode::Menu,
@@ -925,6 +927,11 @@ impl Frontend {
     pub fn needs_render(&self)->bool {
         if self.power_fade.wake_active(Instant::now())
             || self.power_fade.shutdown_active(Instant::now()) {return true}
+        // Native H.264 frames are presented at <=30fps and never wait for
+        // Music's normal 1-second idle refresh gate.
+        if self.native_video.active() && self.last_render.elapsed() >= Duration::from_millis(33) {
+            return true;
+        }
         // Cover Flow's 260ms animation must not rely on the idle 1s refresh;
         // stop requesting extra frames as soon as the movement completes.
         if matches!(self.app().phase(), Phase::Music)
@@ -1101,6 +1108,12 @@ impl Frontend {
         );
         self.draws.clear();
         self.session.app().draw(&mut self.draws);
+        // Video replaces the visible Music UI only while the same MP3/M4A
+        // keeps feeding ALSA. The existing EGL compositor owns the texture;
+        // no external process is launched and Y returns to artwork instantly.
+        if matches!(self.session.app().phase(), Phase::Music) {
+            self.native_video.overlay(compositor, &mut self.draws);
+        }
         let now = Instant::now();
         if matches!(self.session.app().phase(), Phase::Doze { .. }) {
             if let Some((start, frozen)) = &self.power_fade.sleep {
@@ -1189,18 +1202,19 @@ impl Frontend {
         true
     }
 
-    /// Called by the device event loop after Y reaches Music. The video
-    /// plays externally; this preserves all UI state and cached album art.
-    pub fn take_external_video(&mut self) -> Option<crate::VideoHandoff> {
-        self.session.take_video_handoff()
-    }
-
-    pub fn return_from_external_video(&mut self, handoff: &crate::VideoHandoff,
-                                      at_seconds: Option<u32>) {
-        self.session.complete_video_handoff(handoff, at_seconds);
-        self.last = Instant::now(); // exclude external playback time from app dt
-        self.last_input = Instant::now();
-        self.draws.clear(); // always repaint after the child exits
+    /// Synchronise an optional silent MP4 decoder to the audible music clock.
+    /// Only metadata changes are handled here; decoder I/O is on its worker.
+    fn sync_native_video(&mut self) {
+        if !matches!(self.session.app().phase(), Phase::Music) {
+            self.native_video.sync(None, None);
+            return;
+        }
+        let video = self.session.app().music()
+            .and_then(|music| music.native_video_path())
+            .map(std::path::Path::to_path_buf);
+        let clock = self.session.app().music()
+            .and_then(|music| music.audible_seconds(&self.session.audio_ring()));
+        self.native_video.sync(video.as_deref(), clock);
     }
 
     pub fn advance(&mut self, input: &mut dyn InputSource) {
@@ -1224,6 +1238,7 @@ impl Frontend {
         let dt = self.last.elapsed().as_secs_f32();
         self.last = Instant::now();
         self.session.update(dt);
+        self.sync_native_video();
         #[cfg(feature = "brick")]
         self.sync_music_dim();
         // A second Power press may wake during the pre-suspend preparation.
@@ -1273,6 +1288,7 @@ impl Frontend {
 
     #[cfg(feature = "brick")]
     pub fn prepare_sleep(&mut self) -> bool {
+        self.native_video.stop();
         self.session.app_mut().settle_saves();
         self.session.observed_speed().is_none_or(|s| s == crate::emu::Speed::Paused)
     }

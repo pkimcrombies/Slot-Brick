@@ -143,6 +143,19 @@ impl Egl {
 }
 
 impl FbdevSurface {
+    /// Unbind Slot's EGL context while ffplay owns the screen. Keep GPU
+    /// textures alive so returning to the same native Music view is cheap.
+    pub fn release_current(&mut self) -> Result<(), GfxError> {
+        let ok = unsafe { (self.egl.make_current)(
+            self.display,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) };
+        if ok == 0 { Err(self.egl.fail("release current EGL context")) }
+        else { Ok(()) }
+    }
+
     pub fn new() -> Result<Self, GfxError> {
         let attr = |name: &str| std::fs::read_to_string(format!("{FB0}/{name}")).ok();
         let hint = attr("mode")

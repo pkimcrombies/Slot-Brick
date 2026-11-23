@@ -1,9 +1,8 @@
-//! Slot OS-native, silent H.264 sidecar renderer.
+//! Slot OS-native H.264 video renderer.
 //!
 //! MP4 demuxing and H.264 decode run on a bounded background worker. The
-//! Music MP3/M4A decoder remains the **only** audio source. We render frames
-//! through Slot's existing GLES2 compositor, with no SDL, ffplay or extra
-//! system libraries. Unsupported media falls back to album artwork.
+//! Music supplies the clock from the video's own soundtrack or a timer for
+//! silent files. Frames use Slot's existing GLES2 compositor.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -13,7 +12,6 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender, TryRecvError},
     Arc,
 };
-use std::time::Duration;
 
 use mp4::{MediaType, Mp4Reader};
 use rust_h264::decoder::{ChromaFormat, Frame, OrderedDecoder};
@@ -23,7 +21,6 @@ use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 const MAX_PIXELS: usize = 854 * 480;
 const MAX_FILE_BYTES: u64 = 1 << 30;
 const FRAME_AHEAD: f64 = 0.045;
-const SEEK_JUMP: f64 = 1.3;
 
 pub(crate) struct VideoFrame {
     pub(crate) pts: f64,
@@ -49,7 +46,6 @@ pub(crate) struct MusicVideo {
     texture: Option<TexId>,
     shown: Option<(u32, u32)>,
     clock: f64,
-    last_clock: Option<f64>,
     failed: bool,
     finished: bool,
 }
@@ -57,6 +53,10 @@ pub(crate) struct MusicVideo {
 impl MusicVideo {
     pub(crate) fn active(&self) -> bool {
         self.path.is_some() && !self.failed && !self.finished
+    }
+
+    pub(crate) fn ended(&self) -> bool {
+        self.failed || self.finished
     }
 
     pub(crate) fn stop(&mut self) {
@@ -69,7 +69,6 @@ impl MusicVideo {
         self.next = None;
         self.path = None;
         self.shown = None;
-        self.last_clock = None;
         self.failed = false;
         self.finished = false;
     }
@@ -84,13 +83,14 @@ impl MusicVideo {
             .name("slot-native-video".into())
             .spawn(move || {
                 let result = decode_file(&worker_path, at, &sender, &worker_cancel);
-                if let Err(err) = result {
-                    if !worker_cancel.load(Ordering::Relaxed) {
-                        // Do not block a worker forever if the UI is closing.
-                        let _ = sender.try_send(Message::Error(err));
-                    }
-                } else if !worker_cancel.load(Ordering::Relaxed) {
-                    let _ = sender.try_send(Message::Finished);
+                if !worker_cancel.load(Ordering::Relaxed) {
+                    let message = match result {
+                        Ok(()) => Message::Finished,
+                        Err(err) => Message::Error(err),
+                    };
+                    // Finishing is ordered after the final frames. stop()
+                    // drops the receiver if the user closes the video first.
+                    let _ = sender.send(message);
                 }
             })
         {
@@ -101,7 +101,6 @@ impl MusicVideo {
                 self.cancel = Some(cancel);
                 self.receiver = Some(receiver);
                 self.clock = at;
-                self.last_clock = Some(at);
             }
             Err(err) => {
                 self.path = Some(path);
@@ -111,31 +110,22 @@ impl MusicVideo {
         }
     }
 
-    /// Reuse a worker when music advances normally; restart from an MP4 sync
-    /// sample after a ten-second seek, a song switch or a new Y toggle.
-    pub(crate) fn sync(&mut self, selected: Option<&Path>, at_seconds: Option<f64>) {
-        let selected = selected.map(Path::to_path_buf);
-        if selected.is_none() {
+    /// Start on selection or seek. Ordinary clock updates reuse the decoder.
+    pub(crate) fn sync(&mut self, selected: Option<(&Path, f64, bool)>) {
+        let Some((path, position, restart)) = selected else {
             if self.path.is_some() {
                 self.stop();
             }
             return;
-        }
-        let at = at_seconds.unwrap_or(0.0).max(0.0);
-        let switched = selected != self.path;
-        let seek = self.last_clock
-            .is_some_and(|last| (at - last).abs() > SEEK_JUMP);
-        if switched || seek {
-            self.start(selected.expect("selected path exists"), at);
+        };
+        if restart || self.path.as_deref() != Some(path) {
+            self.start(path.to_path_buf(), position);
         } else {
-            self.clock = at;
-            self.last_clock = Some(at);
+            self.clock = position;
         }
     }
 
-    /// Called only on the graphics thread, after audio's current position is
-    /// known. A decoded frame is never uploaded earlier than its presentation
-    /// timestamp; the two-slot queue bounds RAM and prevents runaway decode.
+    /// Upload frames on the graphics thread using their presentation times.
     pub(crate) fn overlay(&mut self, compositor: &mut Compositor, draws: &mut Vec<Draw>) {
         if self.path.is_none() || self.failed {
             return;
@@ -148,7 +138,7 @@ impl MusicVideo {
                     match receiver.try_recv() {
                         Ok(message) => Some(message),
                         Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => None,
+                        Err(TryRecvError::Disconnected) => Some(Message::Finished),
                     }
                 };
                 let Some(message) = message else { break; };
@@ -159,7 +149,7 @@ impl MusicVideo {
                             break;
                         }
                         // If decoding fell behind, skip stale uploads and
-                        // drain the queue towards the current music clock.
+                        // drain the queue towards the current video clock.
                         if frame.pts + 0.20 < self.clock && !self.finished {
                             continue;
                         }
@@ -413,7 +403,7 @@ mod tests {
     #[test]
     fn no_video_stops_worker_and_clears_display() {
         let mut video = MusicVideo::default();
-        video.sync(None, Some(12.5));
+        video.sync(None);
         assert!(!video.active());
         assert!(video.path.is_none());
     }

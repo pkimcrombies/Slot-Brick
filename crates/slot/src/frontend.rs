@@ -1202,19 +1202,13 @@ impl Frontend {
         true
     }
 
-    /// Synchronise an optional silent MP4 decoder to the audible music clock.
-    /// Only metadata changes are handled here; decoder I/O is on its worker.
     fn sync_native_video(&mut self) {
-        if !matches!(self.session.app().phase(), Phase::Music) {
-            self.native_video.sync(None, None);
-            return;
-        }
-        let video = self.session.app().music()
-            .and_then(|music| music.native_video_path())
-            .map(std::path::Path::to_path_buf);
-        let clock = self.session.app().music()
-            .and_then(|music| music.audible_seconds(&self.session.audio_ring()));
-        self.native_video.sync(video.as_deref(), clock);
+        let video = if matches!(self.session.app().phase(), Phase::Music) {
+            self.session.app_mut().music_mut().and_then(|music| music.native_video())
+        } else {
+            None
+        };
+        self.native_video.sync(video);
     }
 
     pub fn advance(&mut self, input: &mut dyn InputSource) {
@@ -1234,6 +1228,11 @@ impl Frontend {
             return;
         }
         let was_doze = matches!(self.session.app().phase(), Phase::Doze { .. });
+        if self.native_video.ended() {
+            if let Some(music) = self.session.app_mut().music_mut() {
+                music.close_video();
+            }
+        }
         self.session.feed(events, now);
         let dt = self.last.elapsed().as_secs_f32();
         self.last = Instant::now();

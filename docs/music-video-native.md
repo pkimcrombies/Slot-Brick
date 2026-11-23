@@ -11,12 +11,13 @@ were explicitly rejected by the user.
 ## Minimal acceptable experience
 
 - Same-stem `Music/Artist/Song.mp3` + `Song.mp4` detection already exists.
-- Music Now Playing Y: toggle to video; Y again: album art. Physical lock
-  still blocks Y. On missing/unsupported videos, continue playing music.
-- Existing MP3/M4A decoder remains sole audio source (no duplicate video
-  soundtrack, no ALSA teardown). Video frame presentation follows the
-  *audible* music clock. A pauses music and video; Up/Down seeks both;
-  track changes reset the video view/decoder.
+- Now Playing starts with the song and album art. Y pauses the song and
+  opens the companion video from the beginning, using the MP4's soundtrack.
+  Y again, video end, or a decode error returns to the song at its former
+  position. The physical hold switch still blocks Y.
+- A pauses the current media. Up/Down seek within the current media. Track
+  changes return to album artwork. Silent videos use their own elapsed
+  time. Both modes use Slot's existing audio output.
 - Use Slot's own EGL ES2 / texture uploads and screen pipeline. Do **not**
   run ffplay, SDL2, a separate display process, or a helper needing
   legacy stock-firmware shared libraries.
@@ -60,15 +61,15 @@ H.264 (`avc1`) in a regular MP4. To convert a VP9 companion for an
 initial 360p/24 fps device test, create a new file on the computer:
 
 ```sh
-ffmpeg -n -i original.mp4 -map 0:v:0 -an -sn -dn \
+ffmpeg -n -i original.mp4 -map 0:v:0 -map '0:a:0?' -sn -dn \
   -vf 'scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=24,setsar=1' \
   -c:v libx264 -profile:v baseline -level:v 3.0 -pix_fmt yuv420p \
-  -crf 20 -g 24 -movflags +faststart converted.mp4
+  -crf 20 -g 24 -c:a aac -ac 2 -b:a 128k -movflags +faststart converted.mp4
 ```
 
 Back up the original companion before replacing it. Install the converted
-file beside the song with the same basename. The existing audio file
-provides the playback clock and soundtrack. Conversion runs on the computer.
+file beside the song with the same basename. Keep the MP4's soundtrack
+when converting. Conversion runs on the computer.
 
 ## Pre-install verification
 

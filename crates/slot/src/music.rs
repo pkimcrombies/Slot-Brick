@@ -484,7 +484,8 @@ impl Music {
         }
     }
     pub(crate) fn should_dim(&self) -> bool {
-        self.playing() && !self.settings_view && self.settings.dim_timeout_secs > 0
+        self.playing() && !self.video_visible && !self.settings_view
+            && self.settings.dim_timeout_secs > 0
     }
 
     fn change_setting(&mut self, forward: bool) {

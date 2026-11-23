@@ -1,6 +1,8 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Music Artists root: Left/Right now jump previous/next populated alphabet group (wrap), never change tabs; L1/R1 remain the tab controls.
+- Music hold lock: VolUp+VolDown chord toggles lock instead of mute in Music only, preserves volume/playback, blocks accidental inputs/HOME while locked, dims immediately to Music dim brightness and shows a small padlock. Power sleep/shutdown remain available; global mute outside Music stays unchanged.
 - Music Now Playing: 250px artwork, lowered progress/times, 20px Repeat aligned beside end time, Up/Down seek +/-10 seconds (including paused), and a gently scrolling long-title marquee. No Korean font replacement yet; choose a replacement for the existing Hangul fallback separately.
 - Music Cover Flow: preload four additional album covers per side (15-slot rolling cache, 7 on screen), cancel stale requests on fast jumps, and poll pending art at 100ms until loading finishes instead of waiting for a button press.
 - Music minimalism: remove empty Now Playing placeholder text and both bottom Settings help captions. In Albums Cover Flow, Up/Down jump previous/next available initial and wrap; large jumps snap directly to avoid unnecessary artwork loading, while Left/Right still move one album.

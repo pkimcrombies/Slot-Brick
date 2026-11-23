@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Fix video badge layout test compilation: parenthesize `VIDEO_BADGE_SIDE as f32` before `<` comparisons in Rust regression assertions.
 - Music Now Playing: show a small full-colour UXWing YouTube badge on the upper-left of album art only when the current MP3/M4A has a matching nonempty `.mp4`/`.m4v` alongside it. This is a local availability indicator, not a video player or YouTube streaming feature.
 - Music Lock artwork: switch to the coloured UXWing Padlock (locked) and Unlocked (brief unlock confirmation) icons, retaining their original PNG colours and transparency, the centred 18px placement and existing 600ms icon swap; installer replaces the offline PNGs.
 - Music Lock: on unlock, briefly show the matching 18px UXWing Lock Open Line icon in the same top-centre HUD position, then hide it; no fade or movement, relocking immediately restores the closed icon.

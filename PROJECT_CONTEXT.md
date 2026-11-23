@@ -279,6 +279,32 @@
 
 ## Test/build/install guardrails
 
+- **2026-11-23 physical mute switch / Music Lock correction (hardware
+  test pending):** Earlier Music Lock remapped only the
+  `VolUp+VolDown` gesture's `Action::MuteToggle`, but ignored the
+  Brick Pro's separate physical mute switch, read through
+  `/sys/class/gpio/gpio243/value` every ~200ms. The switch set
+  `App::brick_mute`, and `App::muted()/output_volume()` still reduced
+  Music gain to zero, even though the Music UI showed a lock.
+  Updated `App::set_brick_mute` to synchronise the physical switch with
+  the Music lock, including if engaged before opening Music, and if
+  changed during retained-Music Doze. In Music only,
+  `App::muted()` ignores the physical GPIO mute bit, preserving
+  the actual `state.muted` or `state.muted_hp` software mute.
+  The switch no longer displays the global Volume HUD or writes
+  mute/volume settings while Music is open. Normal physical mute
+  behaviour outside Music remains unchanged, including after exit.
+  With switch ON, a volume-key chord cannot override the physical
+  lock; moving switch OFF unlocks. Fixed `remember_volume()` to snapshot
+  *software* mute instead of hardware-effective mute, avoiding accidental
+  propagation into saved mute flags. New Brick regression tests cover
+  GPIO-on-before-entering Music, live switch ON/OFF, audible output
+  while locked, volume control suppression, chord/switch precedence,
+  ordinary non-Music mute, and switch changes during sleep/wake.
+  **Do not claim hardware-proven**: software output is verified by
+  tests only; device-level ALSA/hardware mute must be checked on Brick Pro.
+
+
 - **2026-11-23 installer regression fix:** User's Docker run compiled successfully
   and executed 294 library tests: 285 passed, 8 ignored, 1 failed.
   The failure was `music::tests::ten_second_seek_changes_decoder_position_and_preserves_pause_state`

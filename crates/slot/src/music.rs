@@ -215,6 +215,15 @@ struct VideoPlayback {
     last_update: Option<Instant>,
 }
 
+fn pace_movie_clock(position: f64, elapsed: f64, audio_position: f64) -> f64 {
+    // ALSA takes output in blocks. Move between those observations using
+    // elapsed time, correcting gradually while keeping near the soundtrack.
+    let predicted = position + elapsed;
+    let max_correction = elapsed * 0.25;
+    let correction = (audio_position - predicted).clamp(-max_correction, max_correction);
+    (predicted + correction).min(audio_position + 0.025).max(position)
+}
+
 impl VideoPlayback {
     fn new(path: PathBuf) -> Self {
         Self {
@@ -291,7 +300,8 @@ impl VideoPlayback {
                 self.audio_ending = !audio.fill(ring, volume);
             }
             if !self.audio_ending || ring.queued_frames() > 0 {
-                self.position = audio.audible_frame(ring) as f64 / rate;
+                let audio_position = audio.audible_frame(ring) as f64 / rate;
+                self.position = pace_movie_clock(self.position, elapsed, audio_position);
                 return;
             }
         }
@@ -1087,8 +1097,11 @@ impl Music {
     }
 
     pub(crate) fn video_picture_ready(&mut self) {
-        if let Some(video) = self.video.as_mut() {
+        if let Some(video) = self.video.as_mut().filter(|video| video.waiting_for_picture) {
             video.waiting_for_picture = false;
+            if let Some(last_update) = video.last_update.as_mut() {
+                *last_update = Instant::now();
+            }
         }
     }
 
@@ -1196,6 +1209,21 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movie_clock_smooths_audio_batches_and_holds_during_stalls() {
+        let refresh = 1.0 / 60.0;
+        let audio_position = 1.065;
+        let mut position = pace_movie_clock(1.0, refresh, audio_position);
+        assert!((1.016..1.022).contains(&position), "audio batch jumped to {position}");
+        for _ in 0..20 {
+            let next = pace_movie_clock(position, refresh, audio_position);
+            assert!(next >= position && next <= 1.09001);
+            position = next;
+        }
+        assert!((position - 1.09).abs() < 1e-6, "the clock should hold if audio stops");
+        assert!(pace_movie_clock(position, refresh, 1.12) > position);
+    }
 
     #[test]
     fn now_playing_up_down_queue_ten_second_seeks_without_changing_track_or_pause() {

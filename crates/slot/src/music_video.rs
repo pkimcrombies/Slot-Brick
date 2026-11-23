@@ -24,6 +24,7 @@ const MAX_FILE_BYTES: u64 = 1 << 30;
 const FRAME_QUEUE: usize = 5;
 // Allow half a 60 Hz refresh of lead time when choosing the next frame.
 const FRAME_AHEAD: f64 = 0.008;
+const KEEP_FRAME_WITHIN: f64 = 0.050;
 
 pub(crate) struct VideoFrame {
     pub(crate) pts: f64,
@@ -181,13 +182,19 @@ impl MusicVideo {
                         self.next = Some(frame);
                         break;
                     }
-                    self.stats.max_delay = self.stats.max_delay.max(self.clock - frame.pts);
-                    if frame.pts + 0.20 < self.clock {
+                    let delay = self.clock - frame.pts;
+                    self.stats.max_delay = self.stats.max_delay.max(delay);
+                    if delay > 0.20 {
                         self.stats.late += 1;
                         continue;
                     }
                     if latest.replace(frame).is_some() {
                         self.stats.superseded += 1;
+                    }
+                    // With time to catch up, give consecutive pictures
+                    // their own refresh even if an audio batch made both due.
+                    if self.stats.shown > 0 && delay <= KEEP_FRAME_WITHIN {
+                        break;
                     }
                 }
                 Message::Error(err) => {
@@ -454,6 +461,28 @@ mod tests {
         assert!(video.take_due_frame().is_none(), "keep future frames for their slot");
         video.clock = 1.12;
         assert_eq!(video.take_due_frame().unwrap().pts, 1.125);
+    }
+
+    #[test]
+    fn steady_playback_presents_both_frames_after_a_short_delay() {
+        let (sender, receiver) = mpsc::channel();
+        let mut video = MusicVideo {
+            receiver: Some(receiver),
+            clock: 1.084,
+            shown: Some((1, 1)),
+            stats: PresentationStats { shown: 1, ..PresentationStats::default() },
+            ..MusicVideo::default()
+        };
+        for pts in [1.0417, 1.0833] {
+            sender.send(Message::Frame(VideoFrame {
+                pts, width: 1, height: 1, planes: [vec![16], vec![128], vec![128]],
+            })).unwrap();
+        }
+
+        assert_eq!(video.take_due_frame().unwrap().pts, 1.0417);
+        video.clock += 1.0 / 60.0;
+        assert_eq!(video.take_due_frame().unwrap().pts, 1.0833);
+        assert_eq!(video.stats.superseded, 0);
     }
 
     #[test]

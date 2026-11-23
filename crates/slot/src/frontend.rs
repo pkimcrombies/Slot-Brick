@@ -32,6 +32,19 @@ use crate::wallpaper;
 const SHELF_STATUS_INK: [u8; 3] = [0, 0, 0];
 
 const DOZE_TIMEOUT: Duration = Duration::from_secs(180);
+
+#[cfg(feature = "brick")]
+fn music_dim_target(music: &crate::music::Music, idle: Duration) -> Option<u8> {
+    if music.locked() || (
+        music.should_dim()
+        && idle >= Duration::from_secs(u64::from(music.dim_timeout_secs()))
+    ) {
+        Some(music.dim_brightness())
+    } else {
+        None
+    }
+}
+
 // The Brick has no lid, so an untouched device would otherwise stay lit until
 // the battery is flat. Idle limits before slot dozes (and then suspends).
 #[cfg(feature = "brick")]
@@ -1208,14 +1221,7 @@ impl Frontend {
         }
         let dim_level = if matches!(self.app().phase(), Phase::Music) {
             self.app().music().and_then(|music| {
-                if music.should_dim()
-                    && self.last_input.elapsed()
-                        >= Duration::from_secs(u64::from(music.dim_timeout_secs()))
-                {
-                    Some(music.dim_brightness())
-                } else {
-                    None
-                }
+                music_dim_target(music, self.last_input.elapsed())
             })
         } else {
             None

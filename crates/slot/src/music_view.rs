@@ -1164,9 +1164,9 @@ impl Painter<'_> {
 
     /// Same two-column, text-only selection as Slot's system Settings:
     /// no full-width coloured selection bars, cards, dividers or new palette.
-    /// Settings is a peer tab and remains usable while music plays.
+    /// Settings is a START-only overlay, not a fourth Music tab.
     fn settings(&mut self, music: &Music) {
-        self.music_tabs(3);
+        self.heading("settings");
         let volume = format!("{}%", music.settings_max_volume());
         let dim_brightness = format!("{}/{}", music.dim_brightness(), BRIGHTNESS_MAX);
         let values = [
@@ -1203,7 +1203,7 @@ impl Painter<'_> {
 
     fn music_tabs(&mut self, selected: usize) {
         let mut x = EDGE;
-        for (index, title) in ["now", "albums", "artists", "settings"].iter().enumerate() {
+        for (index, title) in ["now", "albums", "artists"].iter().enumerate() {
             let ink = if index == selected { MUSIC_TEXT_INK } else { MUSIC_MUTED_INK };
             let width = self.text_ink(title, 23, [x, TITLE_TOP], ink);
             x += width as f32 + 20.0;

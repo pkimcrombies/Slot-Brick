@@ -924,25 +924,20 @@ impl Music {
         }
     }
 
-    /// All four Music sections are peers; shoulders wrap in both directions.
-    /// Enter Albums/Artists at their roots and Settings at its first row.
-    /// Unlike switching sections, B from Now Playing opens the playing album.
+    /// L1/R1 cycle only the three public Music sections. Settings is a
+    /// temporary START-only screen, not an item in the children's tab cycle.
+    /// B from Now Playing still opens the playing album.
     fn navigate_section(&mut self, forward: bool) {
-        let current = if self.settings_view {
-            3
-        } else if self.now_playing_view {
+        let current = if self.now_playing_view {
             0
         } else if matches!(self.browse[0].page, Page::Artists) {
             2
         } else {
             1
         };
-        let next = (current + if forward { 1 } else { 3 }) % 4;
+        let next = (current + if forward { 1 } else { 2 }) % 3;
         self.now_playing_view = next == 0;
-        self.settings_view = next == 3;
-        if self.settings_view {
-            self.settings_row = 0;
-        }
+        self.settings_view = false;
         let page = match next {
             1 => Some(Page::Albums),
             2 => Some(Page::Artists),
@@ -1070,8 +1065,15 @@ impl Music {
         if action == Action::QuickMenu {
             return true;
         }
-        // All sections, including Settings, share the same tab navigation.
-        // Start is intentionally unmapped; HOME/Menu alone exits Music.
+        // START toggles the hidden Settings overlay without moving the
+        // underlying browse page or interrupting playback.
+        if action == Action::GbaDown(Btn::Start) {
+            self.settings_view = !self.settings_view;
+            if self.settings_view { self.settings_row = 0; }
+            return false;
+        }
+        // Shoulder buttons move only through Now Playing, Albums and Artists.
+        // If Settings is showing, a shoulder button closes it and switches tab.
         match action {
             Action::GbaDown(Btn::L1) => {
                 self.navigate_section(false);
@@ -1095,7 +1097,8 @@ impl Music {
                     self.change_setting(true);
                 }
                 Action::GbaDown(Btn::Left) => self.change_setting(false),
-                // B at a section root is inert; only HOME/Menu leaves Music.
+                // B closes Settings and restores the previous Music screen.
+                Action::GbaDown(Btn::B) => self.settings_view = false,
                 _ => {}
             }
             return false;
@@ -1716,12 +1719,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut music = Music::with_library(Library::default());
         music.settings_root = Some(root.path().to_path_buf());
-        // From the Albums root, R1 goes to Artists, then Settings.
-        music.input(Action::GbaDown(Btn::Start));
-        assert!(!music.music_settings_open(), "Start is no longer a settings shortcut");
+        // Settings is no longer in the normal tab cycle; START opens it.
         music.input(Action::GbaDown(Btn::R1));
+        assert_eq!(music.label(), "artists");
         assert!(!music.music_settings_open());
-        music.input(Action::GbaDown(Btn::R1));
+        music.input(Action::GbaDown(Btn::Start));
         assert!(music.music_settings_open());
         assert_eq!(music.settings_cursor(), 0);
         assert_eq!(music.settings_max_volume(), 70);
@@ -1743,11 +1745,13 @@ mod tests {
         music.input(Action::GbaDown(Btn::Right));
         assert_eq!(music.dim_brightness(), 2);
         music.input(Action::GbaDown(Btn::B));
-        assert!(music.music_settings_open(), "B cannot leave a root tab");
+        assert!(!music.music_settings_open(), "B closes the Settings overlay");
+        assert_eq!(music.label(), "artists", "return to the previous Music tab");
         music.input(Action::GbaDown(Btn::Start));
-        assert!(music.music_settings_open(), "Start must remain unmapped");
-        music.input(Action::GbaDown(Btn::L1));
-        assert!(!music.music_settings_open(), "L1 returns to Artists");
+        assert!(music.music_settings_open(), "START reopens Settings");
+        assert_eq!(music.settings_cursor(), 0, "reopening resets the Settings row");
+        music.input(Action::GbaDown(Btn::Start));
+        assert!(!music.music_settings_open(), "START closes Settings again");
         assert_eq!(music.label(), "artists");
 
         let loaded = MusicSettings::load(root.path());
@@ -2417,7 +2421,7 @@ mod tests {
     }
 
     #[test]
-    fn shoulders_cycle_all_four_sections_without_skipping_tracks() {
+    fn shoulders_cycle_only_three_public_sections_without_skipping_tracks() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Music");
         std::fs::create_dir_all(&folder).unwrap();
@@ -2428,41 +2432,33 @@ mod tests {
         assert!(music.showing_now_playing());
         assert_eq!(music.playing_position(), Some((0, 2)));
 
-        music.input(Action::GbaDown(Btn::R1)); // now playing -> albums
-        assert!(!music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::R1)); // Now Playing -> Albums
         assert_eq!(music.label(), "albums");
-        assert_eq!(music.playing_position(), Some((0, 2)));
-        music.input(Action::GbaDown(Btn::R1)); // albums -> artists
+        assert!(!music.music_settings_open());
+        music.input(Action::GbaDown(Btn::R1)); // Albums -> Artists
         assert_eq!(music.label(), "artists");
-        music.input(Action::GbaDown(Btn::R1)); // artists -> settings
-        assert!(music.music_settings_open());
-        assert!(!music.showing_now_playing());
-        assert_eq!(music.playing_position(), Some((0, 2)));
-        music.input(Action::GbaDown(Btn::R1)); // settings -> now playing
+        assert!(!music.music_settings_open());
+        music.input(Action::GbaDown(Btn::R1)); // Artists -> Now Playing
         assert!(music.showing_now_playing());
         assert!(!music.music_settings_open());
         assert_eq!(music.playing_position(), Some((0, 2)));
 
-        music.input(Action::GbaDown(Btn::L1)); // now playing -> settings
-        assert!(music.music_settings_open());
-        assert!(!music.showing_now_playing());
-        music.input(Action::GbaDown(Btn::L1)); // settings -> artists
+        music.input(Action::GbaDown(Btn::L1)); // Now Playing -> Artists
         assert_eq!(music.label(), "artists");
-        music.input(Action::GbaDown(Btn::L1)); // artists -> albums
+        music.input(Action::GbaDown(Btn::L1)); // Artists -> Albums
         assert_eq!(music.label(), "albums");
-        music.input(Action::GbaDown(Btn::L1)); // albums -> now playing
+        music.input(Action::GbaDown(Btn::L1)); // Albums -> Now Playing
         assert!(music.showing_now_playing());
+        assert!(!music.music_settings_open());
 
         music.input(Action::GbaDown(Btn::Right)); // skip to song two
         assert_eq!(music.playing_position(), Some((1, 2)));
         music.input(Action::GbaDown(Btn::Left)); // skip to song one
         assert_eq!(music.playing_position(), Some((0, 2)));
-        music.input(Action::GbaDown(Btn::L1));
-        assert_eq!(music.playing_position(), Some((0, 2)));
     }
 
     #[test]
-    fn settings_is_a_root_tab_and_never_interrupts_playback() {
+    fn start_opens_hidden_settings_without_interrupting_playback() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Music");
         std::fs::create_dir_all(&folder).unwrap();
@@ -2475,23 +2471,33 @@ mod tests {
         music.update_audio(&ring, 60);
         assert!(music.playing());
         let path = music.song(music.track.as_ref().unwrap()).path.clone();
-        music.input(Action::GbaDown(Btn::L1));
-        assert!(music.music_settings_open(), "L1 from Now Playing wraps to Settings");
+
+        music.input(Action::GbaDown(Btn::L1)); // Now Playing -> Artists
+        assert_eq!(music.label(), "artists");
+        assert!(!music.music_settings_open());
+        music.input(Action::GbaDown(Btn::Start));
+        assert!(music.music_settings_open());
         assert_eq!(music.settings_cursor(), 0);
         music.input(Action::GbaDown(Btn::Down));
         assert_eq!(music.settings_cursor(), 1);
         music.input(Action::GbaDown(Btn::B));
+        assert!(!music.music_settings_open(), "B restores Artists");
+        assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::Start));
-        assert!(music.music_settings_open(), "B and Start stay inside the Settings tab");
+        assert!(music.music_settings_open());
+        music.input(Action::GbaDown(Btn::R1)); // Settings -> Now Playing
+        assert!(!music.music_settings_open());
+        assert!(music.showing_now_playing());
+        music.input(Action::GbaDown(Btn::Start));
+        assert!(music.music_settings_open());
+        music.input(Action::GbaDown(Btn::Start));
+        assert!(!music.music_settings_open());
+        assert!(music.showing_now_playing());
         music.update_audio(&ring, 60);
         assert!(music.playing());
         assert_eq!(music.song(music.track.as_ref().unwrap()).path, path);
-        music.input(Action::GbaDown(Btn::R1));
-        assert!(music.showing_now_playing(), "R1 wraps from Settings to Now Playing");
-        assert!(!music.music_settings_open());
-        assert!(music.playing());
         assert!(music.input(Action::QuickMenu),
-            "HOME/Menu is still the only exit from Music");
+            "HOME/Menu still exits Music");
     }
 
     #[test]
@@ -2593,8 +2599,10 @@ mod tests {
         music.input(Action::GbaDown(Btn::R1)); // Artists
         assert_eq!(music.label(), "artists");
         assert_eq!(music.playing_album().title, "Alpha");
-        music.input(Action::GbaDown(Btn::R1)); // Settings
+        music.input(Action::GbaDown(Btn::Start)); // Hidden Settings
         assert!(music.music_settings_open());
+        music.input(Action::GbaDown(Btn::Start)); // Return to Artists
+        assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::R1)); // Now Playing
         assert!(music.showing_now_playing());
         music.input(Action::GbaDown(Btn::R1)); // Albums

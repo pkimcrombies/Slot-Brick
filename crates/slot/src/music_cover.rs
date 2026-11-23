@@ -14,6 +14,8 @@ use crate::music_library::Album;
 use crate::{cart_art, music_m4a, music_tags};
 
 pub(crate) const THUMBNAIL: u32 = 256;
+pub(crate) const LIST_THUMBNAIL: u32 = 64;
+const THUMB_CACHE_VERSION: &str = "thumb64-v1";
 const MAX_EMBEDDED_BYTES: usize = 16 << 20;
 const MAX_PNG_PIXELS: u32 = 8 << 20;
 
@@ -32,6 +34,7 @@ pub(crate) struct MusicCover {
     texture: Option<TexId>,
     tint: Option<[u8; 3]>,
     loading: Option<Load>,
+    small: bool,
 }
 
 struct Load {
@@ -40,6 +43,10 @@ struct Load {
 }
 
 impl MusicCover {
+    pub(crate) fn list_thumbnail() -> Self {
+        Self { small: true, ..Self::default() }
+    }
+
     /// Borrow a fully decoded cover already uploaded to the GPU, without
     /// reading tags or starting another decoder. The path is the cache key:
     /// album browsers request the first song, and may find the embedded
@@ -81,6 +88,7 @@ impl MusicCover {
             texture: Some(tex),
             tint: None,
             loading: None,
+            small: false,
         }
     }
 
@@ -110,6 +118,17 @@ impl MusicCover {
         album: &Album,
         compositor: &mut Compositor,
     ) -> Option<(TexId, [u32; 2])> {
+        self.texture_cached(track, album, compositor, None)
+    }
+
+    /// Music list has a separate 64px disk-backed cache. Cover Flow remains 256px.
+    pub(crate) fn texture_cached(
+        &mut self,
+        track: &Path,
+        album: &Album,
+        compositor: &mut Compositor,
+        cache_root: Option<&Path>,
+    ) -> Option<(TexId, [u32; 2])> {
         self.cancel_stale(track);
         if let Some(load) = self.loading.take() {
             match load.result.try_recv() {
@@ -134,26 +153,49 @@ impl MusicCover {
             self.track = Some(track.to_path_buf());
             self.size = None;
             self.tint = None;
-            self.loading = Load::start(track, album);
+            self.loading = Load::start_with_options(
+                track, album,
+                if self.small { LIST_THUMBNAIL } else { THUMBNAIL },
+                if self.small { cache_root } else { None },
+            );
         }
         self.texture.zip(self.size)
     }
 }
 
 impl Load {
+    #[cfg(test)]
     fn start(track: &Path, album: &Album) -> Option<Self> {
+        Self::start_with_options(track, album, THUMBNAIL, None)
+    }
+
+    fn start_with_options(track: &Path, album: &Album, size: u32, cache_root: Option<&Path>) -> Option<Self> {
         let paths: Vec<_> = std::iter::once(track.to_path_buf())
             .chain(album.songs.iter().filter(|song| song.path != track).map(|song| song.path.clone()))
             .collect();
+        let cache = cache_root.map(|root| {
+            root.join("Cache").join("Music").join(THUMB_CACHE_VERSION)
+                .join(format!("{:016x}.png", thumb_cache_key(&paths)))
+        });
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let (sender, result) = mpsc::channel();
         std::thread::Builder::new()
             .name("slot-music-cover".into())
             .spawn(move || {
-                let cover = paths.iter()
-                    .take_while(|_| !worker_cancel.load(Ordering::Relaxed))
-                    .find_map(|path| embedded_cover(path));
+                let cover = cache.as_deref()
+                    .and_then(read_cached_thumbnail)
+                    .or_else(|| {
+                        let decoded = paths.iter()
+                            .take_while(|_| !worker_cancel.load(Ordering::Relaxed))
+                            .find_map(|path| embedded_cover_sized(path, size));
+                        if !worker_cancel.load(Ordering::Relaxed) {
+                            if let (Some(path), Some(cover)) = (cache.as_deref(), decoded.as_ref()) {
+                                let _ = write_cached_thumbnail(path, cover);
+                            }
+                        }
+                        decoded
+                    });
                 let _ = sender.send(cover);
             })
             .ok()?;
@@ -161,10 +203,59 @@ impl Load {
     }
 }
 
+/// Stable within a build; includes source file path and modification data
+/// so retagged or replaced albums cannot reuse a stale cached PNG.
+fn thumb_cache_key(paths: &[PathBuf]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    THUMB_CACHE_VERSION.hash(&mut hash);
+    for path in paths {
+        path.hash(&mut hash);
+        if let Ok(meta) = path.metadata() {
+            meta.len().hash(&mut hash);
+            meta.modified().ok().hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
+fn read_cached_thumbnail(path: &Path) -> Option<Cover> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > 128 * 1024 { return None; }
+    let (w, h) = cart_art::png_size(&bytes)?;
+    if w == 0 || h == 0 || w > LIST_THUMBNAIL || h > LIST_THUMBNAIL {
+        return None;
+    }
+    let (rgba, w, h) = cart_art::decode_rgba(&bytes)?;
+    let tint = dominant_cover_colour(&rgba);
+    Some(Cover { rgba, w, h, tint })
+}
+
+fn write_cached_thumbnail(path: &Path, cover: &Cover) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else { return Ok(()); };
+    std::fs::create_dir_all(parent)?;
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, cover.w, cover.h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(&cover.rgba)?;
+    }
+    let temp = path.with_extension("part");
+    std::fs::write(&temp, encoded)?;
+    std::fs::rename(&temp, path)?;
+    Ok(())
+}
+
 fn embedded_cover(path: &Path) -> Option<Cover> {
+    embedded_cover_sized(path, THUMBNAIL)
+}
+
+fn embedded_cover_sized(path: &Path, size: u32) -> Option<Cover> {
     if music_m4a::is_m4a(path) {
         let mut format = music_m4a::format(path)?;
-        choose_cover(format.metadata().current()?.visuals())
+        choose_cover_sized(format.metadata().current()?.visuals(), size)
     } else {
         let mut file = File::open(path).ok()?;
         let mut header = [0; 10];
@@ -176,23 +267,23 @@ fn embedded_cover(path: &Path) -> Option<Cover> {
         file.seek(SeekFrom::Start(0)).ok()?;
         let mut stream = MediaSourceStream::new(Box::new(file), Default::default());
         let metadata = Id3v2Reader::new(&Default::default()).read_all(&mut stream).ok()?;
-        choose_cover(metadata.visuals())
+        choose_cover_sized(metadata.visuals(), size)
     }
 }
 
-fn choose_cover(visuals: &[Visual]) -> Option<Cover> {
+fn choose_cover_sized(visuals: &[Visual], size: u32) -> Option<Cover> {
     let front = |picture: &&Visual| picture.usage == Some(StandardVisualKey::FrontCover);
     visuals.iter().filter(front)
         .chain(visuals.iter().filter(|picture| !front(picture)))
-        .find_map(|picture| thumbnail(&picture.data))
+        .find_map(|picture| thumbnail(&picture.data, size))
 }
 
-fn thumbnail(data: &[u8]) -> Option<Cover> {
+fn thumbnail(data: &[u8], size: u32) -> Option<Cover> {
     if data.len() > MAX_EMBEDDED_BYTES {
         return None;
     }
     let (rgba, w, h) = if data.starts_with(&[0xff, 0xd8]) {
-        jpeg_rgba(data)?
+        jpeg_rgba(data, size)?
     } else {
         let (w, h) = cart_art::png_size(data)?;
         if w.checked_mul(h)? > MAX_PNG_PIXELS {
@@ -204,8 +295,8 @@ fn thumbnail(data: &[u8]) -> Option<Cover> {
         return None;
     }
     let long = w.max(h);
-    let tw = (w * THUMBNAIL / long).max(1);
-    let th = (h * THUMBNAIL / long).max(1);
+    let tw = (w * size / long).max(1);
+    let th = (h * size / long).max(1);
     let rgba = slot_ui::cover_rgba(&rgba, w, h, tw, th)?;
     let tint = dominant_cover_colour(&rgba);
     Some(Cover { rgba, w: tw, h: th, tint })
@@ -263,10 +354,10 @@ fn dominant_cover_colour(rgba: &[u8]) -> Option<[u8; 3]> {
     ])
 }
 
-fn jpeg_rgba(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+fn jpeg_rgba(data: &[u8], size: u32) -> Option<(Vec<u8>, u32, u32)> {
     let mut reader = jpeg_decoder::Decoder::new(data);
     reader.set_max_decoding_buffer_size(32 << 20);
-    reader.scale(THUMBNAIL as u16, THUMBNAIL as u16).ok()?;
+    reader.scale(size as u16, size as u16).ok()?;
     let pixels = reader.decode().ok()?;
     let info = reader.info()?;
     let rgba = match info.pixel_format {

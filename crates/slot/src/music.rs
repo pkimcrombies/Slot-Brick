@@ -26,6 +26,7 @@ pub struct VideoHandoff {
     pub path: PathBuf,
     pub at_seconds: u32,
     pub was_playing: bool,
+    pub was_loading: bool,
 }
 
 
@@ -958,12 +959,13 @@ impl Music {
         if !std::mem::take(&mut self.video_requested) { return None; }
         let track = self.track.as_ref()?;
         let video = companion_video(&self.song(track).path)?;
+        let was_loading = track.status == Status::Loading;
         let was_playing = matches!(track.status, Status::Playing | Status::Loading);
         self.prepare_suspend(ring);
         let track = self.track.as_mut()?;
         let at_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as u32);
         track.status = Status::Paused;
-        Some(VideoHandoff { path: video, at_seconds, was_playing })
+        Some(VideoHandoff { path: video, at_seconds, was_playing, was_loading })
     }
 
     /// Resume the original audio decoder, not the video's soundtrack.
@@ -976,7 +978,9 @@ impl Music {
         let current_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as i64);
         let shift = i64::from(final_seconds) - current_seconds;
         track.pending_seek_seconds = shift.clamp(-3600, 3600) as i32;
-        track.status = if video.was_playing { Status::Playing } else { Status::Paused };
+        track.status = if video.was_loading { Status::Loading }
+            else if video.was_playing { Status::Playing }
+            else { Status::Paused };
     }
 
     /// Stop queued audio when entering kernel suspend without losing track,

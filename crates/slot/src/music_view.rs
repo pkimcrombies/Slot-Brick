@@ -37,6 +37,9 @@ const MUSIC_COVER_PLACEHOLDER: [f32; 4] = [0.92, 0.91, 0.90, 1.0];
 const EDGE: f32 = STATUS_MARGIN;
 const ROWS: usize = 6;
 const TITLE_TOP: f32 = 42.0;
+// Tiny hold indicator, tucked into the spare end of the Music tab row.
+const MUSIC_LOCK_X: f32 = OUT_W as f32 - STATUS_MARGIN - 18.0;
+const MUSIC_LOCK_Y: f32 = TITLE_TOP + 7.0;
 const LIST_TOP: f32 = 104.0;
 const ROW_H: f32 = 48.0;
 const ALBUM_COVER_SIDE: f32 = 40.0;
@@ -487,6 +490,10 @@ impl MusicView {
         } else {
             p.browser(music, &album_art);
         }
+        // A quiet icon only; the locked state needs no message or hint bar.
+        if music.locked() {
+            p.lock_indicator();
+        }
         p.draws
     }
 }
@@ -880,6 +887,17 @@ impl Painter<'_> {
         self.place(face, right - face.size[0] as f32, y);
     }
 
+    fn lock_indicator(&mut self) {
+        let ink = MUSIC_TEXT_INK.map(|channel| channel as f32 / 255.0);
+        let color = [ink[0], ink[1], ink[2], 1.0];
+        let (x, y) = (MUSIC_LOCK_X, MUSIC_LOCK_Y);
+        // Draw the padlock directly: no external PNG or font glyph required.
+        self.rect([x + 4.0, y], [2.0, 8.0], color);
+        self.rect([x + 12.0, y], [2.0, 8.0], color);
+        self.rect([x + 5.0, y - 2.0], [8.0, 2.0], color);
+        self.rect([x + 2.0, y + 8.0], [14.0, 10.0], color);
+    }
+
     fn music_tabs(&mut self, selected: usize) {
         let mut x = EDGE;
         for (index, title) in ["now playing", "albums", "artists", "settings"].iter().enumerate() {
@@ -1270,6 +1288,14 @@ mod album_thumbnail_layout_tests {
             "repeat icon aligns with the opposite HUD edge");
         assert_eq!(REPEAT_BADGE_Y, 434.0,
             "Repeat moves up next to the lowered end time");
+    }
+
+    #[test]
+    fn locked_music_indicator_is_in_the_tab_row_and_off_the_hud() {
+        assert!(MUSIC_LOCK_X >= OUT_W as f32 - EDGE - 20.0);
+        assert!(MUSIC_LOCK_X + 18.0 <= OUT_W as f32 - EDGE);
+        assert!(MUSIC_LOCK_Y > TITLE_TOP);
+        assert!(MUSIC_LOCK_Y + 18.0 < 90.0);
     }
 
     #[test]

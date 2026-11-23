@@ -276,6 +276,25 @@
 
 ## Test/build/install guardrails
 
+- **2026-11-23 Cover Flow warm artwork cache:** Previously the visible
+  7 covers (selected +/-3) were also the entire GPU cache, and entering
+  another window recycled those textures and restarted async tag/image
+  decoding. Now Cover Flow still renders 7 covers but uses 15 rolling
+  `MusicCover` slots (selected +/-7, adding four off-screen on each side).
+  The seven visible requests are queued before the additional eight,
+  and the album-keyed worker results are only uploaded on the render thread.
+  A slot can immediately cancel/drop a stale in-flight request and start
+  decoding its new album instead of waiting for the previous worker to
+  complete. New regression tests cover prefetch range edges, unique
+  modulo slot ownership, and cooperative cancellation. Estimated peak
+  cached GPU RGBA memory is ~3.75 MiB for 15x256x256 textures (previous
+  7 slots ~1.75 MiB), plus decoder buffers. No persistent on-disk artwork
+  cache; first visit still needs decoding and rapid long alphabet jumps
+  may display placeholders until the target window warms. Do not block
+  the render thread or touch game/launcher artwork. Rust/ARM64 build and
+  device-performance validation are pending.
+
+
 - **2026-11-23 Music minimalism + Cover Flow letter navigation:**
   Empty Now Playing deliberately renders only the Music tabs beneath the
   shared HUD (removed "nothing playing" and the choose-album subtitle).

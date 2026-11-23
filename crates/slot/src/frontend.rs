@@ -1274,7 +1274,10 @@ impl Frontend {
         if !self.auto_sleep || self.rebuild.is_some() || self.app().link_active() {return}
         let limit = match self.app().phase() {
             Phase::Shelf | Phase::QuickMenu { .. } => IDLE_MENU,
-            Phase::Music if !self.app().music().is_some_and(crate::music::Music::playing) => IDLE_MENU,
+            // Locked Music deliberately stays in its dimmed, non-suspended
+            // state even when paused; the hardware power button still sleeps.
+            Phase::Music if !self.app().music().is_some_and(|music|
+                music.playing() || music.locked()) => IDLE_MENU,
             Phase::Playing { .. } => IDLE_GAME,
             _ => return,
         };

@@ -1130,7 +1130,8 @@ mod tests {
         assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Paused));
         assert!(music.take_video_handoff(&ring).is_none(), "request is consumed once");
         music.finish_video_handoff(&request, Some(9));
-        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Playing));
+        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Loading),
+            "a decoder not opened before the handoff must still open afterward");
         assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 9);
     }
 

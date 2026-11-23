@@ -6891,6 +6891,81 @@ mod quiet_poweroff_tests {
             "waking must restore the configured brightness");
     }
 
+    #[cfg(feature = "brick")]
+    #[test]
+    fn physical_mute_switch_is_hold_in_music_but_mute_everywhere_else() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        assert!(app.output_volume() > 0, "test starts audible");
+        let original_volume = app.volume();
+        app.set_brick_mute(true);
+        assert!(app.muted(), "physical switch should mute outside Music");
+        assert_eq!(app.output_volume(), 0);
+        app.open_quick_row(QuickRow::Music);
+        assert!(matches!(app.phase(), Phase::Music));
+        assert!(app.music().unwrap().locked(),
+            "a switch already ON must lock Music immediately");
+        assert!(!app.muted(), "physical switch cannot mute Music");
+        assert_eq!(app.output_volume(), original_volume,
+            "Music receives its original audible volume while locked");
+        app.apply(Action::GbaDown(Btn::A));
+        app.apply(Action::VolumeDown);
+        app.apply(Action::QuickMenu);
+        assert!(matches!(app.phase(), Phase::Music),
+            "lock must still suppress accidental inputs and HOME");
+        assert_eq!(app.volume(), original_volume);
+
+        app.set_brick_mute(false);
+        assert!(!app.music().unwrap().locked(),
+            "moving physical switch OFF unlocks immediately");
+        assert!(!app.muted());
+        assert_eq!(app.output_volume(), original_volume);
+
+        app.set_brick_mute(true);
+        assert!(app.music().unwrap().locked());
+        assert_eq!(app.output_volume(), original_volume,
+            "relocking must keep the stream audible");
+        app.apply(Action::MuteToggle);
+        assert!(app.music().unwrap().locked(),
+            "volume chord must not override physical switch ON");
+        app.set_brick_mute(false);
+        app.apply(Action::QuickMenu);
+        assert!(matches!(app.phase(), Phase::QuickMenu { .. }));
+        app.set_brick_mute(true);
+        assert!(app.muted(), "the same switch mutes normally outside Music");
+        assert_eq!(app.output_volume(), 0);
+        app.set_brick_mute(false);
+        assert_eq!(app.output_volume(), original_volume);
+    }
+
+    #[cfg(feature = "brick")]
+    #[test]
+    fn physical_mute_does_not_leak_into_music_volume_chord_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.set_brick_mute(true);
+        assert!(app.muted());
+        assert!(!app.state.muted, "GPIO mute is separate from software mute");
+        app.remember_volume();
+        assert_eq!(app.vol_before[0].1, false,
+            "snapshot must not copy physical mute into persisted software mute");
+        app.open_quick_row(QuickRow::Music);
+        assert!(app.music().unwrap().locked());
+        app.apply(Action::MuteToggle);
+        assert!(app.music().unwrap().locked());
+        assert!(!app.muted());
+        assert!(app.output_volume() > 0);
+        assert!(!app.state.muted);
+    }
+
     #[test]
     fn music_mute_chord_toggles_lock_without_muting_or_leaving_music() {
         let root = tempfile::tempdir().unwrap();

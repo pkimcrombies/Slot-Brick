@@ -1825,10 +1825,10 @@ mod album_thumbnail_layout_tests {
         assert_eq!(VIDEO_BADGE_FILE, "youtube.png");
         assert!(VIDEO_BADGE_SIDE <= 24);
         assert!(VIDEO_BADGE_INSET >= 4.0);
-        assert!(VIDEO_BADGE_INSET + VIDEO_BADGE_SIDE as f32
+        assert!(VIDEO_BADGE_INSET + (VIDEO_BADGE_SIDE as f32)
             < PLAYING_COVER_SIDE / 4.0);
         assert!(PLAYING_COVER_X + VIDEO_BADGE_INSET
-            + VIDEO_BADGE_SIDE as f32 < PLAYING_INFO_X);
+            + (VIDEO_BADGE_SIDE as f32) < PLAYING_INFO_X);
     }
 
     #[test]

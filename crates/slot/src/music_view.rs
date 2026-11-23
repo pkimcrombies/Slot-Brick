@@ -435,12 +435,21 @@ impl MusicView {
             && (0..music.row_count()).any(|i| music.album_for_row(i).is_some());
         if self.list_visible {
             let cache_root = music.icon_root();
+            // Limit total list-thumbnail decoders to three at a time.
+            // A 21-slot window is a cache, not 21 concurrent JPEG readers.
+            let mut pending = self.album_covers.iter().filter(|cover| cover.is_loading()).count();
             for (slot, art) in album_art.iter_mut().enumerate() {
                 let index = first + slot;
                 if let Some(album) = music.album_for_row(index) {
                     if let Some(song) = album.songs.first() {
-                        *art = self.album_covers[index % LIST_CACHE_SLOTS]
-                            .texture_cached(&song.path, album, compositor, cache_root);
+                        let cover = &mut self.album_covers[index % LIST_CACHE_SLOTS];
+                        if pending >= 3 && !cover.requested_for(&song.path) {
+                            continue;
+                        }
+                        let was_loading = cover.is_loading();
+                        *art = cover.texture_cached(&song.path, album, compositor, cache_root);
+                        if !was_loading && cover.is_loading() { pending += 1; }
+                        if was_loading && !cover.is_loading() { pending = pending.saturating_sub(1); }
                     }
                 }
             }
@@ -448,8 +457,14 @@ impl MusicView {
                 if (first..first + ROWS).contains(&index) { continue; }
                 if let Some(album) = music.album_for_row(index) {
                     if let Some(song) = album.songs.first() {
-                        let _ = self.album_covers[index % LIST_CACHE_SLOTS]
-                            .texture_cached(&song.path, album, compositor, cache_root);
+                        let cover = &mut self.album_covers[index % LIST_CACHE_SLOTS];
+                        if pending >= 3 && !cover.requested_for(&song.path) {
+                            continue;
+                        }
+                        let was_loading = cover.is_loading();
+                        let _ = cover.texture_cached(&song.path, album, compositor, cache_root);
+                        if !was_loading && cover.is_loading() { pending += 1; }
+                        if was_loading && !cover.is_loading() { pending = pending.saturating_sub(1); }
                     }
                 }
             }

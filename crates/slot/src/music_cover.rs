@@ -260,8 +260,10 @@ fn embedded_cover_sized(path: &Path, size: u32) -> Option<Cover> {
         let mut file = File::open(path).ok()?;
         let mut header = [0; 10];
         file.read_exact(&mut header).ok()?;
-        let size = music_tags::id3v2_size(&header)?;
-        if size > MAX_EMBEDDED_BYTES || size as u64 + 10 > file.metadata().ok()?.len() {
+        let tag_bytes = music_tags::id3v2_size(&header)?;
+        if tag_bytes > MAX_EMBEDDED_BYTES
+            || tag_bytes as u64 + 10 > file.metadata().ok()?.len()
+        {
             return None;
         }
         file.seek(SeekFrom::Start(0)).ok()?;

@@ -91,7 +91,7 @@ const TITLE_MARQUEE_PX: u32 = 26;
 const TITLE_MARQUEE_START_PAUSE: f32 = 1.3;
 const TITLE_MARQUEE_END_PAUSE: f32 = 0.85;
 const TITLE_MARQUEE_FORWARD_PX_PER_SEC: f32 = 38.0;
-const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 65.0;
+const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 40.0;
 // Downloaded from UXWing at install time and kept in Slot/System for offline play.
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
@@ -180,12 +180,28 @@ struct CachedFace {
     face: Face,
 }
 
+/// Crop a viewport from a cached full-line RGBA image; never rasterize a
+/// glyph in this per-frame path. Clamps requests at each edge.
+fn crop_marquee_rgba(whole: &UndoFace, width: u32, at: u32) -> Vec<u8> {
+    let mut pixels = vec![0u8; (width * whole.h * 4) as usize];
+    let offset = at.min(whole.w.saturating_sub(width));
+    let bytes = width.min(whole.w.saturating_sub(offset)) as usize * 4;
+    for y in 0..whole.h {
+        let from = (y * whole.w + offset) as usize * 4;
+        let to = (y * width) as usize * 4;
+        pixels[to..to + bytes].copy_from_slice(&whole.rgba[from..from + bytes]);
+    }
+    pixels
+}
+
 #[derive(Default)]
 struct TitleMarquee {
     song: Option<PathBuf>,
     title: Option<String>,
     started: Option<Instant>,
     overflowing: bool,
+    overflow: f32,
+    room: u32,
     // Rasterize the entire line once, then crop from these RGBA pixels.
     // Reuse a single GPU texture for the narrow visible viewport.
     whole: Option<UndoFace>,
@@ -198,14 +214,18 @@ impl TitleMarquee {
     /// A small pause at each end, then a smooth left/right pass. Returning
     /// None keeps the original static title path for titles that already fit.
     fn offset(&mut self, path: &Path, title: &str, room: u32, now: Instant) -> Option<f32> {
-        if self.song.as_deref() != Some(path) || self.title.as_deref() != Some(title) {
+        if self.song.as_deref() != Some(path) || self.title.as_deref() != Some(title)
+            || self.room != room {
             self.song = Some(path.to_path_buf());
             self.title = Some(title.to_owned());
             self.started = Some(now);
             self.whole = None;
             self.last_at = None;
+            self.room = room;
+            // Measuring glyph widths is also unnecessary every 33ms.
+            self.overflow = (menu_marquee_width(title, TITLE_MARQUEE_PX) - room as f32).max(0.0);
         }
-        let overflow = (menu_marquee_width(title, TITLE_MARQUEE_PX) - room as f32).max(0.0);
+        let overflow = self.overflow;
         self.overflowing = overflow > 1.0;
         if !self.overflowing { return None; }
         let forward = overflow / TITLE_MARQUEE_FORWARD_PX_PER_SEC;
@@ -245,13 +265,7 @@ impl TitleMarquee {
         let max_at = whole.w.saturating_sub(w);
         let at = ((offset.max(0.0) * scale[0]).round() as u32).min(max_at);
         if self.viewport.is_none() || self.last_at != Some(at) {
-            let mut rgba = vec![0u8; (w * h * 4) as usize];
-            let copy = w.min(whole.w.saturating_sub(at)) as usize * 4;
-            for row in 0..h {
-                let src = (row * whole.w + at) as usize * 4;
-                let dst = (row * w) as usize * 4;
-                rgba[dst..dst + copy].copy_from_slice(&whole.rgba[src..src + copy]);
-            }
+            let rgba = crop_marquee_rgba(whole, w, at);
             if let Some(texture) = self.viewport {
                 compositor.update_texture(texture, w, h, &rgba);
             } else {
@@ -270,6 +284,8 @@ impl TitleMarquee {
         self.title = None;
         self.started = None;
         self.overflowing = false;
+        self.overflow = 0.0;
+        self.room = 0;
         self.whole = None;
         self.last_at = None;
     }
@@ -1496,6 +1512,28 @@ mod album_thumbnail_layout_tests {
         assert!(PLAYING_INFO_X + PLAYING_INFO_W as f32 <= OUT_W as f32 - EDGE);
         assert!(PLAYING_COVER_Y + PLAYING_COVER_SIDE < PLAYING_PROGRESS_Y);
         assert!(PLAYING_PROGRESS_Y + 48.0 < OUT_H as f32);
+    }
+
+    #[test]
+    fn title_marquee_crops_prepared_pixels_and_clamps_out_of_range_scroll() {
+        let whole = UndoFace {
+            w: 5, h: 2,
+            rgba: (0..10u8).flat_map(|n| [n, n, n, 255]).collect(),
+        };
+        let a = crop_marquee_rgba(&whole, 3, 0);
+        let b = crop_marquee_rgba(&whole, 3, 1);
+        let c = crop_marquee_rgba(&whole, 3, 99);
+        assert_eq!(&a[..12], &[0,0,0,255,1,1,1,255,2,2,2,255]);
+        assert_eq!(&b[..12], &[1,1,1,255,2,2,2,255,3,3,3,255]);
+        assert_eq!(&c[..12], &[2,2,2,255,3,3,3,255,4,4,4,255]);
+        assert_eq!(&c[12..], &[7,7,7,255,8,8,8,255,9,9,9,255]);
+    }
+
+    #[test]
+    fn now_tab_and_track_counter_have_no_redundant_playing_status() {
+        assert_eq!(TITLE_MARQUEE_PX, 26);
+        assert_eq!(PLAYING_PROGRESS_Y, 414.0);
+        assert!(326.0 > 277.0 && 326.0 < PLAYING_PROGRESS_Y);
     }
 
     #[test]

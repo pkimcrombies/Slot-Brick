@@ -123,8 +123,8 @@ pub fn draw_status_bar(
     );
 }
 
-/// Same status HUD, with an optional Music-only lock glyph directly to the
-/// left of battery. Wi-Fi/update shift left as needed without overlap.
+/// Same status HUD, with an optional Music-only lock glyph centred at the top.
+/// The clock, battery, Wi-Fi and update icons remain at their Shelf positions.
 pub fn draw_status_bar_with_lock(
     battery: Option<Battery>,
     percent: Printed,
@@ -152,21 +152,18 @@ pub fn draw_status_bar_with_lock(
         out,
     );
 
+    // Keep the system status cluster anchored at the right, exactly as on Shelf.
+    // Music Lock has its own centred position and must not push Wi-Fi or battery.
     let mut icon_right = battery_right - status_gauge_width(battery, percent);
     if let Some((tex, w, h)) = lock {
         let (w, h) = (w as f32, h as f32);
-        // Reserve the *rasterized* width before snapping left to the display grid.
-        // Rounding a nominal half-pixel position to the right would eat into the
-        // required gap next to the fractional-width battery gauge.
-        let raster_w = (w * scale[0]).round().max(1.0) / scale[0];
-        icon_right = ((icon_right - WIFI_GAP - raster_w) * scale[0]).floor() / scale[0];
+        let x = (OUT_W as f32 - w) / 2.0;
         let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
-        out.push(pixel_aligned_texture(tex, [icon_right, y], [w, h], scale, 1.0));
+        out.push(pixel_aligned_texture(tex, [x, y], [w, h], scale, 1.0));
     }
     if let Some((tex, w, h)) = wifi {
         let (w, h) = (w as f32, h as f32);
-        let raster_w = (w * scale[0]).round().max(1.0) / scale[0];
-        icon_right = ((icon_right - WIFI_GAP - raster_w) * scale[0]).floor() / scale[0];
+        icon_right -= WIFI_GAP + w;
         let y = STATUS_TOP_Y + (HINT_H as f32 - h) / 2.0;
         out.push(pixel_aligned_texture(tex, [icon_right, y], [w, h], scale, 1.0));
     }
@@ -198,53 +195,34 @@ mod status_position_tests {
     }
 
     #[test]
-    fn music_lock_sits_immediately_left_of_battery_without_moving_the_battery() {
-        let battery = Battery { percent: 91, charge: slot_power::Charge::Discharging };
-        let percent = Printed { face: None, w: 39 };
-        let icon = TexId::from_raw(45);
-        let mut out = Vec::new();
-        draw_status_bar_with_lock(
-            Some(battery), percent, None, None, None, Some((icon, 18, 18)),
-            Printed::default(), [1.0, 1.0], &mut out,
-        );
-        let gauge_left = OUT_W as f32 - STATUS_MARGIN
-            - status_gauge_width(Some(battery), percent);
-        assert!(out.iter().any(|draw| matches!(draw, Draw::Tex { tex, x, y, .. }
-            if *tex == icon && *x + 18.0 + WIFI_GAP <= gauge_left + 0.01
-                && *y > STATUS_TOP_Y)));
-    }
-
-    #[test]
-    fn music_lock_gap_survives_pixel_rounding_at_both_hud_scales() {
+    fn music_lock_is_centered_and_does_not_shift_the_shared_hud() {
         let percent = Printed { face: None, w: 39 };
         let lock = TexId::from_raw(45);
         let wifi = TexId::from_raw(46);
+        let update = TexId::from_raw(47);
         for scale in [[1.0, 1.0], [1.6, 1.6]] {
             for charge in [slot_power::Charge::Discharging, slot_power::Charge::Charging] {
                 let battery = Some(Battery { percent: 91, charge });
-                let mut out = Vec::new();
-                draw_status_bar_with_lock(
-                    battery, percent, None, Some((wifi, 20, 16)), None, Some((lock, 18, 18)),
-                    Printed::default(), scale, &mut out,
+                let mut regular = Vec::new();
+                draw_status_bar(
+                    battery, percent, None, Some((wifi, 20, 16)), Some((update, 18, 18)),
+                    Printed::default(), scale, &mut regular,
                 );
-                let gauge_left = OUT_W as f32 - STATUS_MARGIN
-                    - status_gauge_width(battery, percent);
-                let (lock_x, lock_w) = out.iter().find_map(|draw| match draw {
-                    Draw::Tex { tex, x, w, .. } if *tex == lock => Some((*x, *w)),
+                let mut locked = Vec::new();
+                draw_status_bar_with_lock(
+                    battery, percent, None, Some((wifi, 20, 16)), Some((update, 18, 18)),
+                    Some((lock, 18, 18)), Printed::default(), scale, &mut locked,
+                );
+                let (x, y, w, h) = locked.iter().find_map(|draw| match draw {
+                    Draw::Tex { tex, x, y, w, h, .. } if *tex == lock => Some((*x, *y, *w, *h)),
                     _ => None,
-                }).expect("the lock glyph should be rendered");
-                let (wifi_x, wifi_w) = out.iter().find_map(|draw| match draw {
-                    Draw::Tex { tex, x, w, .. } if *tex == wifi => Some((*x, *w)),
-                    _ => None,
-                }).expect("connected Wi-Fi should remain visible");
-                assert!(lock_x + lock_w + WIFI_GAP <= gauge_left + 0.01,
-                    "lock-to-battery spacing at scale {scale:?}");
-                assert!(wifi_x + wifi_w + WIFI_GAP <= lock_x + 0.01,
-                    "Wi-Fi-to-lock spacing at scale {scale:?}");
-                assert!((lock_x * scale[0] - (lock_x * scale[0]).round()).abs() < 0.001);
-                assert!(matches!(out.first(), Some(Draw::Rect { x, .. })
-                    if (*x - gauge_left).abs() < 0.001),
-                    "Music Lock must not move the battery gauge");
+                }).expect("Music Lock must have its own HUD glyph");
+                assert!((x + w / 2.0 - OUT_W as f32 / 2.0).abs() <= 0.5 / scale[0] + 0.01,
+                    "lock must be centred at scale {scale:?}");
+                assert!(y >= STATUS_TOP_Y && y + h <= STATUS_TOP_Y + HINT_H as f32);
+                assert!((x * scale[0] - (x * scale[0]).round()).abs() < 0.001);
+                locked.retain(|draw| !matches!(draw, Draw::Tex { tex, .. } if *tex == lock));
+                assert_eq!(locked, regular, "Music Lock must not move any other HUD element");
             }
         }
     }

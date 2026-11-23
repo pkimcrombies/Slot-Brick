@@ -645,6 +645,21 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 libbz2 extraction script CRLF correction
+
+- The first libbz2-only installer downloaded and verified Debian's ARM64
+  package, then stopped before writing to SD. Docker's `sh -ec` printed
+  `set: Illegal option -` on its first line. The installer had forwarded
+  a Windows PowerShell CRLF here-string verbatim as a shell script; the
+  trailing carriage return after `set -eu` was treated as an invalid
+  POSIX option by dash.
+- The corrected `Install-Slot-Brick-Video-libBz2-Fix-v2-20261123.txt`
+  removes carriage returns, joins shell statements on one line, and
+  retains the same pinned .deb SHA256, ELF check, private-lib-only write,
+  verified backups, rollback, and cached download. An offline `sh -n`
+  check of the resulting POSIX command succeeded. This does **not**
+  establish that Docker/ffplay playback works yet on the user's host.
+
 ## 2026-11-23 ffplay missing libbz2 on Slot OS (user device log)
 
 - User installed the experimental video handoff and pressed Y, but video

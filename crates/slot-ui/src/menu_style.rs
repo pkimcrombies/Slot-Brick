@@ -75,6 +75,25 @@ pub fn menu_marquee_width(label: &str, px: u32) -> f32 {
     text::line_width(font, &label.to_lowercase(), px as f32, tracking) + 8.0
 }
 
+/// Rasterize the entire Now Playing title once per song/scale change.
+/// The caller crops a narrow viewport from these pixels on every animation
+/// frame rather than rasterizing every glyph again. Cap malformed metadata.
+pub fn menu_marquee_whole_face(
+    label: &str, px: u32, [sx, sy]: [f32; 2], ink: [u8; 3],
+) -> UndoFace {
+    let logical_w = menu_marquee_width(label, px).ceil().clamp(1.0, 8192.0);
+    let logical_h = (px as f32 * 1.4).ceil();
+    let w = (logical_w * sx).round().max(1.0) as u32;
+    let h = (logical_h * sy).round().max(1.0) as u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    text::draw_scrolling_line(
+        &mut rgba, w, h, &label.to_lowercase(),
+        px as f32 * sy, (px as f32 * 0.10).round() * sy,
+        4.0 * sx, ink,
+    );
+    UndoFace { rgba, w, h }
+}
+
 /// An unclipped song title rendered *inside* a fixed, width-bounded viewport.
 /// Scroll offset is in logical pixels. Only the viewport image is allocated,
 /// not a giant texture spanning the full metadata string.

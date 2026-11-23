@@ -645,6 +645,24 @@
   retain the idle redraw gate. Cargo exit 101 is not enough to diagnose a
   failure—read actual Rust error/test output before changing code.
 
+## 2026-11-23 Brief Music unlock confirmation (build/device verification pending)
+
+- User explicitly prefers **no animation**. When Music unlocks, swap the
+  centred closed 18px UXWing Lock Line glyph immediately to the matching
+  18px UXWing Lock Open Line (https://uxwing.com/lock-open-line-icon/).
+  Hold open glyph for ~600ms, then remove it from HUD. No fade or movement.
+  Locking again cancels the open indication instantly and restores the
+  closed lock. Unlock works immediately regardless of this visual feedback.
+- The closed icon is `Slot/System/music-icons/lock.png` and the open icon
+  is `Slot/System/music-icons/unlock.png`. Both use the same black-tinted
+  cached GPU decoder. The MusicView owns a short render deadline; the
+  shared Shelf/game status positions and audio/input behaviour stay as-is.
+  Ensure any supplied guarded installer downloads, validates, backs up,
+  and SHA-verifies the additional `unlock.png` asset before installing.
+- New regression tests cover no icon flash on initial unlocked Music,
+  closed-to-open transition, 600ms expiry, and immediate cancellation
+  when relocked. Docker/ARM64/Brick Pro verification remains pending.
+
 ## 2026-11-23 Music HUD and playback glyph update (build/device verification pending)
 
 - A guarded Windows installer caught a `slot-ui` unit regression:

@@ -788,11 +788,14 @@ impl MusicView {
     }
 }
 
-/// Downsample the user-selected UXWing lock icon to a single black 18px
-/// texture. The downloadable PNG has a transparent background; this also
-/// supports the common black-on-white downloads by removing white pixels.
+/// Use the user's exact UXWing Padlock/Unlocked artwork, including its
+/// coloured body and keyhole contrast. The earlier black tint collapsed both
+/// details into one dark silhouette. PNG transparency is retained.
 fn decode_lock_icon(png: &[u8]) -> Option<Vec<u8>> {
-    decode_status_icon(png, HUD_LOCK_SIDE)
+    let (w, h) = crate::cart_art::png_size(png)?;
+    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
+    let (rgba, w, h) = crate::cart_art::decode_rgba(png)?;
+    slot_ui::cover_rgba(&rgba, w, h, HUD_LOCK_SIDE, HUD_LOCK_SIDE)
 }
 
 /// Tint the official UXWing glyph black, retaining alpha and hiding white.
@@ -1634,6 +1637,24 @@ mod album_thumbnail_layout_tests {
         assert_eq!(HUD_LOCK_SIDE, 18);
         let view = MusicView::default();
         assert!(view.hud_lock_icon().is_none());
+    }
+
+    #[test]
+    fn selected_coloured_padlock_png_keeps_its_own_colours() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&[
+                255, 215, 48, 255, 255, 215, 48, 255,
+                255, 215, 48, 255, 255, 215, 48, 255,
+            ]).unwrap();
+        }
+        let pixels = decode_lock_icon(&png_bytes).expect("valid coloured UXWing PNG");
+        assert_eq!(pixels.len(), (HUD_LOCK_SIDE * HUD_LOCK_SIDE * 4) as usize);
+        assert_eq!(&pixels[0..4], &[255, 215, 48, 255]);
+        assert!(decode_lock_icon(b"not a png").is_none());
     }
 
     #[test]

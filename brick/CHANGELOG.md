@@ -1,6 +1,7 @@
 # Changelog — Slot. for TrimUI Brick
 
 ## Unreleased
+- Fix album-list thumbnail compile error E0308: rename the MP3 ID3 tag-length local to `tag_bytes` so it does not shadow the `u32` thumbnail dimension.
 - Music Now Playing: rename the first tab to `now`, lower X-of-Y counter and hide the redundant `playing` status; make long-title marquee smoother with one pre-rendered title, reusable narrow texture and ~30fps updates.
 - Music list: 9 compact rows instead of 6, slim rose scroll indicator, 64px thumbnails with persistent SD PNG cache and up to 21 warm slots; limit concurrent decodes to 3 and refresh pending artwork, keeping Cover Flow/Now Playing at full resolution.
 - Music Lock: use the official UXWing lock PNG at 18px immediately to the left of the battery in the shared top HUD; remove the homemade tab-row padlock.

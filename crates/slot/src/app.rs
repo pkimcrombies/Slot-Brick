@@ -2851,11 +2851,17 @@ impl App {
         if self.brick_mute == Some(muted) { return; }
         let initial = self.brick_mute.is_none();
         self.brick_mute = Some(muted);
-        if matches!(self.phase, Phase::Music) {
+        if matches!(self.phase, Phase::Music)
+            || (matches!(self.phase, Phase::Doze { .. }) && self.music_before_doze) {
             // The physical switch is Music's hold switch. Do not set
             // software mute, change volume or show a volume HUD.
+            // Preserve its state even when the switch moves during Doze.
             if let Some(music) = self.music.as_mut() {
-                music.set_locked(muted);
+                // An initial GPIO read of OFF should not cancel a chord lock
+                // the user activated just before the first poll.
+                if !initial || muted {
+                    music.set_locked(muted);
+                }
             }
             return;
         }
@@ -6940,6 +6946,32 @@ mod quiet_poweroff_tests {
         assert_eq!(app.output_volume(), 0);
         app.set_brick_mute(false);
         assert_eq!(app.output_volume(), original_volume);
+    }
+
+    #[cfg(feature = "brick")]
+    #[test]
+    fn physical_switch_changes_during_music_sleep_restore_hold_correctly() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        write_slot_state(root.path(), &SlotState {
+            clock_set: true, ..SlotState::default()
+        }).unwrap();
+        let mut app = App::boot(root.path());
+        app.set_brick_mute(true);
+        app.open_quick_row(QuickRow::Music);
+        assert!(app.music().unwrap().locked());
+        app.apply(Action::LidClose);
+        assert!(matches!(app.phase(), Phase::Doze { .. }));
+        app.set_brick_mute(false);
+        assert!(!app.music().unwrap().locked());
+        app.apply(Action::LidOpen);
+        assert!(matches!(app.phase(), Phase::Music));
+        assert!(!app.music().unwrap().locked());
+        app.apply(Action::LidClose);
+        app.set_brick_mute(true);
+        app.apply(Action::LidOpen);
+        assert!(app.music().unwrap().locked());
+        assert!(app.output_volume() > 0, "waking into locked Music stays audible");
     }
 
     #[cfg(feature = "brick")]

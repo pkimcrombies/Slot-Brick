@@ -12,6 +12,23 @@ use crate::resample::Resampler;
 
 const CHUNK: usize = 512;
 
+pub(crate) fn companion_video(audio: &Path) -> Option<PathBuf> {
+    ["mp4", "m4v"].into_iter().map(|ext| audio.with_extension(ext))
+        .find(|video| std::fs::metadata(video)
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0))
+}
+
+/// The currently playing audio track remains alive while an external
+/// fullscreen player owns the display and ALSA. Slot restores its state when
+/// that child process exits. Video playback itself is not part of dr_mp3.
+#[derive(Clone, Debug)]
+pub struct VideoHandoff {
+    pub path: PathBuf,
+    pub at_seconds: u32,
+    pub was_playing: bool,
+}
+
+
 unsafe extern "C" {
     fn slot_mp3_open(
         path: *const c_void,
@@ -351,6 +368,7 @@ pub(crate) struct Music {
     pub(crate) track: Option<Track>,
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
+    video_requested: bool,
     /// Session-only hold switch (VolUp + VolDown chord); never persisted.
     locked: bool,
     discard_audio: bool,
@@ -387,6 +405,7 @@ impl Music {
             }],
             track: None,
             now_playing_view: false,
+            video_requested: false,
             locked: false,
             discard_audio: false,
             cover_flow: true,
@@ -765,6 +784,7 @@ impl Music {
         {
             self.select_row(index);
         }
+        self.video_requested = false;
         self.track = Some(Track {
             album,
             index,
@@ -838,6 +858,13 @@ impl Music {
             if let Some(track) = &mut self.track {
                 let (album, index) = (track.album, track.index);
                 match action {
+                    // On Now Playing only, Y hands a matching local video to
+                    // the separate player. No video = no control change.
+                    Action::GbaDown(Btn::Y) => {
+                        if companion_video(&self.library.albums[album].songs[index].path).is_some() {
+                            self.video_requested = true;
+                        }
+                    }
                     Action::GbaDown(Btn::A) => match track.status {
                         Status::Playing => track.status = Status::Paused,
                         Status::Paused => track.status = Status::Playing,
@@ -923,6 +950,33 @@ impl Music {
             _ => {}
         }
         false
+    }
+
+    /// Consume a Y request only once, and rewind any queued sound to the
+    /// audible sample before the external player's initial -ss seek.
+    pub(crate) fn take_video_handoff(&mut self, ring: &Ring) -> Option<VideoHandoff> {
+        if !std::mem::take(&mut self.video_requested) { return None; }
+        let track = self.track.as_ref()?;
+        let video = companion_video(&self.song(track).path)?;
+        let was_playing = matches!(track.status, Status::Playing | Status::Loading);
+        self.prepare_suspend(ring);
+        let track = self.track.as_mut()?;
+        let at_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as u32);
+        track.status = Status::Paused;
+        Some(VideoHandoff { path: video, at_seconds, was_playing })
+    }
+
+    /// Resume the original audio decoder, not the video's soundtrack.
+    /// The patched NX ffplay supplies a position; if absent, stay at the
+    /// original handoff point rather than guessing elapsed wall time.
+    pub(crate) fn finish_video_handoff(&mut self, video: &VideoHandoff,
+                                       at_seconds: Option<u32>) {
+        let Some(track) = self.track.as_mut() else { return; };
+        let final_seconds = at_seconds.unwrap_or(video.at_seconds);
+        let current_seconds = track.time().map_or(0, |(at, _)| at.max(0.0) as i64);
+        let shift = i64::from(final_seconds) - current_seconds;
+        track.pending_seek_seconds = shift.clamp(-3600, 3600) as i32;
+        track.status = if video.was_playing { Status::Playing } else { Status::Paused };
     }
 
     /// Stop queued audio when entering kernel suspend without losing track,
@@ -1039,6 +1093,41 @@ mod tests {
             "browsing other sections does not flush the queued seek");
         music.input(Action::GbaDown(Btn::L1));
         assert!(music.showing_now_playing());
+    }
+
+    #[test]
+    fn now_playing_y_requests_external_video_only_with_matching_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let music_dir = dir.path().join("Music/Album");
+        fs::create_dir_all(&music_dir).unwrap();
+        let mp3 = music_dir.join("A.mp3");
+        fs::write(&mp3, b"sound").unwrap();
+        let mut music = Music::with_library(Library {
+            albums: vec![Album {
+                title: "Album".into(), artist: "Artist".into(), release_date: None,
+                songs: vec![Song {
+                    path: mp3.clone(), title: "A".into(), artist: "Artist".into(),
+                    disc: 1, track: Some(1),
+                }],
+            }],
+            artists: vec![],
+        });
+        music.start_album(0, 0);
+        music.now_playing_view = true;
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(!music.video_requested, "Y does nothing without a video");
+        fs::write(mp3.with_extension("mp4"), b"video").unwrap();
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.video_requested);
+        let ring = Ring::new(0);
+        let request = music.take_video_handoff(&ring).expect("external video request");
+        assert_eq!(request.path, mp3.with_extension("mp4"));
+        assert_eq!(request.at_seconds, 0);
+        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Paused));
+        assert!(music.take_video_handoff(&ring).is_none(), "request is consumed once");
+        music.finish_video_handoff(&request, Some(9));
+        assert!(music.track.as_ref().is_some_and(|t| t.status == Status::Playing));
+        assert_eq!(music.track.as_ref().unwrap().pending_seek_seconds, 9);
     }
 
     #[test]

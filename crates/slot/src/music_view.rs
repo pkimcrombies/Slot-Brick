@@ -126,8 +126,13 @@ const LYRICS_FLIP: Duration = Duration::from_millis(380);
 const LYRICS_SCROLL: Duration = Duration::from_millis(240);
 const LYRICS_TOP: f32 = 112.0;
 const LYRICS_BOTTOM: f32 = 388.0;
-const LYRICS_CENTER: f32 = 250.0;
-const LYRICS_PITCH: f32 = 80.0;
+// A continuous text page instead of one equally-sized slot per timestamp.
+// One font size keeps wrapping and vertical positions stable as ink changes.
+const LYRICS_TEXT_PX: u32 = 17;
+const LYRICS_LINE_H: f32 = 24.0;
+const LYRICS_GAP: f32 = 4.0;
+const LYRICS_PADDING: f32 = 12.0;
+const LYRICS_ANCHOR: f32 = 36.0;
 
 #[derive(Clone, Copy)]
 struct LyricsFrame {
@@ -138,19 +143,20 @@ struct LyricsFrame {
 }
 
 struct LyricLayout {
-    index: usize,
-    normal: Vec<String>,
-    active: Vec<String>,
+    source: String,
+    top: f32,
+    bottom: f32,
+    lines: Vec<String>,
 }
 
-// Word-wrap inside the existing right column, including unspaced CJK text.
-// Measure using Slot's own font metrics. Very long malformed lines are
-// bounded by the LRC parser and the third row uses the normal ellipsis.
-fn wrap_lyric(text: &str, px: u32) -> Vec<String> {
-    let mut rest = text.trim();
+// Use the same width measurement and font as the existing music UI.
+// Preserve the complete line, including long or unspaced CJK lyrics.
+fn wrap_lyric(text: &str) -> Vec<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut rest = normalized.as_str();
     let mut rows = Vec::new();
-    while !rest.is_empty() && rows.len() < 3 {
-        if rows.len() == 2 || menu_marquee_width(rest, px) <= PLAYING_INFO_W as f32 {
+    while !rest.is_empty() {
+        if menu_marquee_width(rest, LYRICS_TEXT_PX) <= PLAYING_INFO_W as f32 {
             rows.push(rest.to_owned());
             break;
         }
@@ -158,18 +164,47 @@ fn wrap_lyric(text: &str, px: u32) -> Vec<String> {
         let mut word_end = 0;
         for (at, ch) in rest.char_indices() {
             let next = at + ch.len_utf8();
-            if menu_marquee_width(&rest[..next], px) > PLAYING_INFO_W as f32 && end != 0 {
+            if menu_marquee_width(&rest[..next], LYRICS_TEXT_PX) > PLAYING_INFO_W as f32
+                && end != 0 {
                 break;
             }
             end = next;
             if ch.is_whitespace() { word_end = at; }
         }
         if end == 0 { break; }
+        // Prefer a word boundary; if a word itself is wider than the card,
+        // split at a UTF-8 character boundary to guarantee progress.
         if word_end > 0 { end = word_end; }
         rows.push(rest[..end].trim().to_owned());
         rest = rest[end..].trim_start();
     }
     rows
+}
+
+fn layout_lyrics(lines: &[LyricLine]) -> Vec<LyricLayout> {
+    let mut top = 0.0;
+    lines.iter().map(|line| {
+        let wrapped = wrap_lyric(&line.text);
+        // Timed empty entries are instrumental gaps, not large empty rows.
+        let height = if wrapped.is_empty() { LYRICS_LINE_H / 2.0 }
+            else { wrapped.len() as f32 * LYRICS_LINE_H + LYRICS_GAP };
+        let row = LyricLayout {
+            source: line.text.clone(), top, bottom: top + height, lines: wrapped,
+        };
+        top = row.bottom;
+        row
+    }).collect()
+}
+
+fn lyric_scroll_target(rows: &[LyricLayout], active: isize) -> f32 {
+    let Some(row) = usize::try_from(active).ok().and_then(|i| rows.get(i)) else {
+        return 0.0;
+    };
+    let height = rows.last().map_or(0.0, |row| row.bottom) + 2.0 * LYRICS_PADDING;
+    let max_scroll = (height - (LYRICS_BOTTOM - LYRICS_TOP)).max(0.0);
+    // Retain a little preceding context. At the end, stop at the end of
+    // the page rather than scrolling the last few lines into blank space.
+    (row.top + LYRICS_PADDING - LYRICS_ANCHOR).clamp(0.0, max_scroll)
 }
 
 #[derive(Default)]
@@ -179,6 +214,7 @@ struct LyricsMotion {
     flip: Option<(Instant, f32)>,
     active: isize,
     scroll: Option<(Instant, f32)>,
+    scroll_target: f32,
     rows: Vec<LyricLayout>,
     refresh: bool,
 }
@@ -194,7 +230,7 @@ impl LyricsMotion {
     }
 
     fn scroll_at(&self, now: Instant) -> f32 {
-        let to = self.active as f32;
+        let to = self.scroll_target;
         self.scroll.map_or(to, |(start, from)| {
             let t = (now.saturating_duration_since(start).as_secs_f32()
                 / LYRICS_SCROLL.as_secs_f32()).clamp(0.0, 1.0);
@@ -212,49 +248,59 @@ impl LyricsMotion {
             self.flip = None;
             self.scroll = None;
             self.target = desired;
-            self.active = active;
-            self.rows.clear();
-        } else {
-            if self.target != desired {
-                self.flip = Some((now, self.flip_at(now)));
-                self.target = desired;
-            }
-            if self.active != active {
-                let from = self.scroll_at(now);
-                self.scroll = (desired && playing && active == self.active + 1)
-                    .then_some((now, from));
-                self.active = active;
+            // The epoch also changes on seek. Keep the measured layout
+            // when the actual lyrics are unchanged, even across a seek.
+            if self.rows.len() != lines.len()
+                || self.rows.iter().zip(lines).any(|(row, line)| row.source != line.text) {
                 self.rows.clear();
             }
+        } else if self.target != desired {
+            self.flip = Some((now, self.flip_at(now)));
+            self.target = desired;
         }
+
         if self.flip.is_some_and(|(start, _)| now.saturating_duration_since(start) >= LYRICS_FLIP) {
             self.flip = None;
         }
-        if self.scroll.is_some_and(|(start, _)| now.saturating_duration_since(start) >= LYRICS_SCROLL) {
-            self.scroll = None;
-        }
         let p = self.flip_at(now);
         let show = p >= 0.5 && !lines.is_empty();
-        if (show || desired) && self.rows.is_empty() {
-            let first = (active - 3).max(0) as usize;
-            let end = ((active + 4).max(0) as usize).min(lines.len());
-            for index in first..end {
-                self.rows.push(LyricLayout {
-                    index,
-                    normal: wrap_lyric(&lines[index].text, 16),
-                    active: wrap_lyric(&lines[index].text, 19),
-                });
-            }
+        let rebuilt = (show || desired) && self.rows.is_empty() && !lines.is_empty();
+        if rebuilt {
+            self.rows = layout_lyrics(lines);
+        }
+        let next = lyric_scroll_target(&self.rows, active);
+        if reset || rebuilt {
+            self.scroll_target = next;
+            self.scroll = None;
+        } else if self.active != active {
+            let from = self.scroll_at(now);
+            self.scroll_target = next;
+            self.scroll = (desired && playing && active == self.active + 1
+                && (next - from).abs() > 0.01).then_some((now, from));
+        }
+        self.active = active;
+        if !playing || !desired
+            || self.scroll.is_some_and(|(start, _)| now.saturating_duration_since(start) >= LYRICS_SCROLL) {
+            self.scroll = None;
         }
         self.refresh = playing && desired;
         LyricsFrame {
             lyrics: show,
-            // Orthographic projection of a card rotating around its vertical
-            // centre. Swap faces at edge-on; never mirror readable text.
+            // The existing metadata/lyrics flip is deliberately unchanged.
             squeeze: (p * std::f32::consts::PI).cos().abs().clamp(0.0, 1.0),
             active,
             position: self.scroll_at(now),
         }
+    }
+
+    fn hide(&mut self) {
+        // Settings and browsing do not need lyric frames. Keep the measured
+        // page so returning to Now Playing does not re-wrap the whole song.
+        self.epoch = None;
+        self.target = false;
+        self.flip = None;
+        self.scroll = None;
+        self.refresh = false;
     }
 
     fn animating(&self) -> bool { self.flip.is_some() || self.scroll.is_some() }
@@ -903,7 +949,7 @@ impl MusicView {
             self.lyrics_motion.update(music.showing_lyrics(), music.lyric_epoch(),
                 music.lyric_index(), music.lyrics(), music.playing(), now)
         } else {
-            self.lyrics_motion = LyricsMotion::default();
+            self.lyrics_motion.hide();
             LyricsFrame { lyrics: false, squeeze: 1.0, active: -1, position: -1.0 }
         };
         let title_offset = if music.showing_now_playing() && !music.music_settings_open()
@@ -1407,24 +1453,37 @@ impl Painter<'_> {
     }
 
     fn lyric_card(&mut self, frame: LyricsFrame, rows: &[LyricLayout]) {
-        for row in rows {
-            let centre = LYRICS_CENTER + (row.index as f32 - frame.position) * LYRICS_PITCH;
-            let active = row.index as isize == frame.active;
-            let (px, ink, lines) = if active {
-                (19, MUSIC_SELECTION_INK, &row.active)
+        // Only rasterize rows near the visible window. Layout is measured
+        // once for the song, with variable height for wrapped lyrics.
+        let origin = LYRICS_TOP + LYRICS_PADDING - frame.position;
+        let first = rows.partition_point(|row| origin + row.bottom <= LYRICS_TOP);
+        for (index, row) in rows.iter().enumerate().skip(first) {
+            let top = origin + row.top;
+            if top >= LYRICS_BOTTOM { break; }
+            let ink = if index as isize == frame.active {
+                MUSIC_SELECTION_INK
+            } else if (index as isize) < frame.active {
+                MUSIC_MUTED_INK
             } else {
-                (16, MUSIC_MUTED_INK, &row.normal)
+                MUSIC_TEXT_INK
             };
-            let pitch = (px as f32 * 1.4).ceil();
-            let top = centre - lines.len() as f32 * pitch / 2.0;
-            for (i, line) in lines.iter().enumerate() {
-                let y = top + i as f32 * pitch;
-                if y < LYRICS_TOP || y + pitch > LYRICS_BOTTOM { continue; }
-                let key = format!("{px}/{PLAYING_INFO_W}/{ink:?}/{line}");
+            for (i, line) in row.lines.iter().enumerate() {
+                let y = top + i as f32 * LYRICS_LINE_H;
+                // Keep every glyph inside the text card. Fade at either
+                // boundary so whole-line clipping is unobtrusive in motion.
+                if y < LYRICS_TOP || y + LYRICS_LINE_H > LYRICS_BOTTOM { continue; }
+                let alpha = ((y - LYRICS_TOP).min(LYRICS_BOTTOM - y - LYRICS_LINE_H)
+                    / LYRICS_PADDING).clamp(0.0, 1.0);
+                if alpha <= 0.0 { continue; }
+                let key = format!("{LYRICS_TEXT_PX}/{PLAYING_INFO_W}/{ink:?}/{line}");
                 let face = self.texture(key,
-                    |scale| menu_text_face(line, px, PLAYING_INFO_W, scale, ink));
-                self.place(face, PLAYING_INFO_X +
-                    (PLAYING_INFO_W.saturating_sub(face.size[0])) as f32 / 2.0, y);
+                    |scale| menu_text_face(line, LYRICS_TEXT_PX, PLAYING_INFO_W, scale, ink));
+                if face.size[0] > 0 {
+                    self.draws.push(pixel_aligned_texture(
+                        face.tex, [PLAYING_INFO_X, y],
+                        face.size.map(|n| n as f32), self.scale, alpha,
+                    ));
+                }
             }
         }
     }
@@ -2115,11 +2174,59 @@ mod album_thumbnail_layout_tests {
         assert!(!motion.animating());
         let next = motion.update(true, 1, Some(1), &lines, true, now + LYRICS_FLIP);
         assert_eq!(next.active, 1);
-        assert_eq!(next.position, 0.0, "adjacent lyrics scroll from their previous location");
-        let seek = motion.update(true, 2, Some(0), &lines, false, now + LYRICS_FLIP);
-        assert_eq!(seek.position, 0.0);
-        assert!(!motion.animating(), "seek snaps to the current lyric");
-        assert!(!motion.refresh, "paused lyrics require no periodic refresh");
+        assert_eq!(next.position, 0.0, "short songs fit without unnecessary scrolling");
+        assert!(!motion.animating());
+    }
+
+    #[test]
+    fn compact_lyrics_layout_scrolls_in_pixels_and_reuses_layout_on_seek() {
+        let now = Instant::now();
+        let lines: Vec<_> = (0..24).map(|i| LyricLine {
+            at_ms: i * 1000, text: format!("line {i}"),
+        }).collect();
+        let mut motion = LyricsMotion::default();
+        let initial = motion.update(true, 1, Some(4), &lines, true, now);
+        assert_eq!(motion.rows.len(), lines.len());
+        assert_eq!(motion.rows[1].top, LYRICS_LINE_H + LYRICS_GAP);
+        assert!(initial.position > 0.0);
+        let cached = motion.rows.as_ptr();
+        let next = motion.update(true, 1, Some(5), &lines, true, now);
+        assert_eq!(next.position, initial.position);
+        assert!(motion.animating());
+        let halfway = motion.update(true, 1, Some(5), &lines, true, now + LYRICS_SCROLL / 2);
+        assert!(halfway.position > initial.position && halfway.position < motion.scroll_target);
+        let done = motion.update(true, 1, Some(5), &lines, true, now + LYRICS_SCROLL);
+        assert_eq!(done.position, motion.scroll_target);
+        assert!(!motion.animating());
+        let seek = motion.update(true, 2, Some(18), &lines, false, now + LYRICS_SCROLL);
+        assert_eq!(seek.position, lyric_scroll_target(&motion.rows, 18));
+        assert_eq!(motion.rows.as_ptr(), cached, "seek must reuse the precomputed page");
+        assert!(!motion.animating());
+        assert!(!motion.refresh);
+        motion.hide();
+        let reopened = motion.update(true, 2, Some(18), &lines, false, now + LYRICS_SCROLL);
+        assert_eq!(reopened.position, seek.position);
+        assert_eq!(motion.rows.as_ptr(), cached);
+        let last = lyric_scroll_target(&motion.rows, 23);
+        assert_eq!(last, motion.rows.last().unwrap().bottom + 2.0 * LYRICS_PADDING
+            - (LYRICS_BOTTOM - LYRICS_TOP));
+    }
+
+    #[test]
+    fn compact_lyrics_wrap_without_losing_words_and_keep_timed_blank_gaps() {
+        let original = "a long lyric with many words that should wrap naturally into several rows ".repeat(8);
+        let wrapped = wrap_lyric(&original);
+        assert!(wrapped.len() > 3, "long lines must not be truncated");
+        assert_eq!(wrapped.join(" "), original.trim());
+        let lines = vec![
+            LyricLine { at_ms: 0, text: original },
+            LyricLine { at_ms: 1000, text: String::new() },
+            LyricLine { at_ms: 2000, text: "next".into() },
+        ];
+        let rows = layout_lyrics(&lines);
+        assert_eq!(rows[0].bottom, wrapped.len() as f32 * LYRICS_LINE_H + LYRICS_GAP);
+        assert_eq!(rows[1].bottom - rows[1].top, LYRICS_LINE_H / 2.0);
+        assert_eq!(rows[2].top, rows[1].bottom);
     }
 
     #[test]

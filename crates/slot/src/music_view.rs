@@ -99,6 +99,14 @@ const SETTINGS_ROW_STEP: f32 = QUICK_PITCH;
 const SETTINGS_ROW_H: f32 = 44.0;
 const SETTINGS_VALUE_X: f32 = QUICK_VALUE_EDGE;
 const ALBUM_TRACK_TITLE_X: f32 = EDGE + 44.0;
+// Smaller than the 22px Now Playing badge. Keep the mark inline, not in a column.
+const TRACK_VIDEO_BADGE_SIDE: u32 = 18;
+const TRACK_VIDEO_BADGE_GAP: u32 = 6;
+fn track_title_room(has_badge: bool) -> u32 {
+    let room = (OUT_W as f32 - ALBUM_TRACK_TITLE_X - EDGE - 12.0) as u32;
+    if has_badge { room.saturating_sub(TRACK_VIDEO_BADGE_SIDE + TRACK_VIDEO_BADGE_GAP) }
+    else { room }
+}
 // A gentle tonal step beneath the header, not a separate white panel.
 const ALBUM_HEADER_BACKGROUND: [f32; 4] = [239.0 / 255.0, 234.0 / 255.0, 225.0 / 255.0, 1.0];
 const ALBUM_ROW_SEPARATOR: [f32; 4] = [0.89, 0.88, 0.87, 1.0];
@@ -390,6 +398,8 @@ pub(crate) struct MusicView {
     playback_icons: [MusicIcon; 2],
     youtube_icon: MusicIcon,
     video_badge: VideoBadgeCache,
+    track_video_badges: [VideoBadgeCache; ALBUM_VISIBLE_ROWS],
+    track_video_icons: [MusicIcon; 2],
 }
 
 impl Default for MusicView {
@@ -412,6 +422,8 @@ impl Default for MusicView {
             playback_icons: std::array::from_fn(|_| MusicIcon::default()),
             youtube_icon: MusicIcon::default(),
             video_badge: VideoBadgeCache::default(),
+            track_video_badges: std::array::from_fn(|_| VideoBadgeCache::default()),
+            track_video_icons: std::array::from_fn(|_| MusicIcon::default()),
         }
     }
 }
@@ -427,6 +439,15 @@ impl MusicIcon {
         &mut self, music: &Music, file: &str, side: u32, scale: [f32; 2],
         ink: Option<[u8; 3]>, compositor: &mut Compositor,
     ) -> Option<TexId> {
+        self.load_with(music, file, side, scale, compositor,
+            |bytes, size| decode_music_icon(bytes, size, ink))
+    }
+
+    fn load_with(
+        &mut self, music: &Music, file: &str, side: u32, scale: [f32; 2],
+        compositor: &mut Compositor,
+        decode: impl FnOnce(&[u8], [u32; 2]) -> Option<Vec<u8>>,
+    ) -> Option<TexId> {
         // Match pixel_aligned_texture so one sampled texel covers one
         // compositor pixel, even at the Brick Pro's 1.6× scale.
         let size = music_icon_size(side, scale);
@@ -435,7 +456,7 @@ impl MusicIcon {
             let pixels = music.icon_root()
                 .and_then(|root| std::fs::read(root.join("System/music-icons").join(file)).ok())
                 .filter(|bytes| bytes.len() <= 4 << 20)
-                .and_then(|bytes| decode_music_icon(&bytes, size, ink));
+                .and_then(|bytes| decode(&bytes, size));
             let [w, h] = size;
             self.texture = pixels.map(|pixels| match self.texture {
                 Some(id) => {
@@ -710,6 +731,29 @@ impl MusicView {
         } else {
             None
         };
+        // Cache only the seven visible paths. Recheck on entering the album
+        // or paging to a different set, not on every repaint.
+        let mut track_badges = [false; ALBUM_VISIBLE_ROWS];
+        let mut track_icons = [None; 2];
+        if !music.music_settings_open() && !music.showing_now_playing() && music.showing_tracks() {
+            let album = music.browsed_album();
+            let (first, end) = music.album_track_window();
+            for (slot, index) in (first..end).enumerate() {
+                track_badges[slot] = self.track_video_badges[slot]
+                    .available_for(&album.songs[index].path);
+            }
+            if track_badges.iter().any(|&available| available) {
+                for (index, icon) in self.track_video_icons.iter_mut().enumerate() {
+                    let ink = if index == 0 { [0; 3] } else { ALBUM_WHITE_INK };
+                    track_icons[index] = icon.load_with(
+                        music, VIDEO_BADGE_FILE, TRACK_VIDEO_BADGE_SIDE, scale, compositor,
+                        |bytes, size| decode_track_video_icon(bytes, size, ink),
+                    );
+                }
+            }
+        } else {
+            self.track_video_badges = std::array::from_fn(|_| VideoBadgeCache::default());
+        }
         let title_offset = if music.showing_now_playing() && !music.music_settings_open() {
             if let Some(track) = music.track.as_ref() {
                 let song = music.song(track);
@@ -767,7 +811,7 @@ impl MusicView {
                 p.empty_now_playing();
             }
         } else if music.showing_tracks() {
-            p.album_tracks(music);
+            p.album_tracks(music, &track_badges, track_icons);
         } else if let (Some(position), Some(placeholder)) = (flow, flow_placeholder) {
             p.cover_flow(music, &flow_art, flow_first, position, placeholder);
         } else {
@@ -797,6 +841,21 @@ fn decode_music_icon(png: &[u8], [width, height]: [u32; 2], ink: Option<[u8; 3]>
     Some(pixels)
 }
 
+// Turn the existing red/white UXWing mark into a solid monochrome mask.
+// The white play triangle becomes transparent; the red silhouette stays
+// fully opaque rather than looking faded from a luminance-only conversion.
+fn decode_track_video_icon(png: &[u8], [width, height]: [u32; 2], ink: [u8; 3]) -> Option<Vec<u8>> {
+    let (w, h) = crate::cart_art::png_size(png)?;
+    if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
+    let (mut rgba, w, h) = crate::cart_art::decode_rgba(png)?;
+    for px in rgba.chunks_exact_mut(4) {
+        let darkness = 255 - u16::from(*px[..3].iter().min()?);
+        px[3] = ((u16::from(px[3]) * darkness) / 255) as u8;
+        px[..3].copy_from_slice(&ink);
+    }
+    slot_ui::cover_rgba(&rgba, w, h, width, height)
+}
+
 struct Painter<'a> {
     cache: &'a mut Vec<CachedFace>,
     index: usize,
@@ -810,7 +869,8 @@ impl Painter<'_> {
     /// Entering an album from Covers, Albums or Artists opens the same screen.
     /// Keep the content full-width with only a quiet title bar and one
     /// highlighted song, retaining the physical controls in Music::input.
-    fn album_tracks(&mut self, music: &Music) {
+    fn album_tracks(&mut self, music: &Music,
+                    badges: &[bool; ALBUM_VISIBLE_ROWS], icons: [Option<TexId>; 2]) {
         let album = music.browsed_album();
         let total = music.row_count();
         let cursor = music.cursor();
@@ -862,11 +922,21 @@ impl Painter<'_> {
                 &format!("{number:02}"), 17,
                 [EDGE, y + 11.0], number_ink, 40,
             );
-            self.text_with_room(
+            let badge = if badges[index - first] { icons[usize::from(selected)] } else { None };
+            let room = track_title_room(badge.is_some());
+            let width = self.text_with_room(
                 &song.title, 22,
-                [ALBUM_TRACK_TITLE_X, y + 7.0], ink,
-                (OUT_W as f32 - ALBUM_TRACK_TITLE_X - EDGE - 12.0) as u32,
+                [ALBUM_TRACK_TITLE_X, y + 7.0], ink, room,
             );
+            if let Some(tex) = badge {
+                let side = TRACK_VIDEO_BADGE_SIDE as f32;
+                self.draws.push(pixel_aligned_texture(
+                    tex,
+                    [ALBUM_TRACK_TITLE_X + width.min(room) as f32 + TRACK_VIDEO_BADGE_GAP as f32,
+                     y + (ALBUM_TRACK_ROW_H - side) / 2.0],
+                    [side, side], self.scale, 1.0,
+                ));
+            }
         }
 
         // Very slim scroll indicator on the outer edge, only for albums
@@ -1677,6 +1747,39 @@ mod album_thumbnail_layout_tests {
         let pixels = decode_music_icon(&png_bytes, size, None).expect("valid logo PNG");
         assert_eq!(pixels.len(), 35 * 35 * 4);
         assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn track_video_badge_has_solid_monochrome_body_and_clear_triangle() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&[
+                255, 0, 0, 255, 255, 255, 255, 255,
+                255, 0, 0, 0, 255, 0, 0, 128,
+            ]).unwrap();
+        }
+        for ink in [[0, 0, 0], ALBUM_WHITE_INK] {
+            let pixels = decode_track_video_icon(&png_bytes, [2, 2], ink).unwrap();
+            assert_eq!(&pixels[..3], &ink);
+            assert_eq!(pixels[3], 255);
+            assert_eq!(pixels[7], 0);
+            assert_eq!(pixels[11], 0);
+            assert_eq!(pixels[15], 128);
+        }
+    }
+
+    #[test]
+    fn inline_video_badge_reserves_space_only_when_needed() {
+        assert!(TRACK_VIDEO_BADGE_SIDE < VIDEO_BADGE_SIDE);
+        assert_eq!(track_title_room(false) - track_title_room(true),
+            TRACK_VIDEO_BADGE_SIDE + TRACK_VIDEO_BADGE_GAP);
+        assert!(ALBUM_TRACK_TITLE_X + track_title_room(true) as f32
+            + TRACK_VIDEO_BADGE_GAP as f32 + TRACK_VIDEO_BADGE_SIDE as f32
+            <= OUT_W as f32 - EDGE);
+        assert_eq!(music_icon_size(TRACK_VIDEO_BADGE_SIDE, [1.6; 2]), [29, 29]);
     }
 
     #[test]

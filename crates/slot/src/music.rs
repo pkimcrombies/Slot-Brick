@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::time::Instant;
@@ -19,6 +20,94 @@ pub(crate) fn companion_video(audio: &Path) -> Option<PathBuf> {
     ["mp4", "m4v"].into_iter().map(|ext| audio.with_extension(ext))
         .find(|video| std::fs::metadata(video)
             .is_ok_and(|meta| meta.is_file() && meta.len() > 0))
+}
+
+// LRC is offline UTF-8 text. Bound reads and line lengths so an invalid
+// sidecar cannot stall playback or exhaust the handheld's memory.
+const MAX_LRC_BYTES: usize = 256 * 1024;
+const MAX_LRC_LINES: usize = 4096;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LyricLine {
+    pub(crate) at_ms: u64,
+    pub(crate) text: String,
+}
+
+fn lrc_timestamp(value: &str) -> Option<u64> {
+    let (minutes, rest) = value.split_once(':')?;
+    let (seconds, fraction) = rest.split_once('.').unwrap_or((rest, ""));
+    if minutes.is_empty() || seconds.is_empty()
+        || !minutes.bytes().all(|b| b.is_ascii_digit())
+        || !seconds.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 3 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let minutes: u64 = minutes.parse().ok()?;
+    let seconds: u64 = seconds.parse().ok()?;
+    if seconds >= 60 { return None; }
+    let millis = if fraction.is_empty() { 0 } else {
+        fraction.parse::<u64>().ok()? * 10u64.pow(3 - fraction.len() as u32)
+    };
+    minutes.checked_mul(60_000)?.checked_add(seconds * 1000 + millis)
+}
+
+fn parse_lrc(source: &str) -> Vec<LyricLine> {
+    let mut offset = 0i64;
+    let mut lines = Vec::new();
+    for raw in source.trim_start_matches('\u{feff}').lines() {
+        let mut rest = raw.trim();
+        let mut times = Vec::new();
+        while let Some(after) = rest.strip_prefix('[') {
+            let Some((tag, tail)) = after.split_once(']') else { break };
+            if let Some(value) = tag.strip_prefix("offset:") {
+                if let Ok(ms) = value.trim().parse::<i64>() {
+                    offset = ms.clamp(-3_600_000, 3_600_000);
+                }
+            } else if let Some(ms) = lrc_timestamp(tag) {
+                if times.len() >= 128 { break; }
+                times.push(ms);
+            } else {
+                break;
+            }
+            rest = tail;
+        }
+        if times.is_empty() { continue; }
+        let text: String = rest.trim().chars().take(512).collect();
+        for at_ms in times {
+            if lines.len() >= MAX_LRC_LINES { break; }
+            lines.push(LyricLine { at_ms, text: text.clone() });
+        }
+        if lines.len() >= MAX_LRC_LINES { break; }
+    }
+    // A positive LRC offset advances the lyrics relative to the audio.
+    for line in &mut lines {
+        line.at_ms = line.at_ms.saturating_add_signed(-offset);
+    }
+    lines.sort_by_key(|line| line.at_ms);
+    // Multiple timestamp tags may refer to the same refrain. Remove exact
+    // duplicate events, but keep timed blank lines as instrumental breaks.
+    lines.dedup_by(|a, b| a.at_ms == b.at_ms && a.text == b.text);
+    if !lines.iter().any(|line| !line.text.is_empty()) { lines.clear(); }
+    lines
+}
+
+fn load_lrc(audio: &Path) -> Vec<LyricLine> {
+    for ext in ["lrc", "LRC"] {
+        let Ok(file) = std::fs::File::open(audio.with_extension(ext)) else { continue };
+        let mut bytes = Vec::new();
+        if file.take(MAX_LRC_BYTES as u64 + 1).read_to_end(&mut bytes).is_ok()
+            && bytes.len() <= MAX_LRC_BYTES {
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                let lines = parse_lrc(text);
+                if !lines.is_empty() { return lines; }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn active_lyric(lines: &[LyricLine], ms: u64) -> Option<usize> {
+    lines.partition_point(|line| line.at_ms <= ms).checked_sub(1)
 }
 
 unsafe extern "C" {
@@ -538,6 +627,10 @@ pub(crate) struct Music {
     pub(crate) track: Option<Track>,
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
+    lyrics: Vec<LyricLine>,
+    lyrics_view: bool,
+    lyric_ms: u64,
+    lyric_epoch: u64,
     video: Option<VideoPlayback>,
     resume_song_at: Option<u64>,
     restore_song: Option<MusicResume>,
@@ -575,6 +668,10 @@ impl Music {
             browse: vec![Location::new(Page::Albums, 0)],
             track: None,
             now_playing_view: false,
+            lyrics: Vec::new(),
+            lyrics_view: false,
+            lyric_ms: 0,
+            lyric_epoch: 0,
             video: None,
             resume_song_at: None,
             restore_song: None,
@@ -908,6 +1005,14 @@ impl Music {
     }
 
     pub(crate) fn showing_now_playing(&self) -> bool { self.now_playing_view }
+    pub(crate) fn showing_lyrics(&self) -> bool {
+        self.lyrics_view && !self.lyrics.is_empty()
+    }
+    pub(crate) fn lyrics(&self) -> &[LyricLine] { &self.lyrics }
+    pub(crate) fn lyric_index(&self) -> Option<usize> {
+        active_lyric(&self.lyrics, self.lyric_ms)
+    }
+    pub(crate) fn lyric_epoch(&self) -> u64 { self.lyric_epoch }
 
     /// B from Now Playing opens the album the current track belongs to,
     /// regardless of which artist or album was previously being browsed.
@@ -1017,6 +1122,10 @@ impl Music {
         }
         self.close_video();
         self.resume_song_at = None;
+        self.lyrics = load_lrc(&self.library.albums[album].songs[index].path);
+        self.lyrics_view &= !self.lyrics.is_empty();
+        self.lyric_ms = 0;
+        self.lyric_epoch = self.lyric_epoch.wrapping_add(1);
         self.track = Some(Track {
             album,
             index,
@@ -1104,6 +1213,12 @@ impl Music {
             return false;
         }
         if self.now_playing_view {
+            if action == Action::GbaDown(Btn::Select) {
+                if !self.locked && self.track.is_some() && !self.lyrics.is_empty() {
+                    self.lyrics_view = !self.lyrics_view;
+                }
+                return false;
+            }
             if action == Action::GbaDown(Btn::B) {
                 self.browse_playing_album();
                 return false;
@@ -1260,6 +1375,7 @@ impl Music {
             ring.discard();
         }
         if let Some(frame) = self.resume_song_at.take() {
+            self.lyric_epoch = self.lyric_epoch.wrapping_add(1);
             if let Some(track) = self.track.as_mut() {
                 if let Some(at_end) = track.playback.as_mut().and_then(|song| song.seek_to(frame, ring)) {
                     track.ending = at_end;
@@ -1310,11 +1426,16 @@ impl Music {
                 if let Some(playback) = track.playback.as_mut() {
                     if let Some(at_end) = playback.seek_by(seconds, ring) {
                         track.ending = at_end;
+                        self.lyric_epoch = self.lyric_epoch.wrapping_add(1);
                     }
                 }
             }
         }
         if track.status != Status::Playing {
+            if let Some(playback) = track.playback.as_ref() {
+                self.lyric_ms = playback.audible_frame(ring).saturating_mul(1000)
+                    / u64::from(playback.decoder.rate);
+            }
             return;
         }
         if !track.ending {
@@ -1323,6 +1444,10 @@ impl Music {
                 .as_mut()
                 .expect("playing track has a decoder")
                 .fill(ring, volume);
+        }
+        if let Some(playback) = track.playback.as_ref() {
+            self.lyric_ms = playback.audible_frame(ring).saturating_mul(1000)
+                / u64::from(playback.decoder.rate);
         }
         if track.ending && ring.queued_frames() == 0 {
             let index = track.index;
@@ -1335,6 +1460,51 @@ impl Music {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lrc_parses_bom_offsets_repeated_tags_fractional_seconds_and_blank_lines() {
+        let lines = parse_lrc("\u{feff}[ar:ignored]\r\n[00:03.1][00:07.120]한글\n[00:01.25]first\n[00:05.00]\n[invalid]ignored\n[offset:+100]");
+        assert_eq!(lines.iter().map(|l| (l.at_ms, l.text.as_str())).collect::<Vec<_>>(),
+            vec![(1150, "first"), (3000, "한글"), (4900, ""), (7020, "한글")]);
+        assert_eq!(active_lyric(&lines, 1149), None);
+        assert_eq!(active_lyric(&lines, 1150), Some(0));
+        assert_eq!(active_lyric(&lines, 7000), Some(2));
+        assert_eq!(active_lyric(&lines, 7020), Some(3));
+        assert_eq!(active_lyric(&lines, 2000), Some(0), "rewind is not a forward-only scan");
+        assert!(parse_lrc("[00:01.00]\n[00:02.00]").is_empty());
+        assert_eq!(lrc_timestamp("00:60"), None);
+        assert_eq!(lrc_timestamp("02:01.001"), Some(121001));
+    }
+
+    #[test]
+    fn select_lyrics_preserves_track_and_falls_back_for_missing_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("Music");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 1..=3 {
+            silent_mp3(&dir.join(format!("0{i}.mp3")), 2);
+        }
+        std::fs::write(dir.join("01.lrc"), "[00:00]first").unwrap();
+        std::fs::write(dir.join("02.LRC"), "[00:00]second").unwrap();
+        let mut music = test_music(root.path());
+        music.input(Action::GbaDown(Btn::Y));
+        assert!(music.showing_now_playing());
+        assert!(!music.showing_lyrics());
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(music.showing_lyrics());
+        assert_eq!(music.playing_position(), Some((0, 3)));
+        music.input(Action::GbaDown(Btn::Right));
+        assert!(music.showing_lyrics());
+        assert_eq!(music.lyrics()[0].text, "second");
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(!music.showing_lyrics());
+        music.input(Action::GbaDown(Btn::Select));
+        music.input(Action::GbaDown(Btn::Right));
+        assert_eq!(music.playing_position(), Some((2, 3)));
+        assert!(!music.showing_lyrics());
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(!music.showing_lyrics(), "no sidecar: SELECT is inert");
+    }
 
     #[test]
     fn reopening_music_restores_the_saved_song_paused() {

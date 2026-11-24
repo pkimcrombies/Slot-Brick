@@ -952,8 +952,13 @@ impl Frontend {
         // ~30fps instead of the previous stepping 12.5fps glyph reraster.
         // Static titles and other tabs still use the normal idle gate.
         if matches!(self.app().phase(), Phase::Music)
-            && self.music_view.title_marquee_active()
+            && (self.music_view.title_marquee_active() || self.music_view.lyrics_animating())
             && self.last_render.elapsed() >= Duration::from_millis(33) {return true}
+        // Poll audible lyric position only while the lyric face is visible
+        // and playback is running. Idle and paused Music keep the low CPU gate.
+        if matches!(self.app().phase(), Phase::Music)
+            && self.music_view.lyrics_refresh()
+            && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.

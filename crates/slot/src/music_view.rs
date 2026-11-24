@@ -9,7 +9,7 @@ use slot_ui::{
     QUICK_VALUE_EDGE, STATUS_MARGIN,
 };
 
-use crate::music::{Music, RepeatMode, Status, Track, ALBUM_VISIBLE_ROWS};
+use crate::music::{LyricLine, Music, RepeatMode, Status, Track, ALBUM_VISIBLE_ROWS};
 use crate::music_cover::{MusicCover, LIST_THUMBNAIL, THUMBNAIL};
 
 // Music alone uses a soft warm-ivory canvas (#F5F1EA), noticeably
@@ -122,6 +122,143 @@ const VIDEO_BADGE_SIDE: u32 = 22;
 const VIDEO_BADGE_INSET: f32 = 6.0;
 const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 22.0;
 const PLAYING_INFO_W: u32 = (OUT_W as f32 - PLAYING_INFO_X - EDGE - 4.0) as u32;
+const LYRICS_FLIP: Duration = Duration::from_millis(380);
+const LYRICS_SCROLL: Duration = Duration::from_millis(240);
+const LYRICS_TOP: f32 = 112.0;
+const LYRICS_BOTTOM: f32 = 388.0;
+const LYRICS_CENTER: f32 = 250.0;
+const LYRICS_PITCH: f32 = 80.0;
+
+#[derive(Clone, Copy)]
+struct LyricsFrame {
+    lyrics: bool,
+    squeeze: f32,
+    active: isize,
+    position: f32,
+}
+
+struct LyricLayout {
+    index: usize,
+    normal: Vec<String>,
+    active: Vec<String>,
+}
+
+// Word-wrap inside the existing right column, including unspaced CJK text.
+// Measure using Slot's own font metrics. Very long malformed lines are
+// bounded by the LRC parser and the third row uses the normal ellipsis.
+fn wrap_lyric(text: &str, px: u32) -> Vec<String> {
+    let mut rest = text.trim();
+    let mut rows = Vec::new();
+    while !rest.is_empty() && rows.len() < 3 {
+        if rows.len() == 2 || menu_marquee_width(rest, px) <= PLAYING_INFO_W as f32 {
+            rows.push(rest.to_owned());
+            break;
+        }
+        let mut end = 0;
+        let mut word_end = 0;
+        for (at, ch) in rest.char_indices() {
+            let next = at + ch.len_utf8();
+            if menu_marquee_width(&rest[..next], px) > PLAYING_INFO_W as f32 && end != 0 {
+                break;
+            }
+            end = next;
+            if ch.is_whitespace() { word_end = at; }
+        }
+        if end == 0 { break; }
+        if word_end > 0 { end = word_end; }
+        rows.push(rest[..end].trim().to_owned());
+        rest = rest[end..].trim_start();
+    }
+    rows
+}
+
+#[derive(Default)]
+struct LyricsMotion {
+    epoch: Option<u64>,
+    target: bool,
+    flip: Option<(Instant, f32)>,
+    active: isize,
+    scroll: Option<(Instant, f32)>,
+    rows: Vec<LyricLayout>,
+    refresh: bool,
+}
+
+impl LyricsMotion {
+    fn flip_at(&self, now: Instant) -> f32 {
+        let to = if self.target { 1.0 } else { 0.0 };
+        self.flip.map_or(to, |(start, from)| {
+            let t = (now.saturating_duration_since(start).as_secs_f32()
+                / LYRICS_FLIP.as_secs_f32()).clamp(0.0, 1.0);
+            from + (to - from) * t
+        })
+    }
+
+    fn scroll_at(&self, now: Instant) -> f32 {
+        let to = self.active as f32;
+        self.scroll.map_or(to, |(start, from)| {
+            let t = (now.saturating_duration_since(start).as_secs_f32()
+                / LYRICS_SCROLL.as_secs_f32()).clamp(0.0, 1.0);
+            let eased = (t * std::f32::consts::FRAC_PI_2).sin();
+            from + (to - from) * eased
+        })
+    }
+
+    fn update(&mut self, desired: bool, epoch: u64, active: Option<usize>,
+              lines: &[LyricLine], playing: bool, now: Instant) -> LyricsFrame {
+        let active = active.map_or(-1, |i| i as isize);
+        let reset = self.epoch != Some(epoch);
+        if reset {
+            self.epoch = Some(epoch);
+            self.flip = None;
+            self.scroll = None;
+            self.target = desired;
+            self.active = active;
+            self.rows.clear();
+        } else {
+            if self.target != desired {
+                self.flip = Some((now, self.flip_at(now)));
+                self.target = desired;
+            }
+            if self.active != active {
+                let from = self.scroll_at(now);
+                self.scroll = (active == self.active + 1).then_some((now, from));
+                self.active = active;
+                self.rows.clear();
+            }
+        }
+        if self.flip.is_some_and(|(start, _)| now.saturating_duration_since(start) >= LYRICS_FLIP) {
+            self.flip = None;
+        }
+        if self.scroll.is_some_and(|(start, _)| now.saturating_duration_since(start) >= LYRICS_SCROLL) {
+            self.scroll = None;
+        }
+        let p = self.flip_at(now);
+        let show = p >= 0.5 && !lines.is_empty();
+        if (show || desired) && self.rows.is_empty() {
+            let first = (active - 3).max(0) as usize;
+            let end = ((active + 4).max(0) as usize).min(lines.len());
+            for index in first..end {
+                self.rows.push(LyricLayout {
+                    index,
+                    normal: wrap_lyric(&lines[index].text, 16),
+                    active: wrap_lyric(&lines[index].text, 19),
+                });
+            }
+        }
+        self.refresh = playing && desired;
+        LyricsFrame {
+            lyrics: show,
+            // Orthographic projection of a card rotating around its vertical
+            // centre. Swap faces at edge-on; never mirror readable text.
+            squeeze: (p * std::f32::consts::PI).cos().abs().clamp(0.0, 1.0),
+            active,
+            position: self.scroll_at(now),
+        }
+    }
+
+    fn animating(&self) -> bool { self.flip.is_some() || self.scroll.is_some() }
+}
+
 // Progress/timestamps occupy the bottom line, with Repeat next to end time.
 const PLAYING_PROGRESS_Y: f32 = 414.0;
 const PLAYING_TIME_Y: f32 = 432.0;
@@ -392,6 +529,7 @@ pub(crate) struct MusicView {
     playing_backdrop: Option<PlayingBackdrop>,
     repeat_icons: [MusicIcon; 3],
     title_marquee: TitleMarquee,
+    lyrics_motion: LyricsMotion,
     lock_icon: MusicIcon,
     unlock_icon: MusicIcon,
     lock_feedback: LockFeedback,
@@ -416,6 +554,7 @@ impl Default for MusicView {
             playing_backdrop: None,
             repeat_icons: std::array::from_fn(|_| MusicIcon::default()),
             title_marquee: TitleMarquee::default(),
+            lyrics_motion: LyricsMotion::default(),
             lock_icon: MusicIcon::default(),
             unlock_icon: MusicIcon::default(),
             lock_feedback: LockFeedback::default(),
@@ -503,6 +642,9 @@ impl MusicView {
     pub(crate) fn title_marquee_active(&self) -> bool {
         self.title_marquee.overflowing
     }
+
+    pub(crate) fn lyrics_animating(&self) -> bool { self.lyrics_motion.animating() }
+    pub(crate) fn lyrics_refresh(&self) -> bool { self.lyrics_motion.refresh }
 
     pub(crate) fn cover_flow_animating(&self) -> bool {
         self.flow_motion.active(Instant::now())
@@ -755,7 +897,16 @@ impl MusicView {
         } else {
             self.track_video_badges = std::array::from_fn(|_| VideoBadgeCache::default());
         }
-        let title_offset = if music.showing_now_playing() && !music.music_settings_open() {
+        let lyrics_frame = if music.showing_now_playing() && !music.music_settings_open()
+            && music.track.is_some() {
+            self.lyrics_motion.update(music.showing_lyrics(), music.lyric_epoch(),
+                music.lyric_index(), music.lyrics(), music.playing(), now)
+        } else {
+            self.lyrics_motion = LyricsMotion::default();
+            LyricsFrame { lyrics: false, squeeze: 1.0, active: -1, position: -1.0 }
+        };
+        let title_offset = if music.showing_now_playing() && !music.music_settings_open()
+            && !lyrics_frame.lyrics {
             if let Some(track) = music.track.as_ref() {
                 let song = music.song(track);
                 self.title_marquee.offset(
@@ -807,7 +958,8 @@ impl MusicView {
             p.settings(music);
         } else if music.showing_now_playing() {
             if let Some(track) = &music.track {
-                p.playing(music, track, cover, repeat_icon, playback_icon, video_badge_icon, title_face);
+                p.playing(music, track, cover, repeat_icon, playback_icon, video_badge_icon,
+                    title_face, lyrics_frame, &self.lyrics_motion.rows);
             } else {
                 p.empty_now_playing();
             }
@@ -1122,7 +1274,8 @@ impl Painter<'_> {
 
     fn playing(&mut self, music: &Music, track: &Track, cover: Option<(TexId, [u32; 2])>,
                repeat_icon: Option<TexId>, playback_icon: Option<TexId>,
-               video_badge_icon: Option<TexId>, title_face: Option<Face>) {
+               video_badge_icon: Option<TexId>, title_face: Option<Face>,
+               lyrics: LyricsFrame, lyric_rows: &[LyricLayout]) {
         self.music_tabs(0);
         self.repeat_badge(music.repeat_mode(), repeat_icon);
         let song = music.song(track);
@@ -1157,6 +1310,12 @@ impl Painter<'_> {
             ));
         }
 
+        // Only these right-column draw commands participate in the flip.
+        // Keep the cover, icon, tabs, backdrop and playback HUD stationary.
+        let card_start = self.draws.len();
+        if lyrics.lyrics {
+            self.lyric_card(lyrics, lyric_rows);
+        } else {
         // Only the title scrolls when wider than its allotted column.
         // The viewport is cropped in RGBA before upload, so Hangul and long
         // Latin text never overpaint the album art or right screen margin.
@@ -1195,6 +1354,19 @@ impl Painter<'_> {
             );
         }
 
+        }
+        let pivot = PLAYING_INFO_X + PLAYING_INFO_W as f32 / 2.0;
+        if lyrics.squeeze < 0.9999 {
+            for draw in &mut self.draws[card_start..] {
+                if let Draw::Tex { x, w, alpha, .. } = draw {
+                    *x = pivot + (*x - pivot) * lyrics.squeeze;
+                    *w *= lyrics.squeeze;
+                    // Suppress subpixel shimmer at the edge-on midpoint.
+                    if lyrics.squeeze < 0.015 { *alpha = 0.0; }
+                }
+            }
+        }
+
         // Progress tracks the decoder position. Up/Down seek ten seconds;
         // Left/Right change tracks; shoulders switch Music sections.
         let width = OUT_W as f32 - 2.0 * EDGE;
@@ -1229,6 +1401,29 @@ impl Painter<'_> {
             } else {
                 self.text_ink(&timestamp(elapsed), 17,
                     [PLAYING_START_TIME_X, PLAYING_TIME_Y], MUSIC_MUTED_INK);
+            }
+        }
+    }
+
+    fn lyric_card(&mut self, frame: LyricsFrame, rows: &[LyricLayout]) {
+        for row in rows {
+            let centre = LYRICS_CENTER + (row.index as f32 - frame.position) * LYRICS_PITCH;
+            let active = row.index as isize == frame.active;
+            let (px, ink, lines) = if active {
+                (19, MUSIC_SELECTION_INK, &row.active)
+            } else {
+                (16, MUSIC_MUTED_INK, &row.normal)
+            };
+            let pitch = (px as f32 * 1.4).ceil();
+            let top = centre - lines.len() as f32 * pitch / 2.0;
+            for (i, line) in lines.iter().enumerate() {
+                let y = top + i as f32 * pitch;
+                if y < LYRICS_TOP || y + pitch > LYRICS_BOTTOM { continue; }
+                let key = format!("{px}/{PLAYING_INFO_W}/{ink:?}/{line}");
+                let face = self.texture(key,
+                    |scale| menu_text_face(line, px, PLAYING_INFO_W, scale, ink));
+                self.place(face, PLAYING_INFO_X +
+                    (PLAYING_INFO_W.saturating_sub(face.size[0])) as f32 / 2.0, y);
             }
         }
     }
@@ -1898,6 +2093,32 @@ mod album_thumbnail_layout_tests {
         assert_eq!(TITLE_MARQUEE_PX, 26);
         assert_eq!(PLAYING_PROGRESS_Y, 414.0);
         assert!(326.0 > 277.0 && 326.0 < PLAYING_PROGRESS_Y);
+    }
+
+    #[test]
+    fn lyrics_flip_swaps_only_at_midpoint_and_finishes() {
+        let now = Instant::now();
+        let lines = vec![LyricLine { at_ms: 0, text: "first".into() },
+            LyricLine { at_ms: 1000, text: "second".into() }];
+        let mut motion = LyricsMotion::default();
+        let initial = motion.update(false, 1, Some(0), &lines, true, now);
+        assert!(!initial.lyrics);
+        assert_eq!(initial.squeeze, 1.0);
+        assert!(!motion.update(true, 1, Some(0), &lines, true, now).lyrics);
+        let middle = motion.update(true, 1, Some(0), &lines, true, now + LYRICS_FLIP / 2);
+        assert!(middle.lyrics);
+        assert!(middle.squeeze < 0.01);
+        let done = motion.update(true, 1, Some(0), &lines, true, now + LYRICS_FLIP);
+        assert!(done.lyrics);
+        assert!((done.squeeze - 1.0).abs() < 0.001);
+        assert!(!motion.animating());
+        let next = motion.update(true, 1, Some(1), &lines, true, now + LYRICS_FLIP);
+        assert_eq!(next.active, 1);
+        assert_eq!(next.position, 0.0, "adjacent lyrics scroll from their previous location");
+        let seek = motion.update(true, 2, Some(0), &lines, false, now + LYRICS_FLIP);
+        assert_eq!(seek.position, 0.0);
+        assert!(!motion.animating(), "seek snaps to the current lyric");
+        assert!(!motion.refresh, "paused lyrics require no periodic refresh");
     }
 
     #[test]

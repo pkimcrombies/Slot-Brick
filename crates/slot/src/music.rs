@@ -1123,7 +1123,8 @@ impl Music {
         self.close_video();
         self.resume_song_at = None;
         self.lyrics = load_lrc(&self.library.albums[album].songs[index].path);
-        self.lyrics_view &= !self.lyrics.is_empty();
+        // Every newly started track opens on its metadata face.
+        self.lyrics_view = false;
         self.lyric_ms = 0;
         self.lyric_epoch = self.lyric_epoch.wrapping_add(1);
         self.track = Some(Track {
@@ -1477,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    fn select_lyrics_preserves_track_and_falls_back_for_missing_sidecar() {
+    fn select_lyrics_resets_on_track_change_and_falls_back_for_missing_sidecar() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("Music");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1487,15 +1488,27 @@ mod tests {
         std::fs::write(dir.join("01.lrc"), "[00:00]first").unwrap();
         std::fs::write(dir.join("02.LRC"), "[00:00]second").unwrap();
         let mut music = test_music(root.path());
-        music.input(Action::GbaDown(Btn::Y));
+        music.start_album(0, 0);
+        music.now_playing_view = true;
         assert!(music.showing_now_playing());
         assert!(!music.showing_lyrics());
         music.input(Action::GbaDown(Btn::Select));
         assert!(music.showing_lyrics());
         assert_eq!(music.playing_position(), Some((0, 3)));
         music.input(Action::GbaDown(Btn::Right));
-        assert!(music.showing_lyrics());
+        assert!(!music.showing_lyrics(), "new song starts on metadata even with lyrics");
         assert_eq!(music.lyrics()[0].text, "second");
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(music.showing_lyrics());
+        music.input(Action::GbaDown(Btn::Left));
+        assert!(!music.showing_lyrics(), "previous song starts on metadata too");
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(music.showing_lyrics());
+        music.advance_at_end(0);
+        assert_eq!(music.playing_position(), Some((1, 3)));
+        assert!(!music.showing_lyrics(), "automatic advance resets lyrics");
+        music.input(Action::GbaDown(Btn::Select));
+        assert!(music.showing_lyrics());
         music.input(Action::GbaDown(Btn::Select));
         assert!(!music.showing_lyrics());
         music.input(Action::GbaDown(Btn::Select));

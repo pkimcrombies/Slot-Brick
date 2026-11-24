@@ -221,7 +221,8 @@ impl LyricsMotion {
             }
             if self.active != active {
                 let from = self.scroll_at(now);
-                self.scroll = (active == self.active + 1).then_some((now, from));
+                self.scroll = (desired && playing && active == self.active + 1)
+                    .then_some((now, from));
                 self.active = active;
                 self.rows.clear();
             }

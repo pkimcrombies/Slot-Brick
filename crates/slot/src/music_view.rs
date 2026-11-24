@@ -117,7 +117,7 @@ const ALBUM_WHITE_INK: [u8; 3] = [255, 255, 255];
 const PLAYING_COVER_SIDE: f32 = 250.0;
 const PLAYING_COVER_X: f32 = EDGE;
 const PLAYING_COVER_Y: f32 = 112.0;
-// Small red YouTube badge over the upper-left edge of the current cover.
+// Small monochrome camera-roll badge over the upper-left edge of the cover.
 const VIDEO_BADGE_SIDE: u32 = 22;
 const VIDEO_BADGE_INSET: f32 = 6.0;
 const PLAYING_INFO_X: f32 = EDGE + PLAYING_COVER_SIDE + 22.0;
@@ -145,7 +145,8 @@ const TITLE_MARQUEE_BACKWARD_PX_PER_SEC: f32 = 40.0;
 const REPEAT_ICON_FILES: [&str; 3] =
     ["repeat-off.png", "repeat-all.png", "repeat-one.png"];
 const PLAYBACK_ICON_FILES: [&str; 2] = ["play.png", "pause.png"];
-const VIDEO_BADGE_FILE: &str = "youtube.png";
+// UXWing: https://uxwing.com/camera-roll-icon/
+const VIDEO_BADGE_FILE: &str = "camera-roll.png";
 
 /// A video badge means a non-empty local companion video with the same
 /// directory and filename stem as the playing MP3/M4A. It does not search
@@ -396,7 +397,7 @@ pub(crate) struct MusicView {
     lock_feedback: LockFeedback,
     lock_glyph: Option<LockGlyph>,
     playback_icons: [MusicIcon; 2],
-    youtube_icon: MusicIcon,
+    video_cover_icon: MusicIcon,
     video_badge: VideoBadgeCache,
     track_video_badges: [VideoBadgeCache; ALBUM_VISIBLE_ROWS],
     track_video_icons: [MusicIcon; 2],
@@ -420,7 +421,7 @@ impl Default for MusicView {
             lock_feedback: LockFeedback::default(),
             lock_glyph: None,
             playback_icons: std::array::from_fn(|_| MusicIcon::default()),
-            youtube_icon: MusicIcon::default(),
+            video_cover_icon: MusicIcon::default(),
             video_badge: VideoBadgeCache::default(),
             track_video_badges: std::array::from_fn(|_| VideoBadgeCache::default()),
             track_video_icons: std::array::from_fn(|_| MusicIcon::default()),
@@ -719,8 +720,8 @@ impl MusicView {
         let video_badge_icon = if music.showing_now_playing() && !music.music_settings_open() {
             if let Some(track) = music.track.as_ref() {
                 if self.video_badge.available_for(&music.song(track).path) {
-                    self.youtube_icon.load(
-                        music, VIDEO_BADGE_FILE, VIDEO_BADGE_SIDE, scale, None, compositor,
+                    self.video_cover_icon.load(
+                        music, VIDEO_BADGE_FILE, VIDEO_BADGE_SIDE, scale, Some([0; 3]), compositor,
                     )
                 } else {
                     None
@@ -841,9 +842,9 @@ fn decode_music_icon(png: &[u8], [width, height]: [u32; 2], ink: Option<[u8; 3]>
     Some(pixels)
 }
 
-// Turn the existing red/white UXWing mark into a solid monochrome mask.
-// The white play triangle becomes transparent; the red silhouette stays
-// fully opaque rather than looking faded from a luminance-only conversion.
+// Recolour the original monochrome UXWing camera roll before resizing.
+// Preserve transparent holes and antialiased edges; the nearest-filtered
+// texture is sized to the compositor's actual pixel density.
 fn decode_track_video_icon(png: &[u8], [width, height]: [u32; 2], ink: [u8; 3]) -> Option<Vec<u8>> {
     let (w, h) = crate::cart_art::png_size(png)?;
     if w == 0 || h == 0 || w > 1024 || h > 1024 { return None; }
@@ -1750,15 +1751,15 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn track_video_badge_has_solid_monochrome_body_and_clear_triangle() {
+    fn track_video_badge_has_solid_monochrome_body_and_clear_perforations() {
         let mut png_bytes = Vec::new();
         {
             let mut enc = png::Encoder::new(&mut png_bytes, 2, 2);
             enc.set_color(png::ColorType::Rgba);
             enc.set_depth(png::BitDepth::Eight);
             enc.write_header().unwrap().write_image_data(&[
-                255, 0, 0, 255, 255, 255, 255, 255,
-                255, 0, 0, 0, 255, 0, 0, 128,
+                0, 0, 0, 255, 255, 255, 255, 255,
+                0, 0, 0, 0, 0, 0, 0, 128,
             ]).unwrap();
         }
         for ink in [[0, 0, 0], ALBUM_WHITE_INK] {
@@ -1814,8 +1815,8 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn youtube_badge_is_small_inside_the_top_left_of_the_cover() {
-        assert_eq!(VIDEO_BADGE_FILE, "youtube.png");
+    fn camera_roll_badge_is_small_inside_the_top_left_of_the_cover() {
+        assert_eq!(VIDEO_BADGE_FILE, "camera-roll.png");
         assert!(VIDEO_BADGE_SIDE <= 24);
         assert!(VIDEO_BADGE_INSET >= 4.0);
         assert!(VIDEO_BADGE_INSET + (VIDEO_BADGE_SIDE as f32)

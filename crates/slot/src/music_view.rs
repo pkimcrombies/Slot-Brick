@@ -132,7 +132,18 @@ const LYRICS_TEXT_PX: u32 = 17;
 const LYRICS_LINE_H: f32 = 24.0;
 const LYRICS_GAP: f32 = 4.0;
 const LYRICS_PADDING: f32 = 12.0;
-const LYRICS_ANCHOR: f32 = 36.0;
+const LYRICS_ANCHOR: f32 = 64.0;
+const LYRICS_BEFORE: usize = 1;
+const LYRICS_AFTER: usize = 2;
+
+fn lyric_context(active: isize, count: usize) -> std::ops::Range<usize> {
+    let Ok(index) = usize::try_from(active) else {
+        return 0..LYRICS_AFTER.min(count);
+    };
+    let first = index.saturating_sub(LYRICS_BEFORE).min(count);
+    let end = index.saturating_add(1 + LYRICS_AFTER).min(count);
+    first..end
+}
 
 #[derive(Clone, Copy)]
 struct LyricsFrame {
@@ -200,11 +211,9 @@ fn lyric_scroll_target(rows: &[LyricLayout], active: isize) -> f32 {
     let Some(row) = usize::try_from(active).ok().and_then(|i| rows.get(i)) else {
         return 0.0;
     };
-    let height = rows.last().map_or(0.0, |row| row.bottom) + 2.0 * LYRICS_PADDING;
-    let max_scroll = (height - (LYRICS_BOTTOM - LYRICS_TOP)).max(0.0);
-    // Retain a little preceding context. At the end, stop at the end of
-    // the page rather than scrolling the last few lines into blank space.
-    (row.top + LYRICS_PADDING - LYRICS_ANCHOR).clamp(0.0, max_scroll)
+    // Keep the active entry in the upper portion of the card even near the
+    // end of a song. Empty space is intentional with a short context window.
+    (row.top + LYRICS_PADDING - LYRICS_ANCHOR).max(0.0)
 }
 
 #[derive(Default)]
@@ -1456,8 +1465,12 @@ impl Painter<'_> {
         // Only rasterize rows near the visible window. Layout is measured
         // once for the song, with variable height for wrapped lyrics.
         let origin = LYRICS_TOP + LYRICS_PADDING - frame.position;
-        let first = rows.partition_point(|row| origin + row.bottom <= LYRICS_TOP);
-        for (index, row) in rows.iter().enumerate().skip(first) {
+        // At most four timestamped entries, regardless of how many short
+        // lines would otherwise fit. Wrapped text retains its natural height.
+        let context = lyric_context(frame.active, rows.len());
+        for index in context {
+            let row = &rows[index];
+            if origin + row.bottom <= LYRICS_TOP { continue; }
             let top = origin + row.top;
             if top >= LYRICS_BOTTOM { break; }
             let ink = if index as isize == frame.active {
@@ -2208,8 +2221,23 @@ mod album_thumbnail_layout_tests {
         assert_eq!(reopened.position, seek.position);
         assert_eq!(motion.rows.as_ptr(), cached);
         let last = lyric_scroll_target(&motion.rows, 23);
-        assert_eq!(last, motion.rows.last().unwrap().bottom + 2.0 * LYRICS_PADDING
-            - (LYRICS_BOTTOM - LYRICS_TOP));
+        assert_eq!(last, motion.rows.last().unwrap().top + LYRICS_PADDING - LYRICS_ANCHOR);
+    }
+
+    #[test]
+    fn lyric_context_is_limited_to_one_previous_and_two_upcoming_entries() {
+        assert_eq!(lyric_context(-1, 0), 0..0);
+        assert_eq!(lyric_context(-1, 20), 0..2);
+        assert_eq!(lyric_context(0, 20), 0..3);
+        assert_eq!(lyric_context(8, 20), 7..11);
+        assert_eq!(lyric_context(18, 20), 17..20);
+        assert_eq!(lyric_context(19, 20), 18..20);
+        assert_eq!(lyric_context(0, 1), 0..1);
+        for index in 0..20 {
+            let range = lyric_context(index, 20);
+            assert!(range.contains(&(index as usize)));
+            assert!(range.len() <= 4);
+        }
     }
 
     #[test]

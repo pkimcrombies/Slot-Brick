@@ -132,9 +132,8 @@ const LYRICS_TEXT_PX: u32 = 17;
 const LYRICS_LINE_H: f32 = 24.0;
 const LYRICS_GAP: f32 = 4.0;
 const LYRICS_PADDING: f32 = 12.0;
-const LYRICS_ANCHOR: f32 = 64.0;
 const LYRICS_BEFORE: usize = 1;
-const LYRICS_AFTER: usize = 2;
+const LYRICS_AFTER: usize = 1;
 
 fn lyric_context(active: isize, count: usize) -> std::ops::Range<usize> {
     let Ok(index) = usize::try_from(active) else {
@@ -208,12 +207,28 @@ fn layout_lyrics(lines: &[LyricLine]) -> Vec<LyricLayout> {
 }
 
 fn lyric_scroll_target(rows: &[LyricLayout], active: isize) -> f32 {
-    let Some(row) = usize::try_from(active).ok().and_then(|i| rows.get(i)) else {
-        return 0.0;
-    };
-    // Keep the active entry in the upper portion of the card even near the
-    // end of a song. Empty space is intentional with a short context window.
-    (row.top + LYRICS_PADDING - LYRICS_ANCHOR).max(0.0)
+    let context = lyric_context(active, rows.len());
+    if context.is_empty() { return 0.0; }
+    let first = &rows[context.start];
+    let last = &rows[context.end - 1];
+    let bottom = last.bottom - if last.lines.is_empty() { 0.0 } else { LYRICS_GAP };
+    let centre = (first.top + bottom) / 2.0;
+    let card_height = LYRICS_BOTTOM - LYRICS_TOP;
+    let target = centre + LYRICS_PADDING - card_height / 2.0;
+
+    // Normally centre the entire three-entry group. If exceptionally long
+    // wrapped lyrics overflow, prioritise keeping the active lyric visible.
+    if bottom - first.top > card_height - 2.0 * LYRICS_PADDING {
+        if let Some(row) = usize::try_from(active).ok().and_then(|i| rows.get(i)) {
+            let active_bottom = row.bottom - if row.lines.is_empty() { 0.0 } else { LYRICS_GAP };
+            let min = active_bottom + 2.0 * LYRICS_PADDING - card_height;
+            let max = row.top;
+            return if min <= max { target.clamp(min, max) }
+                else { (row.top + active_bottom) / 2.0 + LYRICS_PADDING - card_height / 2.0 };
+        }
+    }
+    // Negative offsets are valid: short groups need space above them.
+    target
 }
 
 #[derive(Default)]
@@ -1465,7 +1480,7 @@ impl Painter<'_> {
         // Only rasterize rows near the visible window. Layout is measured
         // once for the song, with variable height for wrapped lyrics.
         let origin = LYRICS_TOP + LYRICS_PADDING - frame.position;
-        // At most four timestamped entries, regardless of how many short
+        // At most three timestamped entries, regardless of how many short
         // lines would otherwise fit. Wrapped text retains its natural height.
         let context = lyric_context(frame.active, rows.len());
         for index in context {
@@ -1493,7 +1508,8 @@ impl Painter<'_> {
                     |scale| menu_text_face(line, LYRICS_TEXT_PX, PLAYING_INFO_W, scale, ink));
                 if face.size[0] > 0 {
                     self.draws.push(pixel_aligned_texture(
-                        face.tex, [PLAYING_INFO_X, y],
+                        face.tex, [PLAYING_INFO_X
+                            + PLAYING_INFO_W.saturating_sub(face.size[0]) as f32 / 2.0, y],
                         face.size.map(|n| n as f32), self.scale, alpha,
                     ));
                 }
@@ -2187,7 +2203,7 @@ mod album_thumbnail_layout_tests {
         assert!(!motion.animating());
         let next = motion.update(true, 1, Some(1), &lines, true, now + LYRICS_FLIP);
         assert_eq!(next.active, 1);
-        assert_eq!(next.position, 0.0, "short songs fit without unnecessary scrolling");
+        assert_eq!(next.position, done.position, "same two-entry group remains centred");
         assert!(!motion.animating());
     }
 
@@ -2201,7 +2217,7 @@ mod album_thumbnail_layout_tests {
         let initial = motion.update(true, 1, Some(4), &lines, true, now);
         assert_eq!(motion.rows.len(), lines.len());
         assert_eq!(motion.rows[1].top, LYRICS_LINE_H + LYRICS_GAP);
-        assert!(initial.position > 0.0);
+        assert_eq!(initial.position, lyric_scroll_target(&motion.rows, 4));
         let cached = motion.rows.as_ptr();
         let next = motion.update(true, 1, Some(5), &lines, true, now);
         assert_eq!(next.position, initial.position);
@@ -2221,23 +2237,45 @@ mod album_thumbnail_layout_tests {
         assert_eq!(reopened.position, seek.position);
         assert_eq!(motion.rows.as_ptr(), cached);
         let last = lyric_scroll_target(&motion.rows, 23);
-        assert_eq!(last, motion.rows.last().unwrap().top + LYRICS_PADDING - LYRICS_ANCHOR);
+        let end = motion.rows.last().unwrap().bottom - LYRICS_GAP;
+        let start = motion.rows[22].top;
+        assert!((LYRICS_TOP + LYRICS_PADDING - last + (start + end) / 2.0
+            - (LYRICS_TOP + LYRICS_BOTTOM) / 2.0).abs() < 0.001);
     }
 
     #[test]
-    fn lyric_context_is_limited_to_one_previous_and_two_upcoming_entries() {
+    fn lyric_context_is_limited_to_one_previous_and_one_upcoming_entry() {
         assert_eq!(lyric_context(-1, 0), 0..0);
-        assert_eq!(lyric_context(-1, 20), 0..2);
-        assert_eq!(lyric_context(0, 20), 0..3);
-        assert_eq!(lyric_context(8, 20), 7..11);
+        assert_eq!(lyric_context(-1, 20), 0..1);
+        assert_eq!(lyric_context(0, 20), 0..2);
+        assert_eq!(lyric_context(8, 20), 7..10);
         assert_eq!(lyric_context(18, 20), 17..20);
         assert_eq!(lyric_context(19, 20), 18..20);
         assert_eq!(lyric_context(0, 1), 0..1);
         for index in 0..20 {
             let range = lyric_context(index, 20);
             assert!(range.contains(&(index as usize)));
-            assert!(range.len() <= 4);
+            assert!(range.len() <= 3);
         }
+    }
+
+    #[test]
+    fn lyric_group_is_vertically_centred_including_wrapped_entries_and_song_edges() {
+        let lines = vec![
+            LyricLine { at_ms: 0, text: "first".into() },
+            LyricLine { at_ms: 1000, text: "a longer lyric that naturally wraps across multiple lines".into() },
+            LyricLine { at_ms: 2000, text: "last".into() },
+        ];
+        let rows = layout_lyrics(&lines);
+        for active in -1..3 {
+            let context = lyric_context(active, rows.len());
+            let top = rows[context.start].top;
+            let bottom = rows[context.end - 1].bottom - LYRICS_GAP;
+            let offset = lyric_scroll_target(&rows, active);
+            let centre = LYRICS_TOP + LYRICS_PADDING - offset + (top + bottom) / 2.0;
+            assert!((centre - (LYRICS_TOP + LYRICS_BOTTOM) / 2.0).abs() < 0.001);
+        }
+        assert!(lyric_scroll_target(&rows, 0) < 0.0, "short groups can scroll below their original origin");
     }
 
     #[test]

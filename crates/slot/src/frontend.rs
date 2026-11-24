@@ -226,6 +226,8 @@ pub struct Frontend {
     wake_guard: Option<Instant>,
     last_input: Instant,
     last_render: Instant,
+    #[cfg(feature = "brick")]
+    legacy_redraw: bool,
     rendered_effects: (f32,f32,f32,Option<f32>),
     nav_fade: NavFade,
     power_fade: PowerFade,
@@ -555,6 +557,8 @@ impl Frontend {
             wake_guard: None,
             last_input: now,
             last_render: now,
+            #[cfg(feature = "brick")]
+            legacy_redraw: platform_root_has(&session_root, "DISABLE_RENDER_OPTIMISATION"),
             rendered_effects: (0.0,0.0,0.0,None),
             nav_fade: NavFade::default(),
             power_fade: PowerFade::default(),
@@ -924,6 +928,26 @@ impl Frontend {
     #[cfg(feature = "brick")]
     pub fn audio_underruns(&self)->u64 {self.session.audio_ring().underruns()}
     #[cfg(feature = "brick")]
+    pub fn power_workload(&self) -> &'static str {
+        match self.app().phase() {
+            Phase::Music if self.native_video.active() => "video",
+            Phase::Music => match self.app().music() {
+                Some(music) if music.playing() && music.locked() => "music_locked",
+                Some(music) if music.playing() && music_dim_target(music, self.last_input.elapsed()).is_some() => "music_dimmed",
+                Some(music) if music.playing() && music.showing_lyrics()
+                    && music.showing_now_playing() && !music.music_settings_open() => "music_lyrics",
+                Some(music) if music.playing() => "music_playing",
+                _ => "music_idle",
+            },
+            Phase::Shelf => "shelf",
+            Phase::QuickMenu { .. } => "menu",
+            Phase::Playing { .. } => "game",
+            Phase::Doze { .. } => "standby",
+            _ => "transition",
+        }
+    }
+
+    #[cfg(feature = "brick")]
     pub fn needs_render(&self)->bool {
         if self.power_fade.wake_active(Instant::now())
             || self.power_fade.shutdown_active(Instant::now()) {return true}
@@ -954,11 +978,19 @@ impl Frontend {
         if matches!(self.app().phase(), Phase::Music)
             && (self.music_view.title_marquee_active() || self.music_view.lyrics_animating())
             && self.last_render.elapsed() >= Duration::from_millis(33) {return true}
-        // Poll audible lyric position only while the lyric face is visible
-        // and playback is running. Idle and paused Music keep the low CPU gate.
-        if matches!(self.app().phase(), Phase::Music)
-            && self.music_view.lyrics_refresh()
-            && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
+        // The baseline flag deliberately retains the old periodic lyric gate.
+        // Otherwise detect changes against the already rendered lyric index,
+        // track epoch and playback state; no extra clock or audio polling.
+        if matches!(self.app().phase(), Phase::Music) {
+            if self.legacy_redraw {
+                if self.music_view.lyrics_refresh()
+                    && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
+            } else if let Some(music) = self.app().music() {
+                if self.music_view.content_changed(music) {return true}
+                if self.music_view.now_playing_cover_loading(music)
+                    && self.last_render.elapsed() >= Duration::from_millis(100) {return true}
+            }
+        }
         // Before the first frame, no transition has actually been presented.
         // The normal initial frame is already requested by the boot/input path;
         // don't defeat the idle redraw gate just because scene is still None.
@@ -968,7 +1000,25 @@ impl Frontend {
         if self.app().wifi.as_ref().map(|w|w.dirty).unwrap_or(false) {return true}
         if self.app().banner_active() {return true}
         if self.render_effects()!=self.rendered_effects {return true}
-        if self.rebuild.is_some() || !matches!(self.app().phase(),Phase::Shelf|Phase::QuickMenu{..}|Phase::Music) || self.last_input.elapsed()<Duration::from_secs(2) || self.last_render.elapsed()>=Duration::from_secs(1) {return true}
+        if self.rebuild.is_some() || !matches!(self.app().phase(),Phase::Shelf|Phase::QuickMenu{..}|Phase::Music)
+            || self.last_render.elapsed()>=Duration::from_secs(1) {return true}
+        if self.legacy_redraw {
+            if self.last_input.elapsed() < Duration::from_secs(2) {return true}
+        } else {
+            // Input must be presented promptly, not trigger two seconds of
+            // continuous redraws. Existing draw comparison below still
+            // handles changing geometry, HUD, animations and held buttons.
+            if self.last_input > self.last_render {return true}
+            // A lit long quick-menu name can change its texture without
+            // changing its Draw command; preserve the marquee at ~30fps.
+            if let Some(row) = self.app().quick_menu() {
+                if let Some(index) = row.named() {
+                    if self.last_render.elapsed() >= Duration::from_millis(33)
+                        && self.overlay_tex.scrolls[index].as_ref().is_some_and(|scroll|
+                            scroll.at != Some(scroll.offset(scroll.since.elapsed().as_secs_f32()))) {return true}
+                }
+            }
+        }
         let mut probe=Vec::new();self.app().draw(&mut probe);
         probe!=self.draws
     }
@@ -1882,6 +1932,11 @@ mod power_render_tests {
         f.nav_fade.update(Some(NavScene::Shelf), Instant::now()-BOOT_FADE);
         assert!(!f.needs_render(),"finished boot fade should not keep redrawing");
         f.last_input=Instant::now();assert!(f.needs_render(),"input must redraw immediately");
+        f.last_render=f.last_input;
+        assert!(!f.needs_render(),"a presented input must not redraw unchanged content for two seconds");
+        f.legacy_redraw=true;
+        assert!(f.needs_render(),"baseline retains the previous two-second redraw window");
+        f.legacy_redraw=false;
         f.last_input=Instant::now()-Duration::from_secs(3);
         f.rendered_effects.0=-1.0;assert!(f.needs_render(),"screen transitions must animate");
         f.rendered_effects=f.render_effects();f.last_render=Instant::now()-Duration::from_secs(2);

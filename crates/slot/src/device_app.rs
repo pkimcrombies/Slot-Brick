@@ -236,6 +236,8 @@ pub fn run() {
         .spawn(move || slot::bootlogo::refresh(&card));
     #[cfg(feature = "brick")]
     let mut cpu = slot::brick_power::CpuPower::open(&root);
+    #[cfg(feature = "brick")]
+    let mut diagnostics = slot::brick_power::PowerDiagnostics::open(&root);
     let mut drawn = false;
     frontend.drive_emulator();
     let mut pacer = Pacer::new();
@@ -278,6 +280,9 @@ pub fn run() {
         #[cfg(feature = "brick")]
         {
             frontend.idle_sleep();
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.tick(frontend.power_workload(), frontend.audio_underruns());
+            }
             // Briefly keep the normal rendering clock while darkening the
             // screen, then restore standby clocks for the rest of suspend.
             let dozing = matches!(frontend.app().phase(), slot::app::Phase::Doze { .. });
@@ -344,6 +349,7 @@ pub fn run() {
         }
         #[cfg(feature = "brick")]
         if !frontend.needs_render() {
+            if let Some(diagnostics) = &mut diagnostics { diagnostics.idle(); }
             pacer = Pacer::new();
             #[cfg(feature = "sim")]
             sim.tick(format!("{:?}", frontend.app().phase()), false, false, || surface.read_rgba());
@@ -370,6 +376,8 @@ pub fn run() {
             cpu.restore();
             std::process::exit(1);
         }
+        #[cfg(feature = "brick")]
+        if let Some(diagnostics) = &mut diagnostics { diagnostics.presented(); }
         let swap_took = swap.elapsed();
         #[cfg(feature = "sim")]
         sim.tick(format!("{:?}", frontend.app().phase()), true, false, || surface.read_rgba());

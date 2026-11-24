@@ -593,6 +593,7 @@ pub(crate) struct MusicView {
     repeat_icons: [MusicIcon; 3],
     title_marquee: TitleMarquee,
     lyrics_motion: LyricsMotion,
+    rendered_track: Option<(u64, Option<Status>)>,
     lock_icon: MusicIcon,
     unlock_icon: MusicIcon,
     lock_feedback: LockFeedback,
@@ -616,6 +617,7 @@ impl Default for MusicView {
             repeat_icons: std::array::from_fn(|_| MusicIcon::default()),
             title_marquee: TitleMarquee::default(),
             lyrics_motion: LyricsMotion::default(),
+            rendered_track: None,
             lock_icon: MusicIcon::default(),
             unlock_icon: MusicIcon::default(),
             lock_feedback: LockFeedback::default(),
@@ -696,6 +698,25 @@ impl MusicView {
 
     pub(crate) fn lyrics_animating(&self) -> bool { self.lyrics_motion.animating() }
     pub(crate) fn lyrics_refresh(&self) -> bool { self.lyrics_motion.refresh }
+
+    /// Detect semantic changes that cannot be seen by comparing the cached
+    /// app Draw list. Track time/progress still uses the ordinary 1s refresh.
+    pub(crate) fn content_changed(&self, music: &Music) -> bool {
+        if !music.showing_now_playing() || music.music_settings_open() { return false; }
+        let key = (music.lyric_epoch(), music.track.as_ref().map(|track| track.status));
+        self.rendered_track != Some(key)
+            || self.lyrics_motion.target != music.showing_lyrics()
+            || (music.showing_lyrics()
+                && self.lyrics_motion.active != music.lyric_index().map_or(-1, |i| i as isize))
+    }
+
+    pub(crate) fn now_playing_cover_loading(&self, music: &Music) -> bool {
+        if !music.showing_now_playing() || music.music_settings_open() || music.track.is_none() {
+            return false;
+        }
+        self.cover.is_loading() || music.playing_album().songs.first().is_some_and(|song|
+            self.flow_covers.iter().any(|cover| cover.requested_for(&song.path) && cover.is_loading()))
+    }
 
     pub(crate) fn cover_flow_animating(&self) -> bool {
         self.flow_motion.active(Instant::now())
@@ -925,6 +946,9 @@ impl MusicView {
         } else {
             None
         };
+        self.rendered_track = if music.showing_now_playing() && !music.music_settings_open() {
+            Some((music.lyric_epoch(), music.track.as_ref().map(|track| track.status)))
+        } else { None };
         let lyrics_frame = if music.showing_now_playing() && !music.music_settings_open()
             && music.track.is_some() {
             self.lyrics_motion.update(music.showing_lyrics(), music.lyric_epoch(),

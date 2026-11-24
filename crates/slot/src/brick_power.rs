@@ -145,6 +145,110 @@ impl CpuPower {
     }
 }
 impl Drop for CpuPower {fn drop(&mut self){self.restore();}}
+// Optional measurements, enabled by Slot/POWER_DIAGNOSTICS. Sample the
+// same binary with/without DISABLE_RENDER_OPTIMISATION for an A/B baseline.
+// Monotonic awake windows are discarded across standby; sleep.log already
+// records deep suspend. No high-frequency file reads or logging.
+pub struct PowerDiagnostics {
+    path: PathBuf,
+    baseline: bool,
+    window: Option<DiagnosticWindow>,
+}
+
+struct DiagnosticWindow {
+    since: Instant,
+    workload: &'static str,
+    mixed: bool,
+    loops: u64,
+    frames: u64,
+    idle: u64,
+    ticks: Option<u64>,
+    underruns: u64,
+}
+
+fn process_ticks(stat: &str) -> Option<u64> {
+    // comm may contain spaces or closing parentheses; fields after the
+    // final ')' begin at field 3 (state). utime/stime are fields 14/15.
+    let (_, fields) = stat.rsplit_once(')')?;
+    let mut fields = fields.split_whitespace();
+    let user: u64 = fields.nth(11)?.parse().ok()?;
+    let system: u64 = fields.next()?.parse().ok()?;
+    user.checked_add(system)
+}
+
+fn current_process_ticks() -> Option<u64> {
+    process_ticks(&fs::read_to_string("/proc/self/stat").ok()?)
+}
+
+impl PowerDiagnostics {
+    pub fn open(root: &Path) -> Option<Self> {
+        if !root.join("POWER_DIAGNOSTICS").exists() { return None; }
+        Some(Self {
+            path: root.join("Logs/power-diagnostics.log"),
+            baseline: root.join("DISABLE_RENDER_OPTIMISATION").exists(),
+            window: None,
+        })
+    }
+
+    pub fn tick(&mut self, workload: &'static str, underruns: u64) {
+        if workload == "standby" {
+            self.window = None;
+            return;
+        }
+        let now = Instant::now();
+        let window = self.window.get_or_insert_with(|| DiagnosticWindow {
+            since: now, workload, mixed: false, loops: 0, frames: 0, idle: 0,
+            ticks: current_process_ticks(), underruns,
+        });
+        window.mixed |= window.workload != workload;
+        let elapsed = now.saturating_duration_since(window.since);
+        if elapsed >= Duration::from_secs(60) {
+            let ticks = current_process_ticks();
+            let delta = ticks.zip(window.ticks).and_then(|(end, start)| end.checked_sub(start));
+            let battery = slot_power::hw("/sys/class/power_supply/axp2202-battery");
+            let cpu = slot_power::hw("/sys/devices/system/cpu/cpu0/cpufreq");
+            let thermal = slot_power::hw("/sys/class/thermal/thermal_zone0");
+            let raw = |path: &Path, name: &str| read(path, name).unwrap_or_else(|_| "?".into());
+            let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_secs();
+            if let Ok(mut log) = fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+                let _ = writeln!(log,
+                    "unix={} policy={} workload={} elapsed_s={:.3} loops={} frames={} idle_iterations={} process_cpu_ticks={} audio_underruns={} capacity={} charge_counter_raw={} voltage_uv={} current_raw={} status={} actual_khz={} thermal_zone0_raw={}",
+                    unix, if self.baseline { "baseline" } else { "optimized" },
+                    if window.mixed { "mixed" } else { window.workload },
+                    elapsed.as_secs_f64(), window.loops, window.frames, window.idle,
+                    delta.map_or_else(|| "?".into(), |v| v.to_string()),
+                    underruns.saturating_sub(window.underruns),
+                    raw(&battery, "capacity"), raw(&battery, "charge_counter"),
+                    raw(&battery, "voltage_now"), raw(&battery, "current_now"),
+                    raw(&battery, "status").replace(' ', "_"),
+                    raw(&cpu, "scaling_cur_freq"), raw(&thermal, "temp"));
+            }
+            *window = DiagnosticWindow {
+                since: now, workload, mixed: false, loops: 0, frames: 0, idle: 0,
+                ticks, underruns,
+            };
+        }
+        window.loops += 1;
+    }
+
+    pub fn presented(&mut self) {
+        if let Some(window) = &mut self.window { window.frames += 1; }
+    }
+
+    pub fn idle(&mut self) {
+        if let Some(window) = &mut self.window { window.idle += 1; }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn diagnostic_proc_stat_handles_spaces_and_parentheses_in_comm() {
+    let line = "12 (slot (worker)) S 1 2 3 4 5 6 7 8 9 10 100 23 0 0";
+    assert_eq!(process_ticks(line), Some(123));
+    assert_eq!(process_ticks("12 (slot) S"), None);
+}
+
 // Linux CLOCK_BOOTTIME includes suspend; CLOCK_MONOTONIC excludes it.
 pub fn suspended_seconds()->Option<f64> {
     #[repr(C)] struct Timespec {sec:std::ffi::c_long,nsec:std::ffi::c_long}

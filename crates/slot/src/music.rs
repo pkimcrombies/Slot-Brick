@@ -624,6 +624,8 @@ pub(crate) struct Music {
     library: Library,
     scan: Option<Scan>,
     browse: Vec<Location>,
+    /// The other browser's complete session-only stack (including scroll window).
+    parked_browse: Vec<Location>,
     pub(crate) track: Option<Track>,
     /// Now Playing is an independent Music section; browsing never stops audio.
     now_playing_view: bool,
@@ -666,6 +668,7 @@ impl Music {
             library,
             scan: None,
             browse: vec![Location::new(Page::Albums, 0)],
+            parked_browse: vec![Location::new(Page::Artists, 0)],
             track: None,
             now_playing_view: false,
             lyrics: Vec::new(),
@@ -817,9 +820,24 @@ impl Music {
                     AlbumSort::Release => AlbumSort::Az,
                 };
                 self.sort_albums();
-                for location in &mut self.browse {
-                    if matches!(location.page, Page::Albums | Page::Artist(_)) {
-                        location.cursor = 0;
+                // Explicit sort changes still reset a root's selection. If
+                // an album is open, its parent must point at that same album
+                // in the new order, including in the parked browser.
+                for stack in [&mut self.browse, &mut self.parked_browse] {
+                    for index in 0..stack.len() {
+                        let order = match stack[index].page {
+                            Page::Albums => Some(&self.album_order),
+                            Page::Artist(artist) => self.artist_album_order.get(artist),
+                            _ => None,
+                        };
+                        if let Some(order) = order {
+                            let child = stack.get(index + 1).and_then(|loc| match loc.page {
+                                Page::Album(id) => Some(id),
+                                _ => None,
+                            });
+                            stack[index].cursor = child.and_then(|id|
+                                order.iter().position(|&entry| entry == id)).unwrap_or(0);
+                        }
                     }
                 }
             }
@@ -1020,12 +1038,22 @@ impl Music {
     /// highlights the same album. If nothing is playing, B opens Albums.
     fn browse_playing_album(&mut self) {
         self.now_playing_view = false;
+        // B explicitly jumps to the playing album; preserve Artists' history.
+        self.switch_browser(false);
         let root_cursor = self.track.as_ref().and_then(|track| {
             self.album_order.iter().position(|&album| album == track.album)
         }).unwrap_or(0);
         self.browse = vec![Location::new(Page::Albums, root_cursor)];
         if let Some(track) = &self.track {
             self.browse.push(Location::new(Page::Album(track.album), track.index));
+        }
+    }
+
+    /// Swap the two complete stacks without rebuilding the library or
+    /// touching playback. Now Playing leaves both histories untouched.
+    fn switch_browser(&mut self, artists: bool) {
+        if matches!(self.browse[0].page, Page::Artists) != artists {
+            std::mem::swap(&mut self.browse, &mut self.parked_browse);
         }
     }
 
@@ -1043,13 +1071,10 @@ impl Music {
         let next = (current + if forward { 1 } else { 2 }) % 3;
         self.now_playing_view = next == 0;
         self.settings_view = false;
-        let page = match next {
-            1 => Some(Page::Albums),
-            2 => Some(Page::Artists),
-            _ => None,
-        };
-        if let Some(page) = page {
-            self.browse = vec![Location::new(page, 0)];
+        match next {
+            1 => self.switch_browser(false),
+            2 => self.switch_browser(true),
+            _ => {}
         }
     }
 
@@ -1113,13 +1138,8 @@ impl Music {
 
     /// Automatic advance and skipping keep the current view unchanged.
     fn start_album(&mut self, album: usize, index: usize) {
-        // Preserve a user's independent album-list selection while browsing.
-        // The old cursor follows playback only while Now Playing is visible.
-        if self.now_playing_view
-            && matches!(self.location().page, Page::Album(selected) if selected == album)
-        {
-            self.select_row(index);
-        }
+        // Skipping and automatic advance never move either saved browser.
+        // B from Now Playing remains the explicit jump to the current song.
         self.close_video();
         self.resume_song_at = None;
         self.lyrics = load_lrc(&self.library.albums[album].songs[index].path);
@@ -2142,7 +2162,7 @@ mod tests {
         });
         assert_eq!(music.album_for_row(0).unwrap().title, "alpha");
         assert!(music.album_for_row(1).is_none());
-        music.browse[0].page = Page::Artists;
+        music.switch_browser(true);
         assert!(music.album_for_row(0).is_none());
         music.open_page(Page::Artist(0));
         assert_eq!(music.album_for_row(0).unwrap().title, "alpha");
@@ -2159,7 +2179,7 @@ mod tests {
                 name: (*name).into(), albums: vec![],
             }).collect(),
         });
-        music.browse[0].page = Page::Artists;
+        music.switch_browser(true);
         assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::Right));
         assert_eq!(music.row(music.cursor()).0, "Amber");
@@ -2191,7 +2211,7 @@ mod tests {
     fn artists_alphabet_jumps_ignore_empty_and_one_letter_sets() {
         use crate::music_library::Artist;
         let mut empty = Music::with_library(Library::default());
-        empty.browse[0].page = Page::Artists;
+        empty.switch_browser(true);
         empty.input(Action::GbaDown(Btn::Right));
         assert_eq!(empty.cursor(), 0);
         let mut one = Music::with_library(Library {
@@ -2200,7 +2220,7 @@ mod tests {
                 name: (*name).into(), albums: vec![],
             }).collect(),
         });
-        one.browse[0].page = Page::Artists;
+        one.switch_browser(true);
         one.select_row(1);
         one.input(Action::GbaDown(Btn::Left));
         one.input(Action::GbaDown(Btn::Right));
@@ -2616,7 +2636,7 @@ mod tests {
         assert_eq!(music.playing_position(), Some((0, 2)));
 
         music.input(Action::GbaDown(Btn::R1)); // Now Playing -> Albums
-        assert_eq!(music.label(), "albums");
+        assert!(music.showing_tracks(), "restore the previous album track list");
         assert!(!music.music_settings_open());
         music.input(Action::GbaDown(Btn::R1)); // Albums -> Artists
         assert_eq!(music.label(), "artists");
@@ -2629,7 +2649,7 @@ mod tests {
         music.input(Action::GbaDown(Btn::L1)); // Now Playing -> Artists
         assert_eq!(music.label(), "artists");
         music.input(Action::GbaDown(Btn::L1)); // Artists -> Albums
-        assert_eq!(music.label(), "albums");
+        assert!(music.showing_tracks());
         music.input(Action::GbaDown(Btn::L1)); // Albums -> Now Playing
         assert!(music.showing_now_playing());
         assert!(!music.music_settings_open());
@@ -2684,7 +2704,7 @@ mod tests {
     }
 
     #[test]
-    fn section_switch_from_now_playing_enters_albums_root_not_song_list() {
+    fn section_switch_from_now_playing_restores_album_song_list() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Music");
         std::fs::create_dir_all(&folder).unwrap();
@@ -2696,8 +2716,8 @@ mod tests {
         assert_eq!(music.playing_position(), Some((0, 1)));
         music.input(Action::GbaDown(Btn::R1)); // Now Playing -> Albums
         assert!(!music.showing_now_playing());
-        assert!(music.is_root(), "section must not open the song list");
-        assert_eq!(music.label(), "albums");
+        assert!(music.showing_tracks(), "restore the previous song list");
+        assert_eq!(music.cursor(), 0);
         assert_eq!(music.playing_position(), Some((0, 1)), "audio state unchanged");
         music.input(Action::GbaDown(Btn::L1)); // Albums -> Now Playing
         assert!(music.showing_now_playing());
@@ -2724,7 +2744,8 @@ mod tests {
         assert_eq!(music.playing_position(), Some((1, 2)));
 
         // Browse Alpha independently, then return to Now Playing.
-        music.input(Action::GbaDown(Btn::R1)); // Albums root
+        music.input(Action::GbaDown(Btn::R1)); // restore Beta tracks
+        music.input(Action::GbaDown(Btn::B)); // Albums root
         music.select_row(0);
         music.input(Action::GbaDown(Btn::A));
         assert_eq!(music.browsed_album().title, "Alpha");
@@ -2763,6 +2784,80 @@ mod tests {
     }
 
     #[test]
+    fn tabs_restore_independent_root_selections_and_nested_track_windows() {
+        use crate::music_library::Artist;
+        let album = |name: &str| Album {
+            title: name.into(), artist: "artist".into(), release_date: None,
+            songs: (0..24).map(|index| Song {
+                path: PathBuf::from(format!("{name}/{index}.mp3")),
+                title: format!("{index}"), artist: "artist".into(), disc: 1,
+                track: Some((index + 1) as u16),
+            }).collect(),
+        };
+        let mut music = Music::with_library(Library {
+            albums: vec![album("Alpha"), album("Beta"), album("Gamma")],
+            artists: vec![
+                Artist { name: "First".into(), albums: vec![0] },
+                Artist { name: "Second".into(), albums: vec![1, 2] },
+            ],
+        });
+        music.select_row(2); // Gamma in Cover Flow
+        music.navigate_section(true);
+        music.select_row(1); // Second artist
+        music.navigate_section(false);
+        assert!(music.cover_flow());
+        assert_eq!(music.cursor(), 2);
+        music.input(Action::GbaDown(Btn::X)); // Album list, same selection
+        music.navigate_section(true);
+        assert_eq!(music.cursor(), 1);
+        music.input(Action::GbaDown(Btn::A)); // Second artist
+        music.select_row(0); // Beta
+        music.input(Action::GbaDown(Btn::A));
+        music.jump_track_page(true);
+        music.select_row(8);
+        assert_eq!(music.album_track_window(), (7, 14));
+        music.navigate_section(false); // Albums list
+        assert!(!music.cover_flow());
+        assert_eq!(music.cursor(), 2);
+        music.input(Action::GbaDown(Btn::A)); // Gamma tracks
+        music.jump_track_page(true);
+        music.jump_track_page(true);
+        music.select_row(15);
+        assert_eq!(music.album_track_window(), (14, 21));
+        music.navigate_section(true);
+        assert_eq!(music.browsed_album().title, "Beta");
+        assert_eq!(music.cursor(), 8);
+        assert_eq!(music.album_track_window(), (7, 14));
+        music.navigate_section(true); // Now Playing, no track
+        music.navigate_section(true); // Albums
+        assert_eq!(music.browsed_album().title, "Gamma");
+        assert_eq!(music.cursor(), 15);
+        assert_eq!(music.album_track_window(), (14, 21));
+        music.start(15);
+        music.switch(15, true);
+        assert_eq!(music.playing_position(), Some((16, 24)));
+        music.navigate_section(true); // restore Gamma list, not playback cursor
+        assert_eq!(music.cursor(), 15);
+        assert_eq!(music.album_track_window(), (14, 21));
+        music.navigate_section(true);
+        assert_eq!(music.cursor(), 8);
+        music.input(Action::GbaDown(Btn::B));
+        assert_eq!(music.label(), "Second");
+        music.input(Action::GbaDown(Btn::B));
+        assert_eq!(music.label(), "artists");
+        assert_eq!(music.cursor(), 1);
+        // Explicit B from Now Playing jumps to the actual playing song,
+        // without destroying the saved Artists selection.
+        music.navigate_section(true);
+        music.input(Action::GbaDown(Btn::B));
+        assert_eq!(music.browsed_album().title, "Gamma");
+        assert_eq!(music.cursor(), 16);
+        music.navigate_section(true);
+        assert_eq!(music.label(), "artists");
+        assert_eq!(music.cursor(), 1);
+    }
+
+    #[test]
     fn shoulders_leave_nested_browser_pages_but_keep_the_active_song() {
         let make = |title: &str| Album {
             title: title.into(), artist: "artist".into(), release_date: None,
@@ -2789,7 +2884,8 @@ mod tests {
         music.input(Action::GbaDown(Btn::R1)); // Now Playing
         assert!(music.showing_now_playing());
         music.input(Action::GbaDown(Btn::R1)); // Albums
-        assert_eq!(music.label(), "albums");
+        assert!(music.showing_tracks());
+        assert_eq!(music.browsed_album().title, "Alpha");
         assert_eq!(music.playing_album().title, "Alpha");
     }
 
@@ -2906,19 +3002,21 @@ mod tests {
         for _ in 0..20 {
             ring.fill(&mut [1; 7_000]);
             music.update_audio(&ring, 80);
-            if music.cursor() == 1 {
+            if music.playing_position() == Some((1, 2)) {
                 break;
             }
         }
         assert_eq!(
-            music.cursor(),
-            1,
+            music.playing_position(),
+            Some((1, 2)),
             "the folder advances at the end of the first song"
         );
+        assert_eq!(music.cursor(), 0, "automatic playback leaves the browser untouched");
         music.update_audio(&ring, 80);
         assert!(ring.queued_frames() > 0);
         music.input(Action::GbaDown(Btn::Left));
         music.update_audio(&ring, 80);
+        assert_eq!(music.playing_position(), Some((0, 2)));
         assert_eq!(music.cursor(), 0);
         music.input(Action::GbaDown(Btn::B));
         music.update_audio(&ring, 80);

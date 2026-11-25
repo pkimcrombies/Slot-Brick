@@ -29,6 +29,7 @@ struct Inner {
 pub struct Ring {
     inner: Mutex<Inner>,
     room: Condvar,
+    data: Condvar,
     queued: AtomicUsize,
     capacity: AtomicUsize,
     rate: AtomicU32,
@@ -57,6 +58,7 @@ impl Ring {
                 voice_laid: 0,
             }),
             room: Condvar::new(),
+            data: Condvar::new(),
             queued: AtomicUsize::new(0),
             idle: AtomicBool::new(false),
             capacity: AtomicUsize::new(capacity_frames),
@@ -89,12 +91,17 @@ impl Ring {
         self.underruns.store(0, Ordering::Relaxed);
         self.consuming.store(true, Ordering::Relaxed);
         self.priming.store(false, Ordering::Relaxed);
+        self.data.notify_one();
     }
 
     pub fn push(&self, samples: &[i16]) {
         let mut i = self.lock();
+        let was_empty = i.len == 0;
         let lost = write_into(&mut i, samples).len();
         self.queued.store(i.len, Ordering::Relaxed);
+        if was_empty && i.len > 0 {
+            self.data.notify_one();
+        }
         drop(i);
         if lost > 0 && !self.muted() && self.capacity_frames() > 0 {
             self.overruns.fetch_add(lost as u64, Ordering::Relaxed);
@@ -127,8 +134,14 @@ impl Ring {
         let mut rest = samples;
         let mut i = self.lock();
         loop {
+            let was_empty = i.len == 0;
             rest = write_into(&mut i, rest);
             self.queued.store(i.len, Ordering::Relaxed);
+            // Signal before waiting for room: a producer may fill the entire
+            // ring while the ALSA consumer is asleep.
+            if was_empty && i.len > 0 {
+                self.data.notify_one();
+            }
             if rest.is_empty() || self.muted() {
                 return;
             }
@@ -170,6 +183,7 @@ impl Ring {
         if i.buf.is_empty() {
             return;
         }
+        let was_empty = i.len == 0;
         let start = i.drained;
         let mut merged = samples.to_vec();
         if kind.is_some() && i.voice_kind == kind {
@@ -193,6 +207,31 @@ impl Ring {
         i.pending = merged;
         lay_pending(&mut i);
         self.queued.store(i.len, Ordering::Relaxed);
+        if was_empty && i.len > 0 {
+            self.data.notify_one();
+        }
+    }
+
+    /// Only used when the hardware PCM is closed. Do not poll an empty
+    /// ring, but continue to drain queued silence/muted audio at its normal
+    /// pace and let pending effects be laid into newly available space.
+    pub(super) fn wait_for_audio(&self, stop: &AtomicBool) -> bool {
+        let mut i = self.lock();
+        while !stop.load(Ordering::Relaxed)
+            && i.len == 0
+            && (i.buf.is_empty() || i.placed >= i.pending.len())
+        {
+            i = self.data.wait(i).unwrap_or_else(|e| e.into_inner());
+        }
+        !stop.load(Ordering::Relaxed)
+    }
+
+    /// Synchronize the stop flag with the wait predicate so close/reopen and
+    /// suspend cannot lose a wakeup between checking it and going to sleep.
+    pub(super) fn stop_audio(&self, stop: &AtomicBool) {
+        let _guard = self.lock();
+        stop.store(true, Ordering::Relaxed);
+        self.data.notify_all();
     }
 
     pub fn fill(&self, out: &mut [i16]) {
@@ -339,4 +378,75 @@ fn write_into<'a>(i: &mut Inner, samples: &'a [i16]) -> &'a [i16] {
     i.buf[..n - first].copy_from_slice(&samples[first..n]);
     i.len += n;
     &samples[n..]
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn idle_consumer_wakes_for_pcm_effects_and_shutdown() {
+        for kind in 0..3 {
+            let ring = Arc::new(Ring::new(128));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = mpsc::channel();
+            let worker = {
+                let ring = ring.clone();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    tx.send(ring.wait_for_audio(&stop)).unwrap();
+                })
+            };
+            let before = rx.recv_timeout(Duration::from_millis(30));
+            match kind {
+                0 => ring.push(&[123, -123]),
+                1 => ring.mix_over(&[456, -456], 1),
+                _ => ring.stop_audio(&stop),
+            }
+            let result = rx.recv_timeout(Duration::from_secs(2));
+            ring.stop_audio(&stop);
+            worker.join().unwrap();
+            assert!(matches!(before, Err(mpsc::RecvTimeoutError::Timeout)));
+            assert_eq!(result.unwrap(), kind != 2);
+            if kind != 2 {
+                let mut out = [0; 2];
+                ring.fill(&mut out);
+                assert_eq!(out, if kind == 0 { [123, -123] } else { [456, -456] });
+            }
+        }
+    }
+
+    #[test]
+    fn queued_silence_and_stop_before_wait_are_not_lost() {
+        let ring = Ring::new(128);
+        let stop = AtomicBool::new(false);
+        ring.push(&[0; 8]);
+        assert!(ring.wait_for_audio(&stop), "queued silence must still drain");
+        ring.stop_audio(&stop);
+        assert!(!ring.wait_for_audio(&stop), "stop takes precedence over queued audio");
+    }
+
+    #[test]
+    fn blocking_producer_signals_before_waiting_for_room() {
+        let ring = Arc::new(Ring::new(4));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let worker = {
+            let ring = ring.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                if ring.wait_for_audio(&stop) {
+                    let mut out = [0; 8];
+                    ring.fill(&mut out);
+                    tx.send(out).unwrap();
+                }
+            })
+        };
+        ring.push_blocking(&[42; 16]);
+        let result = rx.recv_timeout(Duration::from_secs(2));
+        ring.stop_audio(&stop);
+        worker.join().unwrap();
+        assert_eq!(result.unwrap(), [42; 8]);
+    }
 }

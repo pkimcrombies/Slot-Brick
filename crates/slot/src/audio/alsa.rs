@@ -133,7 +133,7 @@ impl AlsaSink {
 
     fn close(&mut self) {
         if let Some(d) = self.device.take() {
-            d.stop.store(true, Ordering::Relaxed);
+            self.ring.stop_audio(&d.stop);
             let _ = d.join.join();
         }
     }
@@ -219,6 +219,12 @@ impl Playback {
         let span = Duration::from_secs_f64(PERIOD_FRAMES as f64 / self.rate as f64);
         let mut silence = Silence::new(RELEASE_AFTER);
         while !stop.load(Ordering::Relaxed) {
+            // ALSA is already released after silence. Sleep until a
+            // producer queues PCM (including menu effects) or close wakes
+            // us. Do not alter the hardware-open playback path.
+            if self.pcm.is_none() && !ring.wait_for_audio(stop) {
+                break;
+            }
             ring.fill(&mut buf);
             let hold = silence.hear(&buf, span);
             match (self.pcm, hold) {
@@ -241,6 +247,8 @@ impl Playback {
                         return;
                     }
                 }
+                // Preserve real-time draining of queued silent/muted PCM.
+                // The next iteration blocks if the queue is now empty.
                 None => std::thread::sleep(span),
             }
         }

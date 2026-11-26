@@ -181,6 +181,23 @@ fn the_rows_run_in_the_order_the_user_chose() {
     }
 }
 
+#[cfg(feature = "brick")]
+#[test]
+fn all_settings_pages_share_a_top_and_fit_below_the_status_bar() {
+    use slot_ui::{quick_pitch, quick_top, QUICK_PITCH, QUICK_SPLIT, QUICK_TEXT_H};
+    for row in QuickRow::ALL {
+        let rows = row.page().len();
+        assert_eq!(quick_top(rows), 64.0, "{row:?}");
+        let pitch = quick_pitch(rows);
+        assert!(pitch >= QUICK_TEXT_H as f32, "{row:?} overlaps");
+        assert!(pitch <= QUICK_PITCH);
+        assert!(quick_top(rows) + (rows - 1) as f32 * pitch + QUICK_TEXT_H as f32
+            <= QUICK_SPLIT, "{row:?} reaches the footer");
+    }
+    assert_eq!(quick_pitch(QuickRow::MAIN.len()), QUICK_PITCH);
+    assert_eq!(quick_pitch(QuickRow::SETTINGS.len()), QUICK_PITCH);
+}
+
 #[test]
 fn the_values_read_as_the_menu_prints_them() {
     assert_eq!(

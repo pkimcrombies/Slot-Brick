@@ -698,13 +698,25 @@ impl QuickValue {
 pub const QUICK_PITCH: f32 = 48.0;
 pub const QUICK_TOP: f32 = quick_top(QuickRow::MAIN.len());
 
-/// Row spacing for a page of `rows`, with room for the system overlay below it.
+/// Fixed top of the Brick's menu rows, clear of the shared status HUD.
+const BRICK_MENU_TOP: f32 = 64.0;
+
+/// Keep normal row spacing, only tightening it on long pages to leave the footer clear.
 pub const fn quick_pitch(rows: usize) -> f32 {
-    let fit = ((QUICK_SPLIT - OUT_H as f32 / 2.0) * 2.0 / rows as f32) as u32 as f32;
+    let room = if cfg!(feature = "brick") {
+        QUICK_SPLIT - BRICK_MENU_TOP
+    } else {
+        (QUICK_SPLIT - OUT_H as f32 / 2.0) * 2.0
+    };
+    let fit = (room / rows as f32) as u32 as f32;
     if fit < QUICK_PITCH { fit } else { QUICK_PITCH }
 }
 pub const fn quick_top(rows: usize) -> f32 {
-    (OUT_H as f32 - quick_pitch(rows) * rows as f32) / 2.0
+    if cfg!(feature = "brick") {
+        BRICK_MENU_TOP
+    } else {
+        (OUT_H as f32 - quick_pitch(rows) * rows as f32) / 2.0
+    }
 }
 
 pub const QUICK_EDGE: f32 = 32.0;
@@ -841,7 +853,8 @@ impl QuickMenu<'_> {
         let top = quick_top(page.len());
         let pad = MENU_PAD as f32;
         for (index, &row) in page.iter().enumerate() {
-            let y = top + index as f32 * pitch + (pitch - MENU_H as f32) / 2.0;
+            let inset = if cfg!(feature = "brick") { 0.0 } else { (pitch - MENU_H as f32) / 2.0 };
+            let y = top + index as f32 * pitch + inset;
             let lit = row == self.row;
             if let Some(labels) = faces.labels.get(row.index()) {
                 let alpha = if self.disabled[row.index()] { DISABLED_ALPHA } else { 1.0 };

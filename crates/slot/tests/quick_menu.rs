@@ -665,6 +665,18 @@ fn menu_labels_land_on_display_pixels() {
     }
 }
 
+#[cfg(feature = "brick")]
+#[test]
+fn home_settings_and_system_draw_the_first_label_at_the_same_top() {
+    let (_d, mut a, _) = on_carousel();
+    fake_faces(&mut a);
+    for row in [QuickRow::Music, QuickRow::Screen, QuickRow::Lights] {
+        open_at(&mut a, row);
+        let [_, y, _, _] = placed(&frame(&a), 1000 + row.index()).unwrap();
+        assert_eq!(y, slot_ui::QUICK_TOP, "{row:?}");
+    }
+}
+
 #[test]
 fn home_menu_leaves_the_footer_empty() {
     let (_d, mut a, _) = on_carousel();

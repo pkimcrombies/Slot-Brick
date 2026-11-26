@@ -907,7 +907,7 @@ fn reset_settings_asked_and_then_left_changes_nothing() {
 fn the_menu_pops_as_it_is_used_and_is_quiet_when_nothing_happens() {
     use slot::audio::{MenuSound, Sfx};
     let (_d, mut a, _) = on_carousel();
-    let mut heard = |a: &mut App, btn: Option<Btn>| {
+    let heard = |a: &mut App, btn: Option<Btn>| {
         match btn {
             Some(btn) => press(a, btn),
             None => a.apply(Action::QuickMenu),
@@ -917,10 +917,23 @@ fn the_menu_pops_as_it_is_used_and_is_quiet_when_nothing_happens() {
     assert_eq!(heard(&mut a, None), Some(Sfx::Menu(MenuSound::Open)), "HOME opens the menu");
     assert_eq!(heard(&mut a, Some(Btn::Down)), Some(Sfx::Menu(MenuSound::Move)));
     assert_eq!(heard(&mut a, Some(Btn::A)), Some(Sfx::Menu(MenuSound::Open)), "a page opens");
+    #[cfg(feature = "brick")]
+    {
+        assert_eq!(a.quick_menu(), Some(QuickRow::Screen));
+        assert_eq!(heard(&mut a, Some(Btn::Down)), Some(Sfx::Menu(MenuSound::Move)), "select Gameplay");
+        assert_eq!(a.quick_menu(), Some(QuickRow::Game));
+        assert_eq!(heard(&mut a, Some(Btn::A)), Some(Sfx::Menu(MenuSound::Open)), "Gameplay opens");
+    }
+    assert_eq!(a.quick_menu(), Some(QuickRow::FastForward));
     assert_eq!(heard(&mut a, Some(Btn::Right)), Some(Sfx::Menu(MenuSound::Change)), "Fast Forward steps");
     assert_eq!(heard(&mut a, Some(Btn::B)), Some(Sfx::Menu(MenuSound::Back)));
     // A row that opens has no value to change: Left and Right do nothing, and say nothing.
     assert_eq!(heard(&mut a, Some(Btn::Right)), None);
+    #[cfg(feature = "brick")]
+    {
+        assert_eq!(heard(&mut a, Some(Btn::B)), Some(Sfx::Menu(MenuSound::Back)), "Settings closes");
+        assert_eq!(a.quick_menu(), Some(QuickRow::Settings));
+    }
     assert_eq!(heard(&mut a, Some(Btn::B)), Some(Sfx::Menu(MenuSound::Back)), "the menu closes");
     assert!(matches!(a.phase(), Phase::Shelf));
 }

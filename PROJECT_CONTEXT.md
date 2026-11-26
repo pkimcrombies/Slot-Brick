@@ -31,6 +31,22 @@
 - Report local test/build/install as pending until the user runs the installer
   and supplies output. Device behaviour requires physical testing.
 
+## 2026-11-26 Local installer regression correction
+
+- Installer pinned to 70cd063 stopped safely at source checkout because the
+  user's original checkout contained many tracked/untracked edits. Never
+  require the user to stash/reset these. Future installers automatically use
+  an isolated clean clone if the normal checkout is dirty, reusing the old
+  Cargo cache and Docker target volumes; no manual Git steps.
+- The clean checkout reached the local regression tests, but
+  `the_menu_pops_as_it_is_used_and_is_quiet_when_nothing_happens`
+  failed at Fast Forward: the Brick HOME menu now has a Settings parent.
+  The test navigated to Emulation instead of Gameplay. Update the test
+  to check the actual Settings → Gameplay → Fast Forward route and
+  backtrack through Settings, keeping the non-Brick path and existing
+  sound assertions. No application behavior or CI workflow changes.
+  Local rerun and ARM64 build remain pending. No SD write occurred.
+
 ## 2026-11-26 Small box shelf and two-stage reveal (pending device validation)
 
 - The prior one-press, large-box prototype was reverted at c8980d6.

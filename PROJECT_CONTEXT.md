@@ -2,7 +2,34 @@
 
 > Small handoff for future ChatGPT/AI coding sessions. **Read this first**, then verify the
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
-> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
+> Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-26. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
+
+## Mandatory development installation workflow (2026-11-26)
+
+- Default to the user's **local Windows PowerShell + Docker** workflow. Do not
+  add, modify, trigger, or depend on GitHub Actions for ordinary feature
+  development or installation unless the user explicitly requests it.
+  The existing native-video verification workflow is historical/independent;
+  leave it unchanged. An automatic run caused by a normal source push is
+  not an installation prerequisite.
+- Deliver a standalone downloadable .txt PowerShell installer, pinned to the
+  exact full feature-branch commit, with one paste-ready command that renames
+  it to .ps1 and executes it. No Work mode required.
+- Reuse the existing `slot-brick-psp-tools` Docker image, target volumes
+  `slot-psp-sim` and `slot-psp-arm64`, and local Cargo cache
+  `/src/.docker-cache/music-cargo`. Fetch the pinned source locally; do not
+  reset or overwrite the user's uncommitted work. Run local locked regression
+  tests (including affected integration/UI tests and power/quick/pause suites),
+  then compile the ARM64 device binary. If a test/build fails, stop before SD
+  writes and inspect the actual error. Do not skip tests or substitute a CI
+  artifact. If offline dependencies are missing, fetch locked dependencies
+  before retrying; never update Cargo.lock as an installation workaround.
+- Verify exact source revision, AArch64 ELF, embedded short Git revision,
+  SD identity, original binary hash, verified backup and final installed hash.
+  Replace only `Slot/System/slot-native`; preserve `Slot/System/slot` shell
+  wrapper and all artwork, games, music, saves, settings and boot files.
+- Report local test/build/install as pending until the user runs the installer
+  and supplies output. Device behaviour requires physical testing.
 
 ## 2026-11-26 Small box shelf and two-stage reveal (pending device validation)
 
@@ -26,7 +53,7 @@
 - Added regression coverage for closed bounds, small intermediate
   cartridge, blocked input during reveal, exact original preview size,
   B reversal, two presses, ejection, and missing-art fallback.
-  CI and actual Brick Pro visual testing must be checked separately.
+  Local Docker regression/build and actual Brick Pro visual testing are pending.
 
 ## 2026-11-23 Native video installer target correction (IMPORTANT)
 

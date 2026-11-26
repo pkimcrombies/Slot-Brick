@@ -110,6 +110,17 @@ impl MusicCover {
         }
     }
 
+    /// Abandon an off-window decoder without discarding already-loaded art.
+    /// Reset its key so returning to the album can request it again.
+    pub(crate) fn cancel_pending(&mut self) {
+        if let Some(load) = self.loading.take() {
+            load.cancel.store(true, Ordering::Relaxed);
+            self.track = None;
+            self.size = None;
+            self.tint = None;
+        }
+    }
+
     /// Upload on the render thread. A late cover belongs to the track that
     /// requested it; never show a stale image for a different album.
     pub(crate) fn texture(
@@ -422,6 +433,24 @@ mod tests {
             "new album must be free to start without waiting for the previous worker");
         assert!(sender.send(None).is_err(),
             "dropped receiver must discard a late old result");
+    }
+
+    #[test]
+    fn abandoning_off_window_cover_can_be_requested_again() {
+        let path = Path::new("Music/Old/01.mp3");
+        let mut cover = MusicCover::default();
+        let (sender, result) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        cover.track = Some(path.to_path_buf());
+        cover.loading = Some(Load { cancel: cancel.clone(), result });
+        cover.cancel_pending();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(!cover.requested_for(path));
+        assert!(!cover.is_loading());
+        assert!(sender.send(None).is_err());
+        let mut ready = MusicCover::loaded_for_test(path, TexId::from_raw(9), [256, 256]);
+        ready.cancel_pending();
+        assert!(ready.ready_for(path).is_some(), "warm artwork is retained");
     }
 
     #[test]

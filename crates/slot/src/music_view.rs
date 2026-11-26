@@ -380,13 +380,15 @@ fn playback_icon_index(status: Status) -> Option<usize> {
         _ => None,
     }
 }
-// Seven 3D covers are drawn; four extra on each side are decoded ahead
-// of time. A 15-slot rolling GPU cache costs at most ~3.75 MiB in
-// 256x256 RGBA textures, without keeping an entire music library in RAM.
-const FLOW_SLOTS: usize = 7;
-const FLOW_EXTRA_COVERS: usize = 4;
+// At rest seven covers are visible. Include both fading edges during
+// motion: rounding to a seven-slot window used to drop an edge at half
+// a step, even when its texture was already warm.
+const FLOW_SLOTS: usize = 9;
+const FLOW_EXTRA_COVERS: usize = 8;
+// 25 reusable 256px RGBA textures (at most 6.25 MiB of GPU pixels).
 const FLOW_CACHE_SLOTS: usize = FLOW_SLOTS + 2 * FLOW_EXTRA_COVERS;
 const FLOW_CACHE_RADIUS: usize = FLOW_SLOTS / 2 + FLOW_EXTRA_COVERS;
+const FLOW_MAX_PENDING: usize = 4;
 
 fn flow_prefetch_range(cursor: usize, albums: usize) -> std::ops::Range<usize> {
     cursor.saturating_sub(FLOW_CACHE_RADIUS)
@@ -587,6 +589,7 @@ pub(crate) struct MusicView {
     album_covers: [MusicCover; LIST_CACHE_SLOTS],
     list_visible: bool,
     flow_covers: [MusicCover; FLOW_CACHE_SLOTS],
+    flow_pending: bool,
     flow_motion: FlowMotion,
     flow_placeholder: Option<TexId>,
     playing_backdrop: Option<PlayingBackdrop>,
@@ -611,6 +614,7 @@ impl Default for MusicView {
             album_covers: std::array::from_fn(|_| MusicCover::list_thumbnail()),
             list_visible: false,
             flow_covers: std::array::from_fn(|_| MusicCover::default()),
+            flow_pending: false,
             flow_motion: FlowMotion::default(),
             flow_placeholder: None,
             playing_backdrop: None,
@@ -731,8 +735,7 @@ impl MusicView {
     /// Poll pending cover workers promptly while the carousel is on screen.
     /// When all requests settle, return to the usual low-CPU idle redraw gate.
     pub(crate) fn cover_flow_loading(&self) -> bool {
-        self.flow_motion.position.is_some()
-            && self.flow_covers.iter().any(MusicCover::is_loading)
+        self.flow_motion.position.is_some() && self.flow_pending
     }
 
     /// Both browsing modes retain their own small GPU caches. Returning the
@@ -867,39 +870,67 @@ impl MusicView {
         };
         let flow_first = flow.map_or(0, |position| position.round() as isize - (FLOW_SLOTS / 2) as isize);
         let mut flow_art = [None; FLOW_SLOTS];
-        if flow.is_some() {
-            for (slot, item) in flow_art.iter_mut().enumerate() {
-                let album_index = flow_first + slot as isize;
-                if album_index < 0 {
-                    continue;
+        self.flow_pending = false;
+        if let Some(position) = flow {
+            // Work nearest to the target and visible carousel first. The
+            // animated position is at most three albums from the target
+            // (larger jumps snap), so every drawn index fits this window.
+            let mut wanted: Vec<usize> =
+                flow_prefetch_range(music.cursor(), music.row_count()).collect();
+            wanted.sort_by_key(|&index| {
+                let visible = (flow_first..flow_first + FLOW_SLOTS as isize)
+                    .contains(&(index as isize));
+                (!visible, index.abs_diff(music.cursor()))
+            });
+            let mut keep = [false; FLOW_CACHE_SLOTS];
+            for &index in &wanted {
+                if let Some(song) = music.album_for_row(index).and_then(|album| album.songs.first()) {
+                    let slot = index % FLOW_CACHE_SLOTS;
+                    keep[slot] = self.flow_covers[slot].requested_for(&song.path);
                 }
-                let album_index = album_index as usize;
-                if let Some(album) = music.album_for_row(album_index) {
+            }
+            // Alphabet jumps must not leave old work occupying the decoder
+            // budget. Completed textures outside the window remain reusable.
+            for (slot, cover) in self.flow_covers.iter_mut().enumerate() {
+                if !keep[slot] { cover.cancel_pending(); }
+            }
+            // First harvest every existing request, freeing capacity before
+            // launching new ones. No disk access for already-ready covers.
+            for &index in &wanted {
+                if let Some(album) = music.album_for_row(index) {
                     if let Some(song) = album.songs.first() {
-                        // Draw the seven visible covers first. Extra cache
-                        // requests must not delay artwork in the viewport.
-                        *item = self.flow_covers[album_index % FLOW_CACHE_SLOTS]
-                            .texture(&song.path, album, compositor);
+                        let cover = &mut self.flow_covers[index % FLOW_CACHE_SLOTS];
+                        if cover.requested_for(&song.path) && cover.is_loading() {
+                            let _ = cover.texture(&song.path, album, compositor);
+                        }
                     }
                 }
             }
-        }
-        // Keep another four covers warm on each side of the visible seven.
-        // These use the same 15 rolling texture handles, so moving into the
-        // prefetched window requires no new decode or placeholder flash.
-        // Skip visible indices: they were already requested above.
-        if flow.is_some() {
-            for album_index in flow_prefetch_range(music.cursor(), music.row_count()) {
-                let visible = (flow_first..flow_first + FLOW_SLOTS as isize)
-                    .contains(&(album_index as isize));
-                if visible {
-                    continue;
-                }
-                if let Some(album) = music.album_for_row(album_index) {
+            let mut pending = self.flow_covers.iter().filter(|c| c.is_loading()).count();
+            for &index in &wanted {
+                if let Some(album) = music.album_for_row(index) {
                     if let Some(song) = album.songs.first() {
-                        let _ = self.flow_covers[album_index % FLOW_CACHE_SLOTS]
-                            .texture(&song.path, album, compositor);
+                        let cover = &mut self.flow_covers[index % FLOW_CACHE_SLOTS];
+                        if !cover.requested_for(&song.path) {
+                            if pending >= FLOW_MAX_PENDING {
+                                self.flow_pending = true;
+                                continue;
+                            }
+                            let _ = cover.texture(&song.path, album, compositor);
+                            if cover.is_loading() { pending += 1; }
+                        }
                     }
+                }
+            }
+            self.flow_pending |= pending > 0;
+            // Borrow only after cache uploads have finished. No draw can
+            // point at a texture slot overwritten during this frame.
+            for (slot, item) in flow_art.iter_mut().enumerate() {
+                let index = flow_first + slot as isize;
+                if index < 0 || (index as f32 - position).abs() >= 4.0 { continue; }
+                if let Some(song) = music.album_for_row(index as usize)
+                    .and_then(|album| album.songs.first()) {
+                    *item = self.flow_covers[index as usize % FLOW_CACHE_SLOTS].ready_for(&song.path);
                 }
             }
         }
@@ -1219,7 +1250,7 @@ impl Painter<'_> {
         // while inactive labels stay muted. Rose is for row selection.
         self.music_tabs(1);
 
-        let mut order = [0usize, 1, 2, 3, 4, 5, 6];
+        let mut order: [usize; FLOW_SLOTS] = std::array::from_fn(|i| i);
         order.sort_by(|&a, &b| {
             let da = (first as f32 + a as f32 - position).abs();
             let db = (first as f32 + b as f32 - position).abs();
@@ -1692,13 +1723,14 @@ mod album_thumbnail_layout_tests {
     }
 
     #[test]
-    fn cover_flow_preloads_four_additional_albums_on_each_side() {
-        assert_eq!(FLOW_SLOTS, 7, "3D layout remains seven visible covers");
-        assert_eq!(FLOW_EXTRA_COVERS, 4);
-        assert_eq!(FLOW_CACHE_SLOTS, 15);
-        assert_eq!(flow_prefetch_range(10, 40), 3..18);
-        assert_eq!(flow_prefetch_range(0, 40), 0..8);
-        assert_eq!(flow_prefetch_range(39, 40), 32..40);
+    fn cover_flow_preloads_eight_additional_albums_on_each_side() {
+        assert_eq!(FLOW_SLOTS, 9, "include the partially visible outer edges");
+        assert_eq!(FLOW_EXTRA_COVERS, 8);
+        assert_eq!(FLOW_CACHE_SLOTS, 25);
+        assert_eq!(FLOW_MAX_PENDING, 4);
+        assert_eq!(flow_prefetch_range(20, 40), 8..33);
+        assert_eq!(flow_prefetch_range(0, 40), 0..13);
+        assert_eq!(flow_prefetch_range(39, 40), 27..40);
         assert_eq!(flow_prefetch_range(0, 0), 0..0);
         assert_eq!(flow_prefetch_range(0, 1), 0..1);
         for cursor in 0..40 {
@@ -1708,6 +1740,24 @@ mod album_thumbnail_layout_tests {
             assert_eq!(slots.len(), flow_prefetch_range(cursor, 40).len(),
                 "warm cache must never overwrite a different album in its own window");
         }
+    }
+
+    #[test]
+    fn every_fading_edge_is_in_the_draw_window_and_warm_cache() {
+        for cursor in 0..40 {
+            for quarter in -12..=12 {
+                let position = cursor as f32 + quarter as f32 / 4.0;
+                let first = position.round() as isize - (FLOW_SLOTS / 2) as isize;
+                for index in 0..40 {
+                    if flow_geometry(index as f32 - position).is_some() {
+                        assert!((first..first + FLOW_SLOTS as isize).contains(&(index as isize)));
+                        assert!(flow_prefetch_range(cursor, 40).contains(&index));
+                    }
+                }
+            }
+        }
+        assert_eq!((0..40).filter(|&i| flow_geometry(i as f32 - 20.0).is_some()).count(), 7);
+        assert_eq!((0..40).filter(|&i| flow_geometry(i as f32 - 20.5).is_some()).count(), 8);
     }
 
     #[test]

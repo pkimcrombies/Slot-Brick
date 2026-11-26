@@ -639,8 +639,13 @@ fn both_b_and_menu_take_the_about_screen_back_to_the_quick_menu() {
     ] {
         let (mut s, _motor) = common::session_with_platform(d.path());
         s.app_mut().apply(slot_input::Action::QuickMenu);
-        // System, then About on it.
-        for row in [slot_ui::QuickRow::System, slot_ui::QuickRow::About] {
+        // Settings on Brick, then System and About.
+        let path = [
+            #[cfg(feature = "brick")]
+            slot_ui::QuickRow::Settings,
+            slot_ui::QuickRow::System, slot_ui::QuickRow::About,
+        ];
+        for row in path {
             for _ in 0..row.position() {
                 s.app_mut()
                     .apply(slot_input::Action::GbaDown(slot_input::Btn::Down));

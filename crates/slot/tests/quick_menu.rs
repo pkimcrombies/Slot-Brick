@@ -138,6 +138,30 @@ fn music_opens_from_the_menu_and_returns_to_the_same_carousel() {
     assert_eq!(a.selected_stem(), Some("Fusion"));
 }
 
+#[cfg(feature = "brick")]
+#[test]
+fn settings_categories_open_and_backtrack_without_entering_music() {
+    let (_d, mut a, _) = on_carousel();
+    a.apply(Action::QuickMenu);
+    assert_eq!(a.quick_menu(), Some(QuickRow::Music));
+    press(&mut a, Btn::Down);
+    assert_eq!(a.quick_menu(), Some(QuickRow::Settings));
+    press(&mut a, Btn::A);
+    for category in QuickRow::SETTINGS {
+        assert_eq!(a.quick_menu(), Some(category));
+        press(&mut a, Btn::A);
+        assert_eq!(a.quick_menu(), category.child());
+        press(&mut a, Btn::B);
+        assert_eq!(a.quick_menu(), Some(category));
+        press(&mut a, Btn::Down);
+    }
+    assert_eq!(a.quick_menu(), Some(QuickRow::Screen));
+    press(&mut a, Btn::B);
+    assert_eq!(a.quick_menu(), Some(QuickRow::Settings));
+    press(&mut a, Btn::B);
+    assert!(matches!(a.phase(), Phase::Shelf));
+}
+
 #[test]
 fn up_and_down_move_the_bar_and_wrap_at_the_ends() {
     let (_d, mut a, _) = on_carousel();
@@ -337,6 +361,11 @@ fn screen_opens_a_page_per_system_each_with_its_own_page_and_b_comes_back_up() {
     press(&mut a, Btn::B);
     assert_eq!(a.quick_menu(), Some(QuickRow::Screen));
     press(&mut a, Btn::B);
+    #[cfg(feature = "brick")]
+    {
+        assert_eq!(a.quick_menu(), Some(QuickRow::Settings));
+        press(&mut a, Btn::B);
+    }
     assert_eq!(a.quick_menu(), None);
 }
 

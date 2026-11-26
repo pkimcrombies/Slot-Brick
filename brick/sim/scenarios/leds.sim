@@ -3,6 +3,8 @@ press a
 phase Shelf
 led effect_rgb_hex_m FFFFFF
 press menu
+press up      # Settings
+press a
 press up      # System
 press a
 press a      # LEDs

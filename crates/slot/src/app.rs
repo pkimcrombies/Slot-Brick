@@ -1300,7 +1300,7 @@ impl App {
             QuickRow::SwapAb => Some(QuickValue::flag(self.state.swap_ab)),
             QuickRow::AutoClock => Some(QuickValue::flag(self.state.auto_clock)),
             QuickRow::UpdateCheck => Some(QuickValue::flag(self.state.update_check)),
-            QuickRow::Music => None,
+            QuickRow::Music | QuickRow::Settings => None,
             QuickRow::LibrarySort => Some(match self.state.library_sort {
                 slot_store::LibrarySort::Az => QuickValue::SortAz,
                 slot_store::LibrarySort::Console => QuickValue::SortConsole,
@@ -2457,7 +2457,8 @@ impl App {
                 }
                 Some(_) => {}
             },
-            QuickRow::LibrarySystems
+            QuickRow::Settings
+            | QuickRow::LibrarySystems
             | QuickRow::Screen
             | QuickRow::ScreenGb
             | QuickRow::ScreenGba
@@ -2641,7 +2642,7 @@ impl App {
             QuickRow::LibraryPlayTime => s.play_time_hours = !s.play_time_hours,
             QuickRow::LibraryTitleCard => s.title_card = !s.title_card,
             QuickRow::UpdateCheck => s.update_check = !s.update_check,
-            QuickRow::Music => return,
+            QuickRow::Music | QuickRow::Settings => return,
             QuickRow::AutoClock => {
                 s.auto_clock = !s.auto_clock;
                 // Turned on: the clock is set as soon as Wi-Fi allows.

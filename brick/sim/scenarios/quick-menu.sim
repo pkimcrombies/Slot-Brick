@@ -4,7 +4,9 @@ phase Shelf
 press menu
 phase QuickMenu
 snap menu
+press down    # Settings
 press a
+press a       # Emulation
 snap menu-screen
 # Screen holds a page per system, each with that system's own settings.
 press a
@@ -45,22 +47,22 @@ press b
 press b
 press b
 press b
+press b
 phase Shelf
 # System → Reset Settings asks first, then says it is done.
 press menu
 phase QuickMenu
+press up       # Settings
+press a
 press up       # System
 press a
-press down
-press down
-press down
-press down
-press down
-press down    # Reset Settings
+press up       # About
+press up       # Reset Settings
 press a
 snap menu-reset-ask
 press a
 snap menu-reset-done
+press b
 press b
 press b
 phase Shelf
@@ -68,6 +70,8 @@ phase Shelf
 # carries the commit it was built from).
 press menu
 phase QuickMenu
+press up       # Settings
+press a
 press up       # System
 press a
 press up       # About, at the bottom
@@ -80,10 +84,13 @@ press b
 press b
 press b
 press b
+press b
 phase Shelf
 # System → System Sounds: each kind of sound on or off.
 press menu
 phase QuickMenu
+press up       # Settings
+press a
 press up       # System
 press a
 press down
@@ -92,6 +99,7 @@ press down
 press down     # System Sounds
 press a
 snap menu-system-sounds
+press b
 press b
 press b
 press b

@@ -43,6 +43,11 @@ fn the_order_chosen_is_kept_and_the_selected_game_stays_selected() {
     let (d, mut a) = two_systems(SlotState::default());
     press(&mut a, Btn::Right);
     a.apply(Action::QuickMenu);
+    #[cfg(feature = "brick")]
+    {
+        press(&mut a, Btn::Down);
+        press(&mut a, Btn::A);
+    }
     for _ in 0..QuickRow::Library.position() {
         press(&mut a, Btn::Down);
     }
@@ -114,6 +119,11 @@ fn open_systems_at(a: &mut App, row: QuickRow) {
         press(a, Btn::B);
     }
     a.apply(Action::QuickMenu);
+    #[cfg(feature = "brick")]
+    {
+        press(a, Btn::Down);
+        press(a, Btn::A);
+    }
     for _ in 0..QuickRow::Library.position() {
         press(a, Btn::Down);
     }

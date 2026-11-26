@@ -12,10 +12,13 @@ hold menu 1500 # save state, eject, back to the shelf
 phase Shelf 20000
 press menu
 phase QuickMenu
+press down     # Settings
+press a
 press a        # Screen
 press up       # PlayStation, last on the page
 press a
 snap menu-screen-ps1
+press b
 press b
 press b
 press b

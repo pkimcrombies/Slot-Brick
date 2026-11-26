@@ -10,12 +10,15 @@ press select
 press select   # back to A–Z
 press menu
 phase QuickMenu
+press down     # Settings
+press a
 press down
 press down     # Library
 press a
 snap menu-library
 press down     # Show
 press right
+press b
 press b
 press b
 phase Shelf
@@ -26,6 +29,8 @@ snap shelf-favorites-only-r1
 # HOME → Library → Systems: a hidden system's shelf leaves, and L1/R1 skip it.
 press menu
 phase QuickMenu
+press down     # Settings
+press a
 press down
 press down     # Library
 press a
@@ -34,6 +39,7 @@ press down     # Systems
 press a
 snap menu-systems
 press right    # Game Boy Advance: hidden
+press b
 press b
 press b
 press b

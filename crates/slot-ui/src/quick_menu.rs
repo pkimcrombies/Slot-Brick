@@ -93,10 +93,11 @@ pub enum QuickRow {
     SoundVolume,
     UpdateCheck,
     Music,
+    Settings,
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 80] = [
+    pub const ALL: [QuickRow; 81] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -177,6 +178,7 @@ impl QuickRow {
         QuickRow::SoundVolume,
         QuickRow::UpdateCheck,
         QuickRow::Music,
+        QuickRow::Settings,
     ];
 
     #[cfg(not(feature = "brick"))]
@@ -185,9 +187,10 @@ impl QuickRow {
     pub const SYSTEM: [QuickRow; 7] = [QuickRow::DateTime, QuickRow::Font, QuickRow::Rumble, QuickRow::SystemSounds, QuickRow::BatteryShutdown, QuickRow::ResetSettings, QuickRow::About];
 
     #[cfg(feature = "brick")]
-    pub const MAIN: [QuickRow; 6] = [
-        QuickRow::Screen, QuickRow::Game, QuickRow::Library, QuickRow::Online, QuickRow::Music,
-        QuickRow::System,
+    pub const MAIN: [QuickRow; 2] = [QuickRow::Music, QuickRow::Settings];
+    #[cfg(feature = "brick")]
+    pub const SETTINGS: [QuickRow; 5] = [
+        QuickRow::Screen, QuickRow::Game, QuickRow::Library, QuickRow::Online, QuickRow::System,
     ];
     /// System: the Brick's lights, its clock, the font, rumble, Slot's sounds, the battery,
     /// asking GitHub for a newer Slot, every setting back to how it came, and what Slot is.
@@ -363,12 +366,16 @@ impl QuickRow {
             | QuickRow::LibraryPlayTime
             | QuickRow::LibraryTitleCard => &QuickRow::LIBRARY,
             QuickRow::Wifi | QuickRow::CartArt | QuickRow::Achievements | QuickRow::Update => &QuickRow::ONLINE,
+            #[cfg(feature = "brick")]
+            QuickRow::Screen | QuickRow::Game | QuickRow::Library | QuickRow::Online | QuickRow::System => &QuickRow::SETTINGS,
             _ => &QuickRow::MAIN,
         }
     }
 
     pub fn parent(self) -> Option<QuickRow> {
         match self.page()[0] {
+            #[cfg(feature = "brick")]
+            QuickRow::Screen => Some(QuickRow::Settings),
             QuickRow::LedMode => Some(QuickRow::Lights),
             QuickRow::ScreenGb => Some(QuickRow::Screen),
             QuickRow::GbShader => Some(QuickRow::ScreenGb),
@@ -392,6 +399,8 @@ impl QuickRow {
 
     pub fn child(self) -> Option<QuickRow> {
         match self {
+            #[cfg(feature = "brick")]
+            QuickRow::Settings => Some(QuickRow::SETTINGS[0]),
             QuickRow::Lights => Some(QuickRow::lights()[0]),
             QuickRow::Screen => Some(QuickRow::SCREEN[0]),
             QuickRow::ScreenGb => Some(QuickRow::SCREEN_GB[0]),
@@ -429,6 +438,7 @@ impl QuickRow {
             QuickRow::AutoClock => "Auto Clock",
             QuickRow::UpdateCheck => "Check for Updates",
             QuickRow::Music => "Music",
+            QuickRow::Settings => "Settings",
             QuickRow::Font => "Font",
             QuickRow::Lights => "LEDs",
             QuickRow::LedMode => "All LEDs",
@@ -498,7 +508,7 @@ impl QuickRow {
             self,
             QuickRow::DateTime | QuickRow::About | QuickRow::Screen | QuickRow::Game | QuickRow::Lights | QuickRow::Wifi | QuickRow::CartArt | QuickRow::Achievements | QuickRow::Update | QuickRow::System | QuickRow::Library
                 | QuickRow::LibrarySystems | QuickRow::ResetSettings | QuickRow::AboutLabel | QuickRow::SystemSounds
-                | QuickRow::Online | QuickRow::Clock | QuickRow::Saving | QuickRow::Music
+                | QuickRow::Online | QuickRow::Clock | QuickRow::Saving | QuickRow::Music | QuickRow::Settings
                 | QuickRow::ScreenGb | QuickRow::ScreenGba | QuickRow::ScreenNes | QuickRow::ScreenSnes | QuickRow::ScreenPs1
         )
     }

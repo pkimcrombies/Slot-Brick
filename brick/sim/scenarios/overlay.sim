@@ -4,6 +4,8 @@ press a
 phase Shelf
 press menu
 phase QuickMenu
+press down    # Settings
+press a
 press a       # Screen
 press a       # Game Boy / GBC
 press down

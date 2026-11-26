@@ -8,7 +8,9 @@ snap shelf-stick
 stick left
 press menu
 phase QuickMenu
-stick up      # System, by the stick
+stick up      # Settings, by the stick
+press a
+stick up      # System
 press a
 press a       # LEDs
 snap menu-leds
@@ -22,6 +24,7 @@ press right
 press right
 led max_scale_lr 60
 led max_scale 20
+press b
 press b
 press b
 press b

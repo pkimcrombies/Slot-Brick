@@ -110,7 +110,9 @@ fn the_rows_run_in_the_order_the_user_chose() {
         ["Date & Time", "Font", "Rumble", "System Sounds", "Low Battery Shutdown", "Reset Settings", "About"]
     );
     #[cfg(feature = "brick")]
-    assert_eq!(QuickRow::MAIN.map(QuickRow::label), ["Emulation", "Gameplay", "Library", "Online", "Music", "System"]);
+    assert_eq!(QuickRow::MAIN.map(QuickRow::label), ["Music", "Settings"]);
+    #[cfg(feature = "brick")]
+    assert_eq!(QuickRow::SETTINGS.map(QuickRow::label), ["Emulation", "Gameplay", "Library", "Online", "System"]);
     #[cfg(feature = "brick")]
     assert_eq!(
         QuickRow::SYSTEM.map(QuickRow::label),
@@ -171,7 +173,7 @@ fn the_rows_run_in_the_order_the_user_chose() {
         &QuickRow::SAVING[..],
     ];
     #[cfg(feature = "brick")]
-    pages.extend([&QuickRow::ONLINE[..], &QuickRow::CLOCK[..]]);
+    pages.extend([&QuickRow::SETTINGS[..], &QuickRow::ONLINE[..], &QuickRow::CLOCK[..]]);
     for page in pages {
         for &row in page {
             assert_eq!(row.page(), page, "{row:?}");

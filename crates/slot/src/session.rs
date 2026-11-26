@@ -381,7 +381,7 @@ impl Session {
         self.sync_reload();
         if !self.reloading {
             if let Some((stem, serial)) = self.app.take_solo_reload() {
-                eprintln!("slot: link: restoring single-player mode");
+                if trace() { eprintln!("slot: link: restoring single-player mode"); }
                 self.reload_for_link(&stem, serial);
             }
         }
@@ -640,7 +640,7 @@ impl Session {
     }
 
     fn reload_for_link(&mut self, stem: &str, serial: &'static str) {
-        eprintln!("slot: link: loading {stem} again with gpsp_serial={serial}");
+        if trace() { eprintln!("slot: link: loading {stem} again with gpsp_serial={serial}"); }
         if self.emu.is_some() {
             self.app.flush_resume();
         }

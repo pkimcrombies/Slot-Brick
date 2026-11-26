@@ -472,7 +472,7 @@ fn sync_overlay(app: &mut App, compositor: &mut Compositor, tex: &mut OverlayTex
     match read {
         Some(overlay) => {
             let id = upload_rgba(compositor, &mut tex.picture, overlay.w, overlay.h, &overlay.rgba);
-            eprintln!("slot: overlay {} (window {:?})", path.display(), overlay.window);
+            if crate::session::trace() { eprintln!("slot: overlay {} (window {:?})", path.display(), overlay.window); }
             app.set_overlay(path, id, overlay.window);
         }
         None => {
@@ -543,7 +543,7 @@ impl Frontend {
         let stale = label_cache::stale(platform.root(), session.app().carts());
         crate::boot_times::mark(&format!("  label cache checked ({} new)", stale.len()));
         let rebuild = (!stale.is_empty()).then(|| {
-            eprintln!("slot: label cache: {} new labels", stale.len());
+            if crate::session::trace() { eprintln!("slot: label cache: {} new labels", stale.len()); }
             Rebuild::start(platform.root(), stale)
         });
         session
@@ -910,7 +910,7 @@ impl Frontend {
         };
         if let Some(rgba) = bezel_face(&path, panel.0, panel.1) {
             compositor.set_bezel(panel.0, panel.1, &rgba);
-            eprintln!("slot: bezel {}", path.display());
+            if crate::session::trace() { eprintln!("slot: bezel {}", path.display()); }
         }
     }
 
@@ -1378,7 +1378,7 @@ impl Frontend {
         };
         let limit = if self.woke_untouched {limit.min(IDLE_AFTER_WAKE)} else {limit};
         if self.last_input.elapsed() >= limit {
-            eprintln!("slot: idle for {}s; sleeping", self.last_input.elapsed().as_secs());
+            if crate::session::trace() { eprintln!("slot: idle for {}s; sleeping", self.last_input.elapsed().as_secs()); }
             self.woke_untouched = false;
             self.session.app_mut().idle_doze();
         }

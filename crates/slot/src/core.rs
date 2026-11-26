@@ -150,7 +150,7 @@ fn open_named(
                 if let Some(player) = link {
                     apply_link_options(&mut opened, core, player);
                 }
-                eprintln!("slot: core {}", path.display());
+                if crate::session::trace() { eprintln!("slot: core {}", path.display()); }
                 return Some(Box::new(opened));
             }
             Err(e) => eprintln!("slot: {}: {e}", path.display()),
@@ -212,7 +212,7 @@ pub fn apply_link_options(core: &mut LibretroCore, which: Core, player: u8) {
     }
     core.set_option("mgba_link", "on");
     core.set_option("mgba_link_player", &player.to_string());
-    eprintln!("slot: core: link mode on, player {player}");
+    if crate::session::trace() { eprintln!("slot: core: link mode on, player {player}"); }
 }
 
 pub fn apply_core_options(

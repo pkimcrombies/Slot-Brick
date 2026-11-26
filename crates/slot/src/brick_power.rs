@@ -50,7 +50,7 @@ impl Policy {
 pub struct CpuPower {
     sys: PathBuf, log: PathBuf, original: Vec<(String,String)>, policy: Option<Policy>,
     userspace: bool, written: Option<u32>, written_min: Option<u32>, window: Instant, frames:u32, late:u32,
-    busy:u32, underruns:u64, grace:Instant, telemetry_at:Instant,
+    busy:u32, underruns:u64, grace:Instant, telemetry_at:Instant, diagnostics:bool,
 }
 fn read(sys:&Path,name:&str)->io::Result<String> {Ok(fs::read_to_string(sys.join(name))?.trim().into())}
 fn write(sys:&Path,name:&str,value:&str)->io::Result<()> {
@@ -63,8 +63,8 @@ impl CpuPower {
     pub fn open(root:&Path)->Self {Self::open_in(root,&slot_power::hw("/sys/devices/system/cpu/cpu0/cpufreq"))}
     fn open_in(root:&Path,sys:&Path)->Self {
         let now=Instant::now();
-        let mut s=Self {sys:sys.into(),log:root.join("Logs/power.log"),original:vec![],policy:None,userspace:false,written:None,written_min:None,window:now,frames:0,late:0,busy:0,underruns:0,grace:now+Duration::from_secs(3),telemetry_at:now};
-        if root.join("DISABLE_POWER_SAVING").exists() {s.log("adaptive clocks disabled");return s}
+        let mut s=Self {sys:sys.into(),log:root.join("Logs/power.log"),original:vec![],policy:None,userspace:false,written:None,written_min:None,window:now,frames:0,late:0,busy:0,underruns:0,grace:now+Duration::from_secs(3),telemetry_at:now,diagnostics:root.join("POWER_DIAGNOSTICS").exists()};
+        if root.join("DISABLE_POWER_SAVING").exists() {if s.diagnostics {s.log("adaptive clocks disabled");}return s}
         let result=(||->io::Result<()> {
             let min=read(sys,"scaling_min_freq")?.parse::<u32>().map_err(io::Error::other)?;
             let max=read(sys,"scaling_max_freq")?.parse::<u32>().map_err(io::Error::other)?;
@@ -81,7 +81,7 @@ impl CpuPower {
             write(sys,"scaling_governor",selected)?;
             s.userspace=selected=="userspace";
             s.policy=Some(Policy::new(levels));
-            s.log(&format!("enabled governor={selected}; original={:?}",s.original));
+            if s.diagnostics {s.log(&format!("enabled governor={selected}; original={:?}",s.original));}
             Ok(())
         })();
         if let Err(e)=result {s.log(&format!("disabled: {e}"));s.restore();}
@@ -104,10 +104,10 @@ impl CpuPower {
         if let Err(e)=result {self.log(&format!("write failed: {e}; restoring"));self.restore();return}
         let moved=self.written!=Some(value) || (!self.userspace && self.written_min!=Some(low));
         self.written=Some(value);if !self.userspace {self.written_min=Some(low);}
-        if moved {self.log(&format!("mode={:?} ceiling_khz={value} floor_khz={low}",self.policy.as_ref().map(|p|p.mode)));}
+        if moved && self.diagnostics {self.log(&format!("mode={:?} ceiling_khz={value} floor_khz={low}",self.policy.as_ref().map(|p|p.mode)));}
     }
     pub fn mode(&mut self,mode:Mode,underruns:u64) {
-        if self.telemetry_at.elapsed()>=Duration::from_secs(60) {
+        if self.diagnostics && self.telemetry_at.elapsed()>=Duration::from_secs(60) {
             self.telemetry_at=Instant::now();
             let battery=slot_power::hw("/sys/class/power_supply/axp2202-battery");let battery=battery.as_path();
             self.log(&format!("sample mode={mode:?} actual_khz={} capacity={} voltage_uv={} charge_counter_raw={} audio_underruns={underruns}",

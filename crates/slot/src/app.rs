@@ -766,7 +766,7 @@ impl App {
         #[cfg(feature = "brick")]
         {
             let model = slot_power::model();
-            eprintln!("slot: running on a TrimUI {}", model.name());
+            if crate::session::trace() { eprintln!("slot: running on a TrimUI {}", model.name()); }
             slot_ui::set_brick_pro(model == slot_power::Model::BrickPro);
             app.brick_leds = Some(crate::brick_led::BrickLeds::open(root));
         }
@@ -1202,7 +1202,7 @@ impl App {
             if let Some(power) = &mut self.power {
                 power.set_clock(utc);
             }
-            eprintln!("slot: auto clock: set from a time server, {off:+} s");
+            if crate::session::trace() { eprintln!("slot: auto clock: set from a time server, {off:+} s"); }
         }
         if !self.state.clock_set {
             self.state.clock_set = true;
@@ -4795,7 +4795,7 @@ impl App {
             }
         }
         match crate::cart_art::keep_framed(&root, &cart, source, frame) {
-            Ok(kept) => eprintln!("slot: label: kept {} for {}", kept.display(), cart.stem),
+            Ok(kept) => { if crate::session::trace() { eprintln!("slot: label: kept {} for {}", kept.display(), cart.stem); } },
             Err(e) => {
                 eprintln!("slot: label: {e}");
                 self.card_failing.store(true, Ordering::Relaxed);
@@ -4828,7 +4828,7 @@ impl App {
         }
         if let Some(kept) = kept {
             match kept {
-                Ok(kept) => eprintln!("slot: label: kept {} for {stem}", kept.display()),
+                Ok(kept) => { if crate::session::trace() { eprintln!("slot: label: kept {} for {stem}", kept.display()); } },
                 Err(e) => {
                     eprintln!("slot: label: {e}");
                     self.card_failing.store(true, Ordering::Relaxed);
@@ -5047,7 +5047,7 @@ impl App {
         };
         (cart.label, cart.famicom_label) = pick.original.clone();
         match crate::cart_art::keep_choice(&root, &cart, &path) {
-            Ok(kept) => eprintln!("slot: label: kept {} for {}", kept.display(), cart.stem),
+            Ok(kept) => { if crate::session::trace() { eprintln!("slot: label: kept {} for {}", kept.display(), cart.stem); } },
             Err(e) => {
                 eprintln!("slot: label: {e}");
                 self.card_failing.store(true, Ordering::Relaxed);
@@ -6417,7 +6417,7 @@ impl Peel {
             let curled = began.elapsed().as_millis();
             let _ = tx.send(PeelBaked::Curls(curls));
             let kept = cut.and_then(|cut| crate::cart_art::keep_cut(&root, &cart, &cut));
-            eprintln!("slot: label: curls ready in {curled} ms, written in {} ms", began.elapsed().as_millis());
+            if crate::session::trace() { eprintln!("slot: label: curls ready in {curled} ms, written in {} ms", began.elapsed().as_millis()); }
             let _ = tx.send(PeelBaked::Kept(kept));
         });
         if let Err(e) = spawned {

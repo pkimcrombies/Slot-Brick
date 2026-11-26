@@ -106,7 +106,7 @@ impl Alsa {
                 last = AudioError::Config(format!("{name}: {}", self.message(err)));
                 continue;
             }
-            eprintln!("slot: audio {name} at {rate} Hz");
+            if crate::session::trace() { eprintln!("slot: audio {name} at {rate} Hz"); }
             return Ok(pcm);
         }
         Err(last)
@@ -230,7 +230,7 @@ impl Playback {
             match (self.pcm, hold) {
                 (Some(_), false) => {
                     self.release();
-                    eprintln!("slot: audio released after silence");
+                    if crate::session::trace() { eprintln!("slot: audio released after silence"); }
                 }
                 (None, true) => match self.alsa.open_pcm(self.rate) {
                     Ok(pcm) => self.pcm = Some(pcm),

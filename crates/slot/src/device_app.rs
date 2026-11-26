@@ -112,7 +112,7 @@ fn run_sleep_script(root: &std::path::Path, input: &mut BrickInput, frontend: &F
         if !pressed && input.poll(frontend.now()).into_iter().any(|e| matches!(e, RawEvent::Down(Btn::Power))) {
             pressed = true;
             if !std::path::Path::new(SUSPENDING).exists() {
-                eprintln!("slot: sleep: Power pressed while preparing; cancelling the suspend");
+                if std::env::var_os("SLOT_TRACE").is_some() { eprintln!("slot: sleep: Power pressed while preparing; cancelling the suspend"); }
                 unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
             }
         }
@@ -162,7 +162,8 @@ pub fn run() {
     #[cfg(feature = "brick")]
     let _ = std::thread::Builder::new().name("slot-model".into()).spawn(slot_power::model);
     // The font, before anything is drawn in it.
-    eprintln!("slot: font: {}", slot::fonts::load_chosen(&root));
+    let font = slot::fonts::load_chosen(&root);
+    if std::env::var_os("SLOT_TRACE").is_some() { eprintln!("slot: font: {font}"); }
     // The sound output opens, and the app boots, beside the screen, for Session::boot to take.
     slot::audio::open_early();
     slot::app::App::boot_early(root.clone());
@@ -328,7 +329,7 @@ pub fn run() {
                             }
                             other => {eprintln!("slot: suspend unavailable ({other:?}); using standby"); false}
                         };
-                        {
+                        if diagnostics.is_some() || !woke {
                             use std::io::Write;
                             if let Ok(mut log)=std::fs::OpenOptions::new().create(true).append(true).open(root.join("Logs/sleep.log")) {
                                 let _=writeln!(log,"Slot verification: suspended_seconds={suspended:?}, confirmed={confirmed}, power_pressed_during_sleep_entry={cancelled}, helper={result:?}, screen_on={woke} {} ms after the helper returned",returned.elapsed().as_millis());

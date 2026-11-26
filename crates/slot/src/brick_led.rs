@@ -159,6 +159,7 @@ impl BrickLeds {
         Ok(())
     }
     fn log_state(&self, action: &str) {
+        if !self.root.join("POWER_DIAGNOSTICS").exists() { return; }
         let dir=self.root.join("Logs");let path=dir.join("leds.log");
         let _=fs::create_dir_all(&dir);
         if fs::metadata(&path).map(|m|m.len()>131072).unwrap_or(false) {

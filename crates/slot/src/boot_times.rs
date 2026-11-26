@@ -8,7 +8,11 @@ use std::sync::{Mutex, OnceLock};
 fn log() -> Option<&'static Mutex<File>> {
     static LOG: OnceLock<Option<Mutex<File>>> = OnceLock::new();
     LOG.get_or_init(|| {
-        let path = std::env::var_os("SLOT_BOOT_TIMES")?;
+        let path = std::path::PathBuf::from(std::env::var_os("SLOT_BOOT_TIMES")?);
+        // The boot scripts may always supply the path. Opt in before opening
+        // or reading uptime for native startup timing marks.
+        if !crate::session::trace() && !path.parent().and_then(|p| p.parent())
+            .is_some_and(|root| root.join("POWER_DIAGNOSTICS").exists()) { return None; }
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)

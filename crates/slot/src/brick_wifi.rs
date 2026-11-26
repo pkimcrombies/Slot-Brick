@@ -77,7 +77,7 @@ fn scan(c:&impl Supplicant,pause:impl Fn(u64)->Result<()>)->Result<()>{
         let reply=c.raw("SCAN")?;
         if matches!(reply.as_str(),"OK"|"FAIL-BUSY"){return Ok(())}
         let status=c.command("STATUS")?;let state=field(&status,"wpa_state").unwrap_or("?");
-        eprintln!("wifi: SCAN answered {reply} (wpa_state {state})");
+        if crate::session::trace() { eprintln!("wifi: SCAN answered {reply} (wpa_state {state})"); }
         if matches!(state,"SCANNING"|"AUTHENTICATING"|"ASSOCIATING"|"ASSOCIATED"|"4WAY_HANDSHAKE"|"GROUP_HANDSHAKE"){return Ok(())}
         pause(SCAN_RETRY_MS)?;
     }
@@ -116,7 +116,7 @@ static HELPER:std::sync::Mutex<()>=std::sync::Mutex::new(());
 /// its own thread, and nothing waits for it.
 pub fn repair_at_boot(){
     let spawned=thread::Builder::new().name("slot-wifi-boot".into()).spawn(||{
-        if !wanted(&card_root()){eprintln!("wifi: boot: Wi-Fi was turned off; leaving it off");return}
+        if !wanted(&card_root()){if crate::session::trace() { eprintln!("wifi: boot: Wi-Fi was turned off; leaving it off"); }return}
         let quiet=AtomicBool::new(false);
         // Slot OS starts no supplicant of its own: nothing to wait for.
         let wait=if slot_power::slot_os(){0}else{FIRMWARE_WAIT_MS};
@@ -138,7 +138,7 @@ pub fn keep_lease(){
         let joined=Control::open().and_then(|c|c.command("STATUS")).is_ok_and(|s|field(&s,"wpa_state")==Some("COMPLETED"));
         let stuck=LEASE.lock().unwrap_or_else(|e|e.into_inner()).stuck(joined,online(),Instant::now());
         if stuck{
-            eprintln!("wifi: joined but offline for {} s; asking for an address again",LEASE_STUCK.as_secs());
+            if crate::session::trace() { eprintln!("wifi: joined but offline for {} s; asking for an address again",LEASE_STUCK.as_secs()); }
             if let Err(e)=helper_run("renew",&AtomicBool::new(false)){eprintln!("wifi: renew: {e}");}
         }
         LEASE_CHECKING.store(false,Ordering::Release);
@@ -191,11 +191,11 @@ fn boot_repair(firmware_wait:u64,up:impl Fn()->bool,online:impl Fn()->bool,mut b
     while !up() && waited<firmware_wait{sleep(BOOT_POLL_MS);waited+=BOOT_POLL_MS;}
     for attempt in 1..=BOOT_TRIES{
         let was_up=up();
-        if !was_up{eprintln!("wifi: boot: no supplicant answering; starting Wi-Fi");}
+        if !was_up{if crate::session::trace() { eprintln!("wifi: boot: no supplicant answering; starting Wi-Fi"); }}
         if let Err(e)=bring_up(was_up){eprintln!("wifi: boot repair {attempt}: {e}");sleep(RETRY_MS);continue}
         let mut waited=0;
         while waited<JOIN_WAIT_MS{
-            if online(){eprintln!("wifi: boot repair: online");return}
+            if online(){if crate::session::trace() { eprintln!("wifi: boot repair: online"); }return}
             sleep(BOOT_POLL_MS);waited+=BOOT_POLL_MS;
         }
     }
@@ -214,14 +214,14 @@ fn helper_run_if(verb:&str,cancel:&AtomicBool,still:impl Fn()->bool)->Result<()>
     if matches!(verb,"ensure"|"dhcp"|"renew") && !script.ends_with("System/brick_wifi.sh"){return Ok(())}
     // Inherit slot's stdout/stderr (Logs/slot.log): brick_wifi.sh moves itself to Logs/wifi.log,
     // and anything else, such as a firmware helper run directly, still leaves a trace.
-    eprintln!("wifi: {} {verb}",script.display());
+    if crate::session::trace() { eprintln!("wifi: {} {verb}",script.display()); }
     let mut child=Command::new("/bin/sh").arg(&script).arg(verb).env("SLOT_ROOT",&root).stdin(Stdio::null()).spawn().map_err(|_|"Cannot start Wi-Fi helper")?;
     let start=Instant::now();loop{
         if let Some(status)=child.try_wait().map_err(|_|"Cannot check Wi-Fi helper")?{
-            eprintln!("wifi: helper {verb} ended: {status}");
+            if !status.success() || crate::session::trace() { eprintln!("wifi: helper {verb} ended: {status}"); }
             return if status.success(){Ok(())}else{Err("Could not switch Wi-Fi; see Slot/Logs/wifi.log".into())}
         }
-        if cancel.load(Ordering::Relaxed){let _=child.kill();let _=child.wait();eprintln!("wifi: helper {verb} cancelled");return Err("Cancelled".into())}
+        if cancel.load(Ordering::Relaxed){let _=child.kill();let _=child.wait();if crate::session::trace() { eprintln!("wifi: helper {verb} cancelled"); }return Err("Cancelled".into())}
         if start.elapsed()>Duration::from_secs(30){let _=child.kill();let _=child.wait();eprintln!("wifi: helper {verb} timed out");return Err("Wi-Fi helper timed out; see Slot/Logs/wifi.log".into())}
         thread::sleep(Duration::from_millis(100));
     }
@@ -495,7 +495,7 @@ impl WifiMenu{
                 list.armed=None;
                 match fs::remove_file(&path){
                     Ok(())=>{
-                        eprintln!("slot: cart art: deleted {}",path.display());
+                        if crate::session::trace() { eprintln!("slot: cart art: deleted {}",path.display()); }
                         list.games.remove(at);self.row=self.row.min(list.games.len());
                         self.fetched.push(Fetched{platform,stem:stem.clone(),label:None});
                         self.status=format!("Deleted the label of {stem}");

@@ -4,6 +4,30 @@
 > current branch and code in GitHub. This records user decisions, not a substitute for tests.
 > Keep it brief and update it when a milestone changes. Last reviewed: 2026-11-23. Latest Music control changes (L1/R1 sections, D-pad Left/Right tracks, bottom-right repeat) are committed but not yet rebuilt or device-tested.
 
+## 2026-11-26 Small box shelf and two-stage reveal (pending device validation)
+
+- The prior one-press, large-box prototype was reverted at c8980d6.
+  The new optional GB/GBC/GBA box art uses the existing local
+  `Slot/BoxArt/<platform dir>/<ROM stem>.png` convention. Start with
+  Donkey Kong. No remote downloads or new artwork assets.
+- Closed box preserves aspect ratio inside 160x185 logical pixels;
+  neighbours use existing 78% scale. A first press opens the box:
+  overlapping upward lift (~250ms) and growth over ~350ms from a
+  cartridge fitted inside the box (at most 45% scale) to its exact
+  existing shelf position/scale. Remains on Shelf without starting a
+  core. A fresh second press starts normal insertion. B reverses the
+  reveal; browsing controls are inert in the inspection state.
+  Start retains existing customization, HOME returns to normal shelf
+  after the menu, ejection closes the box. Games with missing/invalid
+  artwork continue directly to insertion.
+- Existing background face worker decodes bounded PNGs to at most
+  256px; box textures are tied to ROM identity and recycled with
+  cartridge faces. No idle animation or changes to Music.
+- Added regression coverage for closed bounds, small intermediate
+  cartridge, blocked input during reveal, exact original preview size,
+  B reversal, two presses, ejection, and missing-art fallback.
+  CI and actual Brick Pro visual testing must be checked separately.
+
 ## 2026-11-23 Native video installer target correction (IMPORTANT)
 
 - The first native-video ZIP (`Slot-Brick-Native-Video-ARM64-bc2627f-20261123.zip`)

@@ -33,6 +33,8 @@ use crate::persist::{self, Snapshot};
 use crate::video_mode::{self, VideoMode};
 
 pub const INSERT_S: f32 = 0.73;
+/// Box lift and overlapping cartridge reveal, independent of emulator startup.
+const BOX_REVEAL_S: f32 = 0.35;
 const INSERT_HOLD_S: f32 = 0.28;
 
 pub const SEATED_AT: f32 = INSERT_S - INSERT_HOLD_S;
@@ -305,6 +307,8 @@ pub struct App {
     update_face: Option<(TexId, u32, u32)>,
     phase: Phase,
     shelf: Shelf,
+    box_open: bool,
+    box_progress: f32,
     face_revision: u64,
     /// Faces of carts whose label changed, for CartFaces to recycle and rebuild.
     stale_faces: Vec<TexId>,
@@ -572,6 +576,8 @@ impl App {
             card_check_at: 0,
             phase: Phase::Shelf,
             shelf,
+            box_open: false,
+            box_progress: 0.0,
             face_revision: 0,
             stale_faces: Vec::new(),
             banners: std::collections::VecDeque::new(),
@@ -854,6 +860,9 @@ impl App {
         let shelf_faces = carts.iter().map(|cart| faces.remove(&cart.rom)).collect();
         let starred = carts.iter().map(|cart| self.library.get(cart.platform, &cart.stem).favorite).collect();
         self.shelf.replace(carts, shelf_faces, starred, keep);
+        self.stale_faces.extend(self.shelf.take_orphan_boxes());
+        self.box_open = false;
+        self.box_progress = 0.0;
         self.stale_faces.extend(faces.into_values());
         self.face_revision = self.face_revision.wrapping_add(1);
         self.shelf_platform = slot_ui::Printed::default();
@@ -1482,6 +1491,20 @@ impl App {
     pub fn set_cart_face(&mut self, index: usize, tex: TexId) -> Option<TexId> {
         self.shelf.set_face(index, tex)
     }
+
+    pub fn set_box_face(&mut self, index: usize, face: Option<(TexId, u32, u32)>) -> Option<TexId> {
+        let old = self.shelf.set_box_face(index, face);
+        if index == self.shelf.index && self.shelf.box_face(index).is_none() {
+            self.box_open = false;
+            self.box_progress = 0.0;
+        }
+        old
+    }
+
+    fn box_transitioning(&self) -> bool {
+        if self.box_open { self.box_progress < 1.0 } else { self.box_progress > 0.0 }
+    }
+
     /// The Wi-Fi / Cart Art overlay is open.
     #[cfg(feature = "brick")]
     pub fn overlay_open(&self) -> bool {
@@ -1525,6 +1548,7 @@ impl App {
         for i in 0..self.shelf.carts.len() {
             if !keep.contains(&i) {
                 shed.extend(self.shelf.take_face(i));
+                shed.extend(self.shelf.take_box_face(i));
             }
         }
         shed
@@ -2239,6 +2263,12 @@ impl App {
                 _ if self.label_adjust_open() => self.label_adjust_input(action),
                 _ if self.label_grid_open() => self.label_grid_input(action),
                 _ if self.cart_menu.is_some() => self.cart_menu_input(action),
+                Action::GbaDown(Btn::B) if self.core_picker.is_none() && self.disc_picker.is_none()
+                    && (self.box_open || self.box_progress > 0.0) => {
+                    self.box_open = false;
+                    self.play_held = None;
+                }
+                _ if self.box_transitioning() && self.core_picker.is_none() && self.disc_picker.is_none() => {}
                 Action::GbaDown(Btn::Start) if self.core_picker.is_none() => {
                     if self.shelf().carts.get(self.shelf().index).is_some_and(|c| c.platform == Platform::Gba) {
                         self.open_core_picker();
@@ -2252,6 +2282,10 @@ impl App {
                 }
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
                 _ if self.disc_picker.is_some() => self.disc_picker_input(action),
+                // Inspecting the cartridge is a stable state, not another shelf.
+                Action::ShelfLeft | Action::ShelfRight
+                | Action::GbaDown(Btn::Left | Btn::Right | Btn::Up | Btn::Down | Btn::L1 | Btn::R1 | Btn::Select)
+                    if self.box_open => {}
                 Action::GbaDown(Btn::Up) => self.jump_letter(-1, true),
                 Action::GbaDown(Btn::Down) => self.jump_letter(1, true),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf_mut().hold_left(now),
@@ -2322,6 +2356,9 @@ impl App {
     }
 
     fn open_quick_menu(&mut self) {
+        self.box_open = false;
+        self.box_progress = 0.0;
+        self.play_held = None;
         self.reset_asked = None;
         self.phase = Phase::QuickMenu {
             row: QuickRow::MAIN[0],
@@ -2982,6 +3019,11 @@ impl App {
             Phase::Shelf => {
                 self.shelf.tick(now);
                 self.shelf.update(dt);
+                if self.box_open {
+                    self.box_progress = (self.box_progress + dt / BOX_REVEAL_S).min(1.0);
+                } else {
+                    self.box_progress = (self.box_progress - dt / BOX_REVEAL_S).max(0.0);
+                }
                 None
             }
             Phase::Inserting {
@@ -3016,6 +3058,13 @@ impl App {
             });
         }
         if let Some(phase) = next {
+            // The existing ejection ends at the full-size cartridge. Close
+            // the box from that exact pose instead of flashing to box art.
+            if matches!(phase, Phase::Shelf) && matches!(self.phase, Phase::Ejecting { .. })
+                && self.shelf.box_face(self.shelf.index).is_some() {
+                self.box_progress = 1.0;
+                self.box_open = false;
+            }
             self.phase = phase;
             self.refused_from = None;
             let seated = match &self.phase {
@@ -3587,7 +3636,13 @@ impl App {
                         if let Some(foot) = self.shelf().selected_foot() {
                             slot_ui::draw_title_card(self.title_card, foot, self.title_card_alpha(), out);
                         }
-                        self.shelf().draw(self.shelf_shake(), out);
+                        if self.box_progress > 0.0 && self.shelf.box_face(self.shelf.index).is_some() {
+                            self.shelf().draw_row(self.selected_stem(), 0.0, 0.0, 1.0, out);
+                            self.shelf().draw_box_preview(self.box_progress, out);
+                            draw_empty_slot(out);
+                        } else {
+                            self.shelf().draw(self.shelf_shake(), out);
+                        }
                         slot_ui::draw_slot_name(self.shelf_platform, self.slot_name_alpha(), out);
                     }
                 }
@@ -4095,6 +4150,21 @@ impl App {
 
     /// A game of several discs fans them out to pick one; any other goes straight in.
     fn play(&mut self, clean: bool) {
+        if self.on_shelf() && self.shelf.box_face(self.shelf.index).is_some() {
+            if self.box_transitioning() {
+                self.play_held = None;
+                return;
+            }
+            if !self.box_open {
+                // Consume this press (including a held A); only a fresh press
+                // after the reveal completes may start a game.
+                self.play_held = None;
+                self.shelf.release_hold();
+                self.shelf.select(self.shelf.index);
+                self.box_open = true;
+                return;
+            }
+        }
         self.chosen_disc = None;
         let discs = self
             .shelf()
@@ -4199,6 +4269,8 @@ impl App {
         self.pause_menu = None;
         self.refusal = None;
         self.refused_from = None;
+        self.box_open = false;
+        self.box_progress = 0.0;
         self.phase = Phase::Inserting {
             cart,
             t: 0.0,
@@ -4283,6 +4355,9 @@ impl App {
 
     fn doze(&mut self) {
         if matches!(self.phase, Phase::Doze { .. }) { return; }
+        self.box_open = false;
+        self.box_progress = 0.0;
+        self.play_held = None;
         self.music_before_doze = matches!(self.phase, Phase::Music) && self.music.is_some();
         if !self.music_before_doze {
             self.music = None;

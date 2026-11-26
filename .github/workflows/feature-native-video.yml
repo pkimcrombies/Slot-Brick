@@ -32,6 +32,8 @@ jobs:
       - name: Run Slot library regressions (retry one timing-sensitive failure)
         run: |
           cargo +1.96 test -p slot --no-default-features --features sim --lib || cargo +1.96 test -p slot --no-default-features --features sim --lib
+      - name: Verify two-stage box shelf regression
+        run: cargo +1.96 test -p slot --no-default-features --features sim --test app box_art_two_presses_reveal_then_insert_at_original_scale
       - name: Generate H264/MP4 test videos locally
         run: |
           sudo apt-get update -qq

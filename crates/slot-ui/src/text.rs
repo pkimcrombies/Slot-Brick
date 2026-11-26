@@ -91,6 +91,14 @@ pub fn in_font<T>(font: &'static Font, draw: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Keep system HUD measurements and rasterisation independent of the chosen UI font.
+pub fn in_builtin_font<T>(draw: impl FnOnce() -> T) -> T {
+    match built_in() {
+        Some(font) => in_font(font, draw),
+        None => draw(),
+    }
+}
+
 /// A font to draw in for as long as Slot runs, or None if `bytes` are not one.
 pub fn leak_font(bytes: &[u8]) -> Option<&'static Font> {
     Font::from_bytes(bytes, FontSettings::default()).ok().map(|f| &*Box::leak(Box::new(f)))

@@ -1536,7 +1536,8 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
     let shown = hhmm(app.wall_secs());
     if shown != clocks.shown || scale_changed {
-        let (face, w) = word_face_ink_scaled(&shown, SHELF_STATUS_INK, scale);
+        let (face, w) = slot_ui::text::in_builtin_font(||
+            word_face_ink_scaled(&shown, SHELF_STATUS_INK, scale));
         clocks.shown = shown;
         let id = upload(compositor, &mut clocks.shelf, face);
         app.set_shelf_clock_face(id, w);
@@ -1579,7 +1580,8 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     if battery_shown != clocks.battery || scale_changed {
         clocks.battery = battery_shown.clone();
         if !battery_shown.is_empty() {
-            let (face, w) = word_face_ink_scaled(&battery_shown, SHELF_STATUS_INK, scale);
+            let (face, w) = slot_ui::text::in_builtin_font(||
+                word_face_ink_scaled(&battery_shown, SHELF_STATUS_INK, scale));
             let id = upload(compositor, &mut clocks.battery_tex, face);
             app.set_battery_percent_face(id, w);
         }

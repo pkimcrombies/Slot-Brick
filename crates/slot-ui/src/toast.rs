@@ -156,6 +156,10 @@ fn detail_h(toast: Toast) -> u32 {
 }
 
 pub fn toast_face(toast: Toast) -> CartFace {
+    text::in_builtin_font(|| draw_toast_face(toast))
+}
+
+fn draw_toast_face(toast: Toast) -> CartFace {
     let Some(font) = text::label_font() else {
         return CartFace {
             rgba: Vec::new(),

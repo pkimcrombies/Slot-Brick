@@ -23,10 +23,23 @@ fn a_chosen_font_draws_the_text_and_the_built_in_one_fills_its_gaps() {
         std::ptr::eq(font_for(chosen, 'É'), chosen),
         "GohuFont has É"
     );
-    assert!(
-        std::ptr::eq(font_for(chosen, '漢'), built_in),
-        "a character GohuFont lacks"
-    );
+    // Only expect fallback to Slot for a glyph it actually contains.
+    // Open Sans does not guarantee CJK coverage.
+    let original = slot_ui::text::in_builtin_font(|| label_font().unwrap());
+    let missing = (0x21..=0xffff)
+        .filter_map(char::from_u32)
+        .find(|&ch| !ch.is_whitespace()
+            && chosen.lookup_glyph_index(ch) == 0
+            && original.lookup_glyph_index(ch) != 0)
+        .expect("test fonts must have at least one glyph exclusive to Slot");
+    assert!(std::ptr::eq(font_for(chosen, missing), original),
+        "a glyph available only in Slot must use Slot's font");
+    // Without an installed supplementary font, a character absent in both
+    // faces retains the selected face's missing-glyph behaviour.
+    let absent = '\u{10ffff}';
+    assert_eq!(chosen.lookup_glyph_index(absent), 0);
+    assert_eq!(original.lookup_glyph_index(absent), 0);
+    assert!(std::ptr::eq(font_for(chosen, absent), chosen));
     assert!(std::ptr::eq(font_for(chosen, ' '), chosen));
     assert_eq!(hud(), before, "HUD glyphs and logical widths must be unchanged");
     let toast_after = slot_ui::toast_face(slot_ui::Toast::StateSaved);

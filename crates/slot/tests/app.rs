@@ -60,67 +60,6 @@ fn playing(stem: &str) -> App {
 }
 
 #[test]
-fn box_art_two_presses_reveal_then_insert_at_original_scale() {
-    let mut a = app_with_carts(&["Donkey Kong", "Other"]);
-    let mut plain = app_with_carts(&["Donkey Kong", "Other"]);
-    let face = TexId::from_raw(9001);
-    let art = TexId::from_raw(9002);
-    a.set_cart_face(0, face);
-    plain.set_cart_face(0, face);
-    a.set_box_face(0, Some((art, 512, 500)));
-    let geometry = |a: &App, id: TexId| {
-        let mut out = Vec::new();
-        a.draw(&mut out);
-        out.iter().find_map(|d| match *d {
-            Draw::Tex { tex, x, y, w, h, .. } if tex == id => Some((x,y,w,h)),
-            _ => None,
-        })
-    };
-    let closed = geometry(&a, art).unwrap();
-    assert!(closed.2 <= 160.01 && closed.3 <= 185.01);
-    assert!(geometry(&a, face).is_none());
-    play(&mut a);
-    assert!(matches!(a.phase(), Phase::Shelf));
-    assert!(a.seated_cart().is_none(), "opening must not start a core");
-    a.update(0.08);
-    let small = geometry(&a, face).unwrap();
-    let full = geometry(&plain, face).unwrap();
-    assert!(small.2 < full.2 * 0.6 && small.3 < full.3 * 0.6);
-    assert!(geometry(&a, art).unwrap().1 < closed.1);
-    a.apply(Action::Insert); // ignored during the reveal
-    for _ in 0..30 { a.update(1.0 / 60.0); }
-    assert!(matches!(a.phase(), Phase::Shelf));
-    assert_eq!(geometry(&a, art), None);
-    let shown = geometry(&a, face).unwrap();
-    for (x,y) in [(shown.0,full.0),(shown.1,full.1),(shown.2,full.2),(shown.3,full.3)] {
-        assert!((x-y).abs() < 0.02);
-    }
-    a.apply(Action::ShelfRight);
-    assert_eq!(a.selected_stem(), Some("Donkey Kong"));
-    a.apply(Action::GbaDown(Btn::B));
-    for _ in 0..30 { a.update(1.0 / 60.0); }
-    assert_eq!(geometry(&a, art), Some(closed));
-    assert!(geometry(&a, face).is_none());
-    play(&mut a);
-    for _ in 0..30 { a.update(1.0 / 60.0); }
-    play(&mut a);
-    assert!(matches!(a.phase(), Phase::Inserting { t, .. } if *t == 0.0));
-    assert_eq!(a.seat(), 0.0);
-    a.on_core_ready();
-    for _ in 0..120 { a.update(1.0 / 60.0); }
-    assert!(matches!(a.phase(), Phase::Playing { .. }));
-    a.apply(Action::Eject);
-    for _ in 0..180 { a.update(1.0 / 60.0); }
-    assert!(matches!(a.phase(), Phase::Shelf));
-    assert_eq!(geometry(&a, art), Some(closed));
-    assert!(geometry(&a, face).is_none());
-
-    // The optional local artwork never adds a press to ordinary games.
-    play(&mut plain);
-    assert!(matches!(plain.phase(), Phase::Inserting { .. }));
-}
-
-#[test]
 fn insert_waits_for_the_core_even_after_the_animation_floor() {
     let mut a = app_with_carts(&["Emerald"]);
     a.apply(Action::Insert);

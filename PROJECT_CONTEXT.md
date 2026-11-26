@@ -47,29 +47,20 @@
   sound assertions. No application behavior or CI workflow changes.
   Local rerun and ARM64 build remain pending. No SD write occurred.
 
-## 2026-11-26 Small box shelf and two-stage reveal (pending device validation)
+## 2026-11-26 Box-art experiments reverted — cartridge-only shelf
 
-- The prior one-press, large-box prototype was reverted at c8980d6.
-  The new optional GB/GBC/GBA box art uses the existing local
-  `Slot/BoxArt/<platform dir>/<ROM stem>.png` convention. Start with
-  Donkey Kong. No remote downloads or new artwork assets.
-- Closed box preserves aspect ratio inside 160x185 logical pixels;
-  neighbours use existing 78% scale. A first press opens the box:
-  overlapping upward lift (~250ms) and growth over ~350ms from a
-  cartridge fitted inside the box (at most 45% scale) to its exact
-  existing shelf position/scale. Remains on Shelf without starting a
-  core. A fresh second press starts normal insertion. B reverses the
-  reveal; browsing controls are inert in the inspection state.
-  Start retains existing customization, HOME returns to normal shelf
-  after the menu, ejection closes the box. Games with missing/invalid
-  artwork continue directly to insertion.
-- Existing background face worker decodes bounded PNGs to at most
-  256px; box textures are tied to ROM identity and recycled with
-  cartridge faces. No idle animation or changes to Music.
-- Added regression coverage for closed bounds, small intermediate
-  cartridge, blocked input during reveal, exact original preview size,
-  B reversal, two presses, ejection, and missing-art fallback.
-  Local Docker regression/build and actual Brick Pro visual testing are pending.
+- User decided the smaller two-stage box-art experiment was too much and
+  requested a revert. Restore the cartridge-only shelf, original one-press
+  insertion and existing ejection animation from c8980d6. No box-art
+  loading, preview state, or extra button press.
+- Both the original large-box prototype (9f3a623) and the smaller two-stage
+  experiment (af5d75e) are abandoned. Do not reintroduce them unless the user
+  explicitly requests it. Leave any local BoxArt PNGs on the SD untouched.
+- Retain the independent HOME menu regression correction (f9b4f55), the
+  local Windows Docker installation procedure, and the unchanged CI workflow.
+  The last reported installer attempt stopped at regression tests before
+  SD writes; whether the subsequent installer was run is unconfirmed.
+  The revert is source-only until a local install is performed.
 
 ## 2026-11-23 Native video installer target correction (IMPORTANT)
 

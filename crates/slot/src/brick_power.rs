@@ -302,6 +302,26 @@ pub fn suspended_seconds()->Option<f64> {
         for (n,v) in [("scaling_governor","userspace"),("scaling_available_governors","userspace schedutil"),("scaling_min_freq","1200000"),("scaling_max_freq","2000000"),("scaling_setspeed","1608000"),("scaling_available_frequencies","2000000 1800000 1608000 1200000 1008000 816000 408000")] {fs::write(sys.join(n),v).unwrap();}
         (t,sys)
     }
+    #[test] fn routine_power_logging_requires_opt_in_but_failures_are_retained() {
+        let (t,sys)=fixture();
+        let log=t.path().join("Logs/power.log");
+        let mut cpu=CpuPower::open_in(t.path(),&sys);
+        cpu.telemetry_at=Instant::now()-Duration::from_secs(61);
+        cpu.mode(Mode::Menu,0);
+        drop(cpu);
+        assert!(!log.exists(), "normal power transitions must not create a log");
+        fs::write(t.path().join("POWER_DIAGNOSTICS"),"").unwrap();
+        let mut cpu=CpuPower::open_in(t.path(),&sys);
+        cpu.telemetry_at=Instant::now()-Duration::from_secs(61);
+        cpu.mode(Mode::Menu,0);
+        drop(cpu);
+        assert!(fs::read_to_string(&log).unwrap().contains("sample mode=Menu"));
+        fs::remove_file(t.path().join("POWER_DIAGNOSTICS")).unwrap();
+        fs::remove_file(&log).unwrap();
+        fs::remove_file(sys.join("scaling_available_frequencies")).unwrap();
+        let _cpu=CpuPower::open_in(t.path(),&sys);
+        assert!(fs::read_to_string(&log).unwrap().contains("disabled:"));
+    }
     #[test] fn restores_original_policy_and_does_not_overclock() {
         let (t,sys)=fixture();let mut cpu=CpuPower::open_in(t.path(),&sys);
         cpu.mode(Mode::Game,0);assert_eq!(read(&sys,"scaling_max_freq").unwrap(),"1800000");

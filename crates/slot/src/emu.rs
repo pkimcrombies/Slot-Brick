@@ -502,7 +502,7 @@ fn start_cheevos(
     // The map and regions are the core's own and live as long as its game, which this
     // session does not outlive (it ends with the worker).
     let mapped = unsafe { c.set_memory(map, count, console, &mut |id| core.memory_region(id)) };
-    eprintln!("slot: cheevos: {count} memory descriptors, {mapped} bytes mapped for {console:?}");
+    if crate::session::trace() { eprintln!("slot: cheevos: {count} memory descriptors, {mapped} bytes mapped for {console:?}"); }
     c.login(user, token);
     c.load_game(rom, console);
     Some(c)
@@ -675,10 +675,9 @@ impl Worker {
                                         if let Some(c) = &cheevos {
                                             c.reset();
                                         }
-                                        eprintln!(
-                                        "slot: cable: restored {} bytes, running the host's game",
-                                        state.len()
-                                    );
+                                        if crate::session::trace() {
+                                            eprintln!("slot: cable: restored {} bytes, running the host's game", state.len());
+                                        }
                                         c.prime();
                                         t.send(NETPACKET_RELIABLE, &cable::ready_packet());
                                     }
@@ -792,7 +791,7 @@ impl Worker {
                                 }
                                 std::thread::sleep(Duration::from_micros(250));
                             };
-                            cable_wait += waited.elapsed();
+                            if crate::session::trace() { cable_wait += waited.elapsed(); }
                             match ready {
                                 Some((p0, p1)) => {
                                     core.run_frame_linked(p0, p1);
@@ -800,7 +799,7 @@ impl Worker {
                                     self.shared.linked.fetch_add(1, Ordering::Relaxed);
                                 }
                                 None => {
-                                    cable_stalls += 1;
+                                    if crate::session::trace() { cable_stalls += 1; }
                                     c.stall();
                                     self.shared.link_lost.store(
                                         c.stalled() >= cable::QUIET_FRAMES,
@@ -827,7 +826,7 @@ impl Worker {
                 }
                 let core_time = began.elapsed();
                 cost.measured(skipped, drawn);
-                if cable.is_some() {
+                if cable.is_some() && crate::session::trace() {
                     cable_presents += 1;
                     cable_core += core_time;
                     if cable_said.elapsed() >= Duration::from_secs(5) {
@@ -972,8 +971,10 @@ impl Worker {
         }
         ring.set_muted(false);
         ring.set_idle(false);
-        let (dropped, starved) = (ring.overruns(), ring.underruns());
-        if dropped > 0 || starved > 0 || crate::session::trace() {
+        // The ring counts missing samples (including intentional idle),
+        // not necessarily audible faults. Keep the summary diagnostic-only.
+        if crate::session::trace() {
+            let (dropped, starved) = (ring.overruns(), ring.underruns());
             eprintln!("slot: audio: {dropped} samples dropped, {starved} starved");
         }
     }
@@ -1025,7 +1026,7 @@ impl Worker {
                 if player == 0 {
                     match core.serialize() {
                         Ok(state) => {
-                            eprintln!("slot: cable: sending {} bytes of state", state.len());
+                            if crate::session::trace() { eprintln!("slot: cable: sending {} bytes of state", state.len()); }
                             for p in cable::state_packets(&state) {
                                 wire.send(NETPACKET_RELIABLE, &p);
                             }

@@ -1,3 +1,4 @@
+use std::{collections::HashMap, path::PathBuf};
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -71,6 +72,7 @@ pub struct Shelf {
     pub scroll: f32,
     spacing: f32,
     faces: Vec<Option<TexId>>,
+    boxes: HashMap<PathBuf, (TexId, u32, u32)>,
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
@@ -102,6 +104,7 @@ impl Shelf {
             spacing: Self::spacing_for(&carts),
             shells: carts.iter().map(backing).collect(),
             faces: vec![None; carts.len()],
+            boxes: HashMap::new(),
             favorites: vec![false; carts.len()],
             star: None,
             star_pop: None,
@@ -215,6 +218,49 @@ impl Shelf {
 
     pub fn set_face(&mut self, i: usize, tex: TexId) -> Option<TexId> {
         self.faces.get_mut(i).and_then(|f| f.replace(tex))
+    }
+
+    /// Box textures follow ROM identity, not shelf order.
+    pub fn box_face(&self, i: usize) -> Option<(TexId, u32, u32)> {
+        self.boxes.get(&self.carts.get(i)?.rom).copied()
+    }
+    pub fn set_box_face(&mut self, i: usize, face: Option<(TexId, u32, u32)>) -> Option<TexId> {
+        let path = self.carts.get(i)?.rom.clone();
+        let old = self.boxes.remove(&path);
+        if let Some(face) = face.filter(|&(_, w, h)| w > 0 && h > 0) {
+            self.boxes.insert(path, face);
+        }
+        old.map(|(tex, _, _)| tex)
+    }
+    pub fn take_box_face(&mut self, i: usize) -> Option<TexId> {
+        self.set_box_face(i, None)
+    }
+    pub fn take_orphan_boxes(&mut self) -> Vec<TexId> {
+        let carts = &self.carts;
+        let mut freed = Vec::new();
+        self.boxes.retain(|rom, (tex, _, _)| {
+            let keep = carts.iter().any(|cart| &cart.rom == rom);
+            if !keep { freed.push(*tex); }
+            keep
+        });
+        freed
+    }
+    /// Lift the box clear of its resting cartridge without changing its shape.
+    pub fn draw_selected_box(&self, lift: f32, out: &mut Vec<Draw>) {
+        let Some((tex, bw, bh)) = self.box_face(self.index) else { return };
+        let Some(cart) = self.carts.get(self.index) else { return };
+        if lift >= 1.0 { return; }
+        let (cw, ch) = cart_box(cart.platform);
+        let (cart_x, scale) = self.selected_at();
+        let centre = cart_x + cw as f32 * scale / 2.0;
+        let (w, h) = box_size(bw, bh, ch as f32, scale);
+        let bottom = foot_y(ch as f32);
+        let t = lift.clamp(0.0, 1.0);
+        let eased = t * t * (3.0 - 2.0 * t);
+        out.push(Draw::Tex {
+            x: centre - w / 2.0, y: bottom - h - (bottom + 8.0) * eased,
+            w, h, tex, alpha: 1.0,
+        });
     }
 
     /// Puts cart `i` in another plastic or shape; its face, now out of date, is handed back.
@@ -457,7 +503,9 @@ impl Shelf {
             let scale = shrink(offset);
             let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
             let (cw, ch) = cart_box(cart.platform);
-            let (w, h) = (cw as f32 * scale, ch as f32 * scale);
+            let box_face = self.box_face(i);
+            let (w, h) = box_face.map_or((cw as f32 * scale, ch as f32 * scale),
+                |(_, bw, bh)| box_size(bw, bh, ch as f32, scale));
             let away = offset.signum() * (1.0 + offset.abs());
             let x = OUT_W as f32 / 2.0 + offset * self.spacing - w / 2.0 + away * PART * recede;
             if x + w <= 0.0 || x >= OUT_W as f32 || alpha <= 0.0 {
@@ -465,7 +513,7 @@ impl Shelf {
             }
             let x = x + shake;
             let y = foot_y(ch as f32) - h;
-            if alpha < 1.0 {
+            if alpha < 1.0 && box_face.is_none() {
                 let backing = match self.shells.get(i).copied() {
                     Some(Backing::Gb(GbShell::Notched)) => self.gb_shadow,
                     Some(Backing::Gb(GbShell::Rounded)) => self.gbc_shadow,
@@ -488,7 +536,7 @@ impl Shelf {
                     });
                 }
             }
-            out.push(match self.face(i) {
+            out.push(match box_face.map(|(tex, _, _)| tex).or_else(|| self.face(i)) {
                 Some(tex) => Draw::Tex {
                     x,
                     y,
@@ -553,6 +601,12 @@ pub fn pop_out(t: f32) -> f32 {
     const C1: f32 = 1.7;
     let t = t.clamp(0.0, 1.0);
     1.0 - ((C1 + 1.0) * t * t * t - C1 * t * t)
+}
+
+/// Respect the box aspect ratio and leave the top status bar clear.
+fn box_size(w: u32, h: u32, cart_h: f32, scale: f32) -> (f32, f32) {
+    let ratio = (360.0 / w as f32).min((foot_y(cart_h) - 40.0).max(1.0) / h as f32);
+    (w as f32 * ratio * scale, h as f32 * ratio * scale)
 }
 
 fn shrink(offset: f32) -> f32 {

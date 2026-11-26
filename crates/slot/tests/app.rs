@@ -60,50 +60,6 @@ fn playing(stem: &str) -> App {
 }
 
 #[test]
-fn box_art_lifts_before_cart_insertion_and_returns_after_ejection() {
-    let mut a = app_with_carts(&["Donkey Kong", "Other"]);
-    let cart = TexId::from_raw(9001);
-    let box_art = TexId::from_raw(9002);
-    a.set_cart_face(0, cart);
-    a.set_box_face(0, Some((box_art, 512, 500)));
-    let position = |a: &App, id: TexId| {
-        let mut out = Vec::new();
-        a.draw(&mut out);
-        out.iter().find_map(|d| match *d {
-            Draw::Tex { tex, y, .. } if tex == id => Some(y),
-            _ => None,
-        })
-    };
-    let shelf_y = position(&a, box_art).unwrap();
-    assert!(position(&a, cart).is_none());
-    a.apply(Action::Insert);
-    a.on_core_ready();
-    assert_eq!(a.seat(), 0.0);
-    assert!((position(&a, box_art).unwrap() - shelf_y).abs() < 0.01);
-    for _ in 0..8 { a.update(1.0 / 60.0); }
-    assert_eq!(a.seat(), 0.0, "cart stays at rest during the lift");
-    assert!(position(&a, box_art).unwrap() < shelf_y);
-    assert!(position(&a, cart).is_some());
-    for _ in 0..15 { a.update(1.0 / 60.0); }
-    assert!(position(&a, box_art).is_none());
-    assert!(a.seat() > 0.0);
-    assert!(matches!(a.phase(), Phase::Inserting { .. }));
-    for _ in 0..120 { a.update(1.0 / 60.0); }
-    assert!(matches!(a.phase(), Phase::Playing { .. }));
-    a.apply(Action::Eject);
-    for _ in 0..180 {
-        if matches!(a.phase(), Phase::Ejecting { t, .. } if *t > EJECT_S + 0.08) { break; }
-        a.update(1.0 / 60.0);
-    }
-    assert_eq!(a.seat(), 0.0);
-    assert!(position(&a, box_art).unwrap() < shelf_y);
-    for _ in 0..30 { a.update(1.0 / 60.0); }
-    assert!(matches!(a.phase(), Phase::Shelf));
-    assert!((position(&a, box_art).unwrap() - shelf_y).abs() < 0.01);
-    assert!(position(&a, cart).is_none());
-}
-
-#[test]
 fn insert_waits_for_the_core_even_after_the_animation_floor() {
     let mut a = app_with_carts(&["Emerald"]);
     a.apply(Action::Insert);

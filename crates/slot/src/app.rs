@@ -33,8 +33,6 @@ use crate::persist::{self, Snapshot};
 use crate::video_mode::{self, VideoMode};
 
 pub const INSERT_S: f32 = 0.73;
-/// Additional reveal time, only for a game with loaded box art.
-pub const BOX_LIFT_S: f32 = 0.28;
 const INSERT_HOLD_S: f32 = 0.28;
 
 pub const SEATED_AT: f32 = INSERT_S - INSERT_HOLD_S;
@@ -856,7 +854,6 @@ impl App {
         let shelf_faces = carts.iter().map(|cart| faces.remove(&cart.rom)).collect();
         let starred = carts.iter().map(|cart| self.library.get(cart.platform, &cart.stem).favorite).collect();
         self.shelf.replace(carts, shelf_faces, starred, keep);
-        self.stale_faces.extend(self.shelf.take_orphan_boxes());
         self.stale_faces.extend(faces.into_values());
         self.face_revision = self.face_revision.wrapping_add(1);
         self.shelf_platform = slot_ui::Printed::default();
@@ -1485,10 +1482,6 @@ impl App {
     pub fn set_cart_face(&mut self, index: usize, tex: TexId) -> Option<TexId> {
         self.shelf.set_face(index, tex)
     }
-
-    pub fn set_box_face(&mut self, index: usize, face: Option<(TexId, u32, u32)>) -> Option<TexId> {
-        self.shelf.set_box_face(index, face)
-    }
     /// The Wi-Fi / Cart Art overlay is open.
     #[cfg(feature = "brick")]
     pub fn overlay_open(&self) -> bool {
@@ -1532,7 +1525,6 @@ impl App {
         for i in 0..self.shelf.carts.len() {
             if !keep.contains(&i) {
                 shed.extend(self.shelf.take_face(i));
-                shed.extend(self.shelf.take_box_face(i));
             }
         }
         shed
@@ -2986,7 +2978,6 @@ impl App {
             self.shelf_mut().release_hold();
         }
         let mut touched = false;
-        let box_return = if self.shelf.box_face(self.shelf.index).is_some() { BOX_LIFT_S } else { 0.0 };
         let next = match &mut self.phase {
             Phase::Shelf => {
                 self.shelf.tick(now);
@@ -3014,7 +3005,7 @@ impl App {
                     *t += dt;
                     touched = was < 0.0 && *t >= 0.0;
                 }
-                (*t >= EJECT_S + box_return).then_some(Phase::Shelf)
+                (*t >= EJECT_S).then_some(Phase::Shelf)
             }
             _ => None,
         };
@@ -3618,25 +3609,19 @@ impl App {
                 draw_sticker(self.sticker_face, out);
                 return;
             }
-            Phase::Inserting { cart, resumed, t, .. } => {
+            Phase::Inserting { cart, resumed, .. } => {
                 if !resumed {
                     Self::draw_shelf_background(out);
                     self.shelf()
                         .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 }
                 self.chrome(cart, self.seat(), out);
-                if !resumed && *t < 0.0 {
-                    self.shelf.draw_selected_box(1.0 + *t / BOX_LIFT_S, out);
-                }
             }
-            Phase::Ejecting { cart, t } => {
+            Phase::Ejecting { cart, .. } => {
                 Self::draw_shelf_background(out);
                 self.shelf()
                     .draw_row(Some(cart), 0.0, self.seat(), 1.0, out);
                 self.chrome(cart, self.seat(), out);
-                if *t >= EJECT_S {
-                    self.shelf.draw_selected_box(1.0 - (*t - EJECT_S) / BOX_LIFT_S, out);
-                }
             }
             Phase::Playing { cart } if self.screen < 1.0 => self.chrome(cart, 0.0, out),
             Phase::Playing { .. } => {
@@ -4216,7 +4201,7 @@ impl App {
         self.refused_from = None;
         self.phase = Phase::Inserting {
             cart,
-            t: if self.shelf.box_face(at).is_some() { -BOX_LIFT_S } else { 0.0 },
+            t: 0.0,
             core_ready: false,
             resumed: false,
             clean,
